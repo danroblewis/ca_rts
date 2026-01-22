@@ -87,7 +87,7 @@ void main() {
     
     // Thresholds for blob effect (lower = more blobby/connected)
     float resourceThreshold = 0.8;
-    float unitThreshold = 1.5;
+    float unitThreshold = 0.3;  // Low threshold so single units show as blobs
     float factoryThreshold = 1.0;
     
     // Resources - golden blobs
@@ -109,24 +109,29 @@ void main() {
     
     // Mining units - cyan (empty) or green (holding) blobs
     float totalUnitDensity = emptyUnitDensity + holdingUnitDensity;
+    
+    // Outer glow first (shows even at low density)
+    if (totalUnitDensity > unitThreshold * 0.3) {
+        float holdingRatio = holdingUnitDensity / max(totalUnitDensity, 0.001);
+        float glowStrength = smoothstep(0.0, unitThreshold, totalUnitDensity);
+        vec3 glowColor = mix(vec3(0.05, 0.25, 0.4), vec3(0.1, 0.35, 0.1), holdingRatio);
+        color = color + glowColor * glowStrength * 0.6;
+    }
+    
+    // Main blob
     if (totalUnitDensity > unitThreshold) {
-        float blobStrength = smoothstep(unitThreshold, unitThreshold + 2.0, totalUnitDensity);
+        float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, totalUnitDensity);
         
         // Blend between cyan and green based on holding ratio
         float holdingRatio = holdingUnitDensity / max(totalUnitDensity, 0.001);
         
-        vec3 cyanColor = vec3(0.2, 0.7, 0.95);
-        vec3 greenColor = vec3(0.3, 0.9, 0.35);
+        vec3 cyanColor = vec3(0.3, 0.8, 1.0);
+        vec3 greenColor = vec3(0.4, 0.95, 0.4);
         vec3 unitColor = mix(cyanColor, greenColor, holdingRatio);
         
-        // Brighter core
-        float coreGlow = smoothstep(unitThreshold, unitThreshold + 3.0, totalUnitDensity);
-        unitColor += vec3(0.15) * coreGlow;
-        
-        // Outer glow effect
-        float glowStrength = smoothstep(unitThreshold * 0.5, unitThreshold, totalUnitDensity);
-        vec3 glowColor = mix(vec3(0.05, 0.2, 0.3), vec3(0.1, 0.3, 0.1), holdingRatio);
-        color = mix(color, color + glowColor, glowStrength * 0.5);
+        // Brighter core for dense groups
+        float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, totalUnitDensity);
+        unitColor += vec3(0.2) * coreGlow;
         
         color = mix(color, unitColor, blobStrength);
     }
