@@ -95,7 +95,7 @@ let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
 const LOG_INTERVAL = 1000;
-const SIM_BATCH_SIZE = 10; // Slower to watch the action
+const SIM_BATCH_SIZE = 1; // Slower to watch the action
 
 function simulationStep() {
     grid.getWriteFramebuffer().bind();
