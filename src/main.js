@@ -66,17 +66,52 @@ const factoryY = Math.floor(GRID_SIZE / 2);
 // Factory: type=3, resourceCount=10, selfX, selfY
 setCell(factoryX, factoryY, CELL_MINING_FACTORY, 10, factoryX, factoryY);
 
-// Scatter resources around the map (not too close to factory)
-const NUM_RESOURCES = 2000;
-for (let i = 0; i < NUM_RESOURCES; i++) {
-    let x, y;
+// Place resources in blobs/clusters (more realistic RTS style)
+const NUM_BLOBS = 20;
+const BLOB_MIN_RADIUS = 3;
+const BLOB_MAX_RADIUS = 8;
+const BLOB_DENSITY = 0.6; // % of cells in blob that have resources
+
+let totalResources = 0;
+
+for (let b = 0; b < NUM_BLOBS; b++) {
+    // Pick blob center (not too close to factory)
+    let centerX, centerY;
     do {
-        x = Math.floor(Math.random() * GRID_SIZE);
-        y = Math.floor(Math.random() * GRID_SIZE);
-    } while (Math.abs(x - factoryX) < 5 && Math.abs(y - factoryY) < 5);
+        centerX = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
+        centerY = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
+    } while (Math.abs(centerX - factoryX) < 15 && Math.abs(centerY - factoryY) < 15);
     
-    setCell(x, y, CELL_RESOURCE, 1.0);
+    // Random radius for this blob
+    const radius = BLOB_MIN_RADIUS + Math.random() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
+    
+    // Fill the blob with resources
+    for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
+        for (let dx = -Math.ceil(radius); dx <= Math.ceil(radius); dx++) {
+            const x = centerX + dx;
+            const y = centerY + dy;
+            
+            // Check bounds
+            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
+            
+            // Check if within blob radius (with some noise for organic shape)
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const noiseRadius = radius * (0.7 + Math.random() * 0.6); // Irregular edges
+            if (dist > noiseRadius) continue;
+            
+            // Density check
+            if (Math.random() > BLOB_DENSITY) continue;
+            
+            // Don't overwrite factory
+            if (x === factoryX && y === factoryY) continue;
+            
+            setCell(x, y, CELL_RESOURCE, 1.0);
+            totalResources++;
+        }
+    }
 }
+
+const NUM_RESOURCES = totalResources;
 
 grid.upload(data);
 

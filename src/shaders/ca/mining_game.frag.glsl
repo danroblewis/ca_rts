@@ -22,7 +22,7 @@ vec4 sampleOffset(vec2 uv, vec2 offset) {
 }
 
 // Vision range for units
-const int VISION_RANGE = 3;
+const int VISION_RANGE = 10;
 
 // Resources needed to spawn a new mining unit
 const float SPAWN_COST = 5.0;
