@@ -250,11 +250,12 @@ void main() {
         
         // First check: if holding and adjacent to factory, deposit and stay
         if (holding) {
+            // Check if any adjacent cell is our factory (use distance check to avoid float comparison issues)
             bool adjacentToFactory = false;
-            if (isMiningFactory(right) && getFactoryPosition(right) == factoryLoc) adjacentToFactory = true;
-            if (isMiningFactory(up) && getFactoryPosition(up) == factoryLoc) adjacentToFactory = true;
-            if (isMiningFactory(left) && getFactoryPosition(left) == factoryLoc) adjacentToFactory = true;
-            if (isMiningFactory(down) && getFactoryPosition(down) == factoryLoc) adjacentToFactory = true;
+            if (isMiningFactory(right) && distance(getFactoryPosition(right), factoryLoc) < 0.5) adjacentToFactory = true;
+            if (isMiningFactory(up) && distance(getFactoryPosition(up), factoryLoc) < 0.5) adjacentToFactory = true;
+            if (isMiningFactory(left) && distance(getFactoryPosition(left), factoryLoc) < 0.5) adjacentToFactory = true;
+            if (isMiningFactory(down) && distance(getFactoryPosition(down), factoryLoc) < 0.5) adjacentToFactory = true;
             
             if (adjacentToFactory) {
                 // Deposit: stay in place, but now empty-handed
@@ -307,22 +308,23 @@ void main() {
         float resources = getFactoryResourceCount(self);
         vec2 factoryPos = getFactoryPosition(self);
         
-        // Check for incoming deposits from adjacent units
+        // Check for deposits from adjacent units that belong to this factory
+        // A unit deposits if: it's holding, and its factory location matches ours
         if (isMiningUnit(right) && isHoldingResource(right)) {
-            int dir = directionToward(pos + vec2(1, 0), factoryPos, u_time);
-            if (dir == 3) resources += 1.0;
+            vec2 unitHome = getFactoryLocation(right);
+            if (distance(unitHome, factoryPos) < 0.5) resources += 1.0;
         }
         if (isMiningUnit(up) && isHoldingResource(up)) {
-            int dir = directionToward(pos + vec2(0, 1), factoryPos, u_time);
-            if (dir == 4) resources += 1.0;
+            vec2 unitHome = getFactoryLocation(up);
+            if (distance(unitHome, factoryPos) < 0.5) resources += 1.0;
         }
         if (isMiningUnit(left) && isHoldingResource(left)) {
-            int dir = directionToward(pos + vec2(-1, 0), factoryPos, u_time);
-            if (dir == 1) resources += 1.0;
+            vec2 unitHome = getFactoryLocation(left);
+            if (distance(unitHome, factoryPos) < 0.5) resources += 1.0;
         }
         if (isMiningUnit(down) && isHoldingResource(down)) {
-            int dir = directionToward(pos + vec2(0, -1), factoryPos, u_time);
-            if (dir == 2) resources += 1.0;
+            vec2 unitHome = getFactoryLocation(down);
+            if (distance(unitHome, factoryPos) < 0.5) resources += 1.0;
         }
         
         // Try to spawn a new unit if we have enough resources
