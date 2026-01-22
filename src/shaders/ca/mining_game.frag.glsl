@@ -24,6 +24,9 @@ vec4 sampleOffset(vec2 uv, vec2 offset) {
 // Vision range for units
 const int VISION_RANGE = 3;
 
+// Resources needed to spawn a new mining unit
+const float SPAWN_COST = 5.0;
+
 // Find nearest resource within vision range
 vec2 findNearestResource(vec2 pos, vec2 uv) {
     vec2 nearestPos = vec2(-1.0);
@@ -171,7 +174,7 @@ vec4 updateEmpty(vec4 self) {
     if (incoming.r > 0.0) return incoming;
     
     // Check if factory below is spawning (factory only spawns UP)
-    if (isMiningFactory(g_down) && getFactoryResourceCount(g_down) >= 5.0) {
+    if (isMiningFactory(g_down) && getFactoryResourceCount(g_down) >= SPAWN_COST) {
         vec2 facPos = getFactoryPosition(g_down);
         return createMiningUnit(0.0, facPos.x, facPos.y);
     }
@@ -304,8 +307,8 @@ vec4 updateMiningFactory(vec4 self) {
     }
     
     // Spawn if we have enough and space above is empty
-    if (resources >= 5.0 && isEmpty(g_up)) {
-        resources -= 5.0;
+    if (resources >= SPAWN_COST && isEmpty(g_up)) {
+        resources -= SPAWN_COST;
     }
     
     return createMiningFactory(resources, factoryPos.x, factoryPos.y);

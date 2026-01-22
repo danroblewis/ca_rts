@@ -67,7 +67,7 @@ const factoryY = Math.floor(GRID_SIZE / 2);
 setCell(factoryX, factoryY, CELL_MINING_FACTORY, 10, factoryX, factoryY);
 
 // Scatter resources around the map (not too close to factory)
-const NUM_RESOURCES = 300;
+const NUM_RESOURCES = 1200;
 for (let i = 0; i < NUM_RESOURCES; i++) {
     let x, y;
     do {
