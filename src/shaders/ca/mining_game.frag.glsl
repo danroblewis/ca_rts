@@ -51,6 +51,32 @@ vec2 findNearestResource(vec2 pos, vec2 uv) {
     return nearestPos;
 }
 
+// Find resource memory from a nearby unit (knowledge sharing)
+// Returns the remembered location from the nearest unit that has one, or vec2(-1) if none
+vec2 getSharedResourceMemory(vec2 pos, vec2 uv) {
+    vec2 sharedMemory = vec2(-1.0);
+    float nearestDist = 999.0;
+    
+    for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++) {
+        for (int dx = -VISION_RANGE; dx <= VISION_RANGE; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            vec2 offset = vec2(float(dx), float(dy));
+            vec4 cell = sampleOffset(uv, offset);
+            
+            // Check if it's a mining unit with resource memory
+            if (isMiningUnit(cell) && hasLastResourceLocation(cell)) {
+                float dist = abs(float(dx)) + abs(float(dy));
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    sharedMemory = getLastResourceLocation(cell);
+                }
+            }
+        }
+    }
+    return sharedMemory;
+}
+
 // Get the direction a unit would move
 int getUnitMoveDirection(vec2 unitPos, vec4 unitCell, vec2 uv) {
     bool holding = isHoldingResource(unitCell);
@@ -354,6 +380,16 @@ vec4 updateMiningUnit(vec4 self) {
         if (!foundResource) {
             // Resource is gone, forget the location
             hasMemory = false;
+        }
+    }
+    
+    // Knowledge sharing: if we don't have memory, try to get it from a nearby unit
+    if (!hasMemory) {
+        vec2 sharedMemory = getSharedResourceMemory(g_pos, v_uv);
+        if (sharedMemory.x >= 0.0) {
+            // Got memory from another unit!
+            lastResourceLoc = sharedMemory;
+            hasMemory = true;
         }
     }
     
