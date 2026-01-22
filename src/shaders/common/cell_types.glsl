@@ -78,11 +78,18 @@ vec4 createResource(float amount) {
 //     holding: 0 = empty, 1 = carrying resource
 //     stationary_counter: how long stuck, or countdown when walking
 // B = packed factory location (x + y * 128)
-// A = packed last resource location (x + y * 128), or -1 if none
+// A = packed: resource location + freshness * 16384, or -1 if none
+//     location: x + y * 128 (0-16383)
+//     freshness: how fresh the memory is (decrements each step, 0 = expired)
 // ============================================================================
 
 // Threshold: after this many steps stuck, start walking
 const float STATIONARY_THRESHOLD = 8.0;
+
+// Memory freshness settings
+const float MEMORY_MAX_FRESHNESS = 30.0;  // Starts at this when mining
+const float MEMORY_SHARE_PENALTY = 5.0;   // Lose this much freshness when shared
+const float COORD_PACK_SIZE = 16384.0;    // 128 * 128 for coord packing
 
 // Unpack G channel
 float getHoldingBit(vec4 cell) {
@@ -110,21 +117,42 @@ vec2 getFactoryLocation(vec4 cell) {
     return unpackCoords(cell.b);
 }
 
+// Resource memory with freshness
 vec2 getLastResourceLocation(vec4 cell) {
-    return unpackCoords(cell.a);
+    float packed = cell.a;
+    if (packed < 0.0) return vec2(-1.0);
+    float coordPart = mod(packed, COORD_PACK_SIZE);
+    return unpackCoords(coordPart);
+}
+
+float getMemoryFreshness(vec4 cell) {
+    float packed = cell.a;
+    if (packed < 0.0) return 0.0;
+    return floor(packed / COORD_PACK_SIZE);
 }
 
 bool hasLastResourceLocation(vec4 cell) {
-    return hasLocation(cell.a);
+    return cell.a >= 0.0 && getMemoryFreshness(cell) > 0.0;
 }
 
-vec4 createMiningUnit(float holding, float stationaryCounter, vec2 factoryPos, vec2 lastResourcePos) {
+float packMemory(vec2 pos, float freshness) {
+    if (freshness <= 0.0) return -1.0;
+    return packCoords(pos) + floor(freshness) * COORD_PACK_SIZE;
+}
+
+// Create unit with memory (specify freshness)
+vec4 createMiningUnitWithMemory(float holding, float stationaryCounter, vec2 factoryPos, vec2 lastResourcePos, float freshness) {
     return vec4(
         CELL_MINING_UNIT,
         packHoldingAndCounter(holding, stationaryCounter),
         packCoords(factoryPos),
-        hasLocation(lastResourcePos.x) ? packCoords(lastResourcePos) : NO_LOCATION
+        packMemory(lastResourcePos, freshness)
     );
+}
+
+// Create unit with fresh memory (just mined - max freshness)
+vec4 createMiningUnit(float holding, float stationaryCounter, vec2 factoryPos, vec2 lastResourcePos) {
+    return createMiningUnitWithMemory(holding, stationaryCounter, factoryPos, lastResourcePos, MEMORY_MAX_FRESHNESS);
 }
 
 // Convenience: create unit with no last resource memory

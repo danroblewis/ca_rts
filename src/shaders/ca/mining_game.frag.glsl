@@ -52,9 +52,9 @@ vec2 findNearestResource(vec2 pos, vec2 uv) {
 }
 
 // Find resource memory from a nearby unit (knowledge sharing)
-// Returns the remembered location from the nearest unit that has one, or vec2(-1) if none
-vec2 getSharedResourceMemory(vec2 pos, vec2 uv) {
-    vec2 sharedMemory = vec2(-1.0);
+// Returns vec3(x, y, freshness) or vec3(-1, -1, 0) if none found
+vec3 getSharedResourceMemory(vec2 pos, vec2 uv) {
+    vec3 sharedMemory = vec3(-1.0, -1.0, 0.0);
     float nearestDist = 999.0;
     
     for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++) {
@@ -67,9 +67,14 @@ vec2 getSharedResourceMemory(vec2 pos, vec2 uv) {
             // Check if it's a mining unit with resource memory
             if (isMiningUnit(cell) && hasLastResourceLocation(cell)) {
                 float dist = abs(float(dx)) + abs(float(dy));
+                float freshness = getMemoryFreshness(cell);
+                // Prefer closer units, but also fresher memories
                 if (dist < nearestDist) {
                     nearestDist = dist;
-                    sharedMemory = getLastResourceLocation(cell);
+                    vec2 loc = getLastResourceLocation(cell);
+                    // Apply share penalty when copying memory
+                    float sharedFreshness = max(0.0, freshness - MEMORY_SHARE_PENALTY);
+                    sharedMemory = vec3(loc.x, loc.y, sharedFreshness);
                 }
             }
         }
@@ -198,6 +203,7 @@ vec4 processIncomingUnit(vec4 unit) {
     float counter = getStationaryCounter(unit);
     vec2 factoryLoc = getFactoryLocation(unit);
     vec2 lastResourceLoc = getLastResourceLocation(unit);
+    float freshness = getMemoryFreshness(unit);
     bool hasMemory = hasLastResourceLocation(unit);
     
     // If walking, decrement counter. Otherwise reset to 0 (successful move).
@@ -208,8 +214,9 @@ vec4 processIncomingUnit(vec4 unit) {
         newCounter = 0.0; // Reset on successful normal move
     }
     
+    // Memory also decays on move (already decayed in updateMiningUnit, but we preserve it here)
     if (hasMemory) {
-        return createMiningUnit(holding, newCounter, factoryLoc, lastResourceLoc);
+        return createMiningUnitWithMemory(holding, newCounter, factoryLoc, lastResourceLoc, freshness);
     } else {
         return createMiningUnitSimple(holding, newCounter, factoryLoc);
     }
@@ -304,8 +311,20 @@ vec4 updateMiningUnit(vec4 self) {
     float counter = getStationaryCounter(self);
     vec2 factoryLoc = getFactoryLocation(self);
     vec2 lastResourceLoc = getLastResourceLocation(self);
+    float freshness = getMemoryFreshness(self);
     bool hasMemory = hasLastResourceLocation(self);
     bool walking = isWalking(self); // counter >= STATIONARY_THRESHOLD
+    
+    // Memory decays each step (unless we just mined, which resets it)
+    freshness = max(0.0, freshness - 1.0);
+    if (freshness <= 0.0) {
+        hasMemory = false;
+    }
+    
+    // Helper to create unit with current memory state
+    #define CREATE_UNIT_WITH_MEMORY(h, c) \
+        (hasMemory ? createMiningUnitWithMemory(h, c, factoryLoc, lastResourceLoc, freshness) \
+                   : createMiningUnitSimple(h, c, factoryLoc))
     
     // If walking (unstuck mode), do random walk and decrement counter
     if (walking) {
@@ -320,11 +339,7 @@ vec4 updateMiningUnit(vec4 self) {
         }
         // Blocked during walk - decrement counter anyway to avoid infinite walk
         float newCounter = max(0.0, counter - 1.0);
-        if (hasMemory) {
-            return createMiningUnit(holding ? 1.0 : 0.0, newCounter, factoryLoc, lastResourceLoc);
-        } else {
-            return createMiningUnitSimple(holding ? 1.0 : 0.0, newCounter, factoryLoc);
-        }
+        return CREATE_UNIT_WITH_MEMORY(holding ? 1.0 : 0.0, newCounter);
     }
     
     // If holding, check if adjacent to our factory -> deposit
@@ -337,22 +352,14 @@ vec4 updateMiningUnit(vec4 self) {
         
         if (atFactory) {
             // Deposit and stay (now empty-handed, reset counter, keep memory!)
-            if (hasMemory) {
-                return createMiningUnit(0.0, 0.0, factoryLoc, lastResourceLoc);
-            } else {
-                return createMiningUnitSimple(0.0, 0.0, factoryLoc);
-            }
+            return CREATE_UNIT_WITH_MEMORY(0.0, 0.0);
         }
         
         // Move toward factory
         int dir = directionToward(g_pos, factoryLoc, u_time);
         if (dir == 0) {
             // Stuck! Increment counter
-            if (hasMemory) {
-                return createMiningUnit(1.0, counter + 1.0, factoryLoc, lastResourceLoc);
-            } else {
-                return createMiningUnitSimple(1.0, counter + 1.0, factoryLoc);
-            }
+            return CREATE_UNIT_WITH_MEMORY(1.0, counter + 1.0);
         }
         
         vec2 offset = directionToOffset(dir);
@@ -364,11 +371,7 @@ vec4 updateMiningUnit(vec4 self) {
             return createEmpty(); // Move out
         }
         // Blocked! Increment counter
-        if (hasMemory) {
-            return createMiningUnit(1.0, counter + 1.0, factoryLoc, lastResourceLoc);
-        } else {
-            return createMiningUnitSimple(1.0, counter + 1.0, factoryLoc);
-        }
+        return CREATE_UNIT_WITH_MEMORY(1.0, counter + 1.0);
     }
     
     // Not holding: check if we should forget our remembered location
@@ -380,15 +383,17 @@ vec4 updateMiningUnit(vec4 self) {
         if (!foundResource) {
             // Resource is gone, forget the location
             hasMemory = false;
+            freshness = 0.0;
         }
     }
     
     // Knowledge sharing: if we don't have memory, try to get it from a nearby unit
     if (!hasMemory) {
-        vec2 sharedMemory = getSharedResourceMemory(g_pos, v_uv);
-        if (sharedMemory.x >= 0.0) {
-            // Got memory from another unit!
-            lastResourceLoc = sharedMemory;
+        vec3 sharedMemory = getSharedResourceMemory(g_pos, v_uv);
+        if (sharedMemory.z > 0.0) {
+            // Got memory from another unit (with reduced freshness)
+            lastResourceLoc = sharedMemory.xy;
+            freshness = sharedMemory.z;
             hasMemory = true;
         }
     }
@@ -396,12 +401,8 @@ vec4 updateMiningUnit(vec4 self) {
     // Not holding: look for resources
     int dir = getUnitMoveDirection(g_pos, self, v_uv);
     if (dir == 0) {
-        // Stuck! Increment counter (use updated hasMemory)
-        if (hasMemory) {
-            return createMiningUnit(0.0, counter + 1.0, factoryLoc, lastResourceLoc);
-        } else {
-            return createMiningUnitSimple(0.0, counter + 1.0, factoryLoc);
-        }
+        // Stuck! Increment counter
+        return CREATE_UNIT_WITH_MEMORY(0.0, counter + 1.0);
     }
     
     vec2 offset = directionToOffset(dir);
@@ -416,12 +417,10 @@ vec4 updateMiningUnit(vec4 self) {
             return createEmpty(); // Move out
         }
     }
-    // Blocked! Increment counter (use updated hasMemory)
-    if (hasMemory) {
-        return createMiningUnit(0.0, counter + 1.0, factoryLoc, lastResourceLoc);
-    } else {
-        return createMiningUnitSimple(0.0, counter + 1.0, factoryLoc);
-    }
+    // Blocked! Increment counter
+    return CREATE_UNIT_WITH_MEMORY(0.0, counter + 1.0);
+    
+    #undef CREATE_UNIT_WITH_MEMORY
 }
 
 // ============================================================================
