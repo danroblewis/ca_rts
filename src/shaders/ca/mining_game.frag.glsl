@@ -66,6 +66,36 @@ int getUnitMoveDirection(vec2 unitPos, vec4 unitCell, vec2 uv, vec2 texelSize, f
     }
 }
 
+// Determine factory spawn direction (1=right, 2=up, 3=left, 4=down)
+// Returns 0 if no empty neighbor available
+int getFactorySpawnDirection(vec2 factoryPos, vec4 right, vec4 up, vec4 left, vec4 down, float time) {
+    // Check which neighbors are empty
+    bool rEmpty = isEmpty(right);
+    bool uEmpty = isEmpty(up);
+    bool lEmpty = isEmpty(left);
+    bool dEmpty = isEmpty(down);
+    
+    // If nothing is empty, can't spawn
+    if (!rEmpty && !uEmpty && !lEmpty && !dEmpty) {
+        return 0;
+    }
+    
+    // Pick a random direction, but only from available empty cells
+    float r = hash(factoryPos, time);
+    int attempt = int(floor(r * 4.0)); // 0, 1, 2, or 3
+    
+    // Try the random direction first, then cycle through others
+    for (int i = 0; i < 4; i++) {
+        int dir = ((attempt + i) % 4) + 1; // 1, 2, 3, or 4
+        if (dir == 1 && rEmpty) return 1;
+        if (dir == 2 && uEmpty) return 2;
+        if (dir == 3 && lEmpty) return 3;
+        if (dir == 4 && dEmpty) return 4;
+    }
+    
+    return 0;
+}
+
 void main() {
     vec2 texelSize = 1.0 / u_resolution;
     vec2 pos = floor(v_uv * u_resolution);
@@ -127,7 +157,12 @@ void main() {
         
         // Check if a factory is spawning a unit into this cell
         if (isEmpty(result)) {
-            // Check each neighbor for a spawning factory
+            // neighbors[i]: 0=right, 1=up, 2=left, 3=down (factory position relative to us)
+            // If factory is to our RIGHT (i=0), and it spawns LEFT (dir=3), we're the target
+            // If factory is UP from us (i=1), and it spawns DOWN (dir=4), we're the target
+            // If factory is to our LEFT (i=2), and it spawns RIGHT (dir=1), we're the target
+            // If factory is DOWN from us (i=3), and it spawns UP (dir=2), we're the target
+            
             vec4 neighbors[4];
             neighbors[0] = right;
             neighbors[1] = up;
@@ -140,44 +175,26 @@ void main() {
                     if (res >= 5.0) {
                         vec2 facPos = getFactoryPosition(neighbors[i]);
                         
-                        // Determine if we're the spawn target
-                        // Factory picks spawn direction based on hash
-                        float r = hash(facPos, u_time);
-                        int spawnDir;
-                        if (r < 0.25) spawnDir = 1;      // spawn right
-                        else if (r < 0.5) spawnDir = 2;  // spawn up
-                        else if (r < 0.75) spawnDir = 3; // spawn left
-                        else spawnDir = 4;               // spawn down
+                        // Get factory's neighbors from factory's perspective
+                        vec2 facUV = (facPos + 0.5) / u_resolution;
+                        vec4 facRight = sampleOffset(facUV, vec2(1, 0), texelSize);
+                        vec4 facUp = sampleOffset(facUV, vec2(0, 1), texelSize);
+                        vec4 facLeft = sampleOffset(facUV, vec2(-1, 0), texelSize);
+                        vec4 facDown = sampleOffset(facUV, vec2(0, -1), texelSize);
                         
-                        // Check if we're in the spawn direction from factory
+                        // Compute spawn direction using same function as factory
+                        int spawnDir = getFactorySpawnDirection(facPos, facRight, facUp, facLeft, facDown, u_time);
+                        
+                        // Check if we're the spawn target
                         bool isSpawnTarget = false;
-                        if (i == 0 && spawnDir == 3) isSpawnTarget = true; // we're left of factory, it spawns left
-                        if (i == 1 && spawnDir == 4) isSpawnTarget = true; // we're below factory, it spawns down
-                        if (i == 2 && spawnDir == 1) isSpawnTarget = true; // we're right of factory, it spawns right
-                        if (i == 3 && spawnDir == 2) isSpawnTarget = true; // we're above factory, it spawns up
+                        if (i == 0 && spawnDir == 3) isSpawnTarget = true; // factory right, spawns left
+                        if (i == 1 && spawnDir == 4) isSpawnTarget = true; // factory up, spawns down
+                        if (i == 2 && spawnDir == 1) isSpawnTarget = true; // factory left, spawns right
+                        if (i == 3 && spawnDir == 2) isSpawnTarget = true; // factory down, spawns up
                         
                         if (isSpawnTarget) {
                             result = createMiningUnit(0.0, facPos.x, facPos.y);
                             break;
-                        }
-                        
-                        // Fallback: if preferred direction blocked, try others
-                        // (simplified: just spawn if we're any adjacent empty)
-                        if (isEmpty(result)) {
-                            // Check all directions for this factory
-                            vec2 facUV = (facPos + 0.5) / u_resolution;
-                            vec4 facRight = sampleOffset(facUV, vec2(1, 0), texelSize);
-                            vec4 facUp = sampleOffset(facUV, vec2(0, 1), texelSize);
-                            vec4 facLeft = sampleOffset(facUV, vec2(-1, 0), texelSize);
-                            vec4 facDown = sampleOffset(facUV, vec2(0, -1), texelSize);
-                            
-                            // Am I the first empty neighbor?
-                            if (spawnDir == 1 && !isEmpty(facRight) && i == 1 && isEmpty(facUp)) {
-                                result = createMiningUnit(0.0, facPos.x, facPos.y);
-                            } else if (spawnDir == 1 && !isEmpty(facRight) && !isEmpty(facUp) && i == 0 && isEmpty(facLeft)) {
-                                result = createMiningUnit(0.0, facPos.x, facPos.y);
-                            }
-                            // ... (fallback logic gets complex, keeping simple for now)
                         }
                     }
                 }
@@ -310,27 +327,9 @@ void main() {
         
         // Try to spawn a new unit if we have enough resources
         if (resources >= 5.0) {
-            // Find an empty adjacent cell to spawn into
-            bool spawned = false;
-            float r = hash(pos, u_time);
-            
-            // Randomize spawn direction check order
-            if (r < 0.25 && isEmpty(right) && !spawned) {
-                spawned = true;
-            } else if (r < 0.5 && isEmpty(up) && !spawned) {
-                spawned = true;
-            } else if (r < 0.75 && isEmpty(left) && !spawned) {
-                spawned = true;
-            } else if (isEmpty(down) && !spawned) {
-                spawned = true;
-            }
-            // Fallback checks
-            if (!spawned && isEmpty(right)) spawned = true;
-            else if (!spawned && isEmpty(up)) spawned = true;
-            else if (!spawned && isEmpty(left)) spawned = true;
-            else if (!spawned && isEmpty(down)) spawned = true;
-            
-            if (spawned) {
+            // Use the same spawn direction calculation as the empty cell detection
+            int spawnDir = getFactorySpawnDirection(factoryPos, right, up, left, down, u_time);
+            if (spawnDir > 0) {
                 resources -= 5.0;
             }
         }
