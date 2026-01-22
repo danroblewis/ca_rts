@@ -27,8 +27,8 @@ console.log('GPU compute framework initialized');
 // ============================================================================
 
 const [golShaderSource, renderShaderSource] = await Promise.all([
-    loadShader('./src/shaders/gol.frag.glsl'),
-    loadShader('./src/shaders/render.frag.glsl')
+    loadShader('./src/shaders/examples/gol/gol.frag.glsl'),
+    loadShader('./src/shaders/examples/gol/render.frag.glsl')
 ]);
 
 // ============================================================================

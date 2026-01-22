@@ -1,6 +1,8 @@
 #version 300 es
 precision highp float;
 
+#include "common/neighbors.glsl"
+
 uniform sampler2D u_state;
 uniform vec2 u_resolution;
 
@@ -10,18 +12,11 @@ out vec4 fragColor;
 void main() {
     vec2 texelSize = 1.0 / u_resolution;
     
-    // Sample current cell and 8 neighbors
+    // Sample current cell
     float self = texture(u_state, v_uv).r;
     
-    float neighbors = 0.0;
-    neighbors += texture(u_state, v_uv + vec2(-1, -1) * texelSize).r;
-    neighbors += texture(u_state, v_uv + vec2( 0, -1) * texelSize).r;
-    neighbors += texture(u_state, v_uv + vec2( 1, -1) * texelSize).r;
-    neighbors += texture(u_state, v_uv + vec2(-1,  0) * texelSize).r;
-    neighbors += texture(u_state, v_uv + vec2( 1,  0) * texelSize).r;
-    neighbors += texture(u_state, v_uv + vec2(-1,  1) * texelSize).r;
-    neighbors += texture(u_state, v_uv + vec2( 0,  1) * texelSize).r;
-    neighbors += texture(u_state, v_uv + vec2( 1,  1) * texelSize).r;
+    // Count neighbors using the utility function
+    float neighbors = countMooreNeighbors(u_state, v_uv, texelSize);
     
     // Conway's rules:
     // - Alive cell with 2 or 3 neighbors survives
