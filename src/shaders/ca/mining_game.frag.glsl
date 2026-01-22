@@ -205,38 +205,54 @@ void main() {
         bool holding = isHoldingResource(self);
         vec2 factoryLoc = getFactoryLocation(self);
         
-        int myDir;
+        // First check: if holding and adjacent to factory, deposit and stay
         if (holding) {
-            // Move toward factory
-            myDir = directionToward(pos, factoryLoc, u_time);
-        } else {
-            // Random walk to find resources
-            myDir = randomDirection(pos, u_time);
-        }
-        
-        if (myDir == 0) {
-            // Staying put
-            result = self;
-        } else {
-            vec2 offset = directionToOffset(myDir);
-            vec4 target = sampleOffset(v_uv, offset, texelSize);
-            float targetType = getCellType(target);
+            bool adjacentToFactory = false;
+            if (isMiningFactory(right) && getFactoryPosition(right) == factoryLoc) adjacentToFactory = true;
+            if (isMiningFactory(up) && getFactoryPosition(up) == factoryLoc) adjacentToFactory = true;
+            if (isMiningFactory(left) && getFactoryPosition(left) == factoryLoc) adjacentToFactory = true;
+            if (isMiningFactory(down) && getFactoryPosition(down) == factoryLoc) adjacentToFactory = true;
             
-            if (targetType == CELL_EMPTY) {
-                // Moving to empty cell - we become empty
-                result = createEmpty();
+            if (adjacentToFactory) {
+                // Deposit: stay in place, but now empty-handed
+                result = createMiningUnit(0.0, factoryLoc.x, factoryLoc.y);
+            } else {
+                // Move toward factory
+                int myDir = directionToward(pos, factoryLoc, u_time);
+                if (myDir == 0) {
+                    result = self;
+                } else {
+                    vec2 offset = directionToOffset(myDir);
+                    vec4 target = sampleOffset(v_uv, offset, texelSize);
+                    float targetType = getCellType(target);
+                    
+                    if (targetType == CELL_EMPTY) {
+                        result = createEmpty(); // Move out
+                    } else {
+                        result = self; // Blocked, stay
+                    }
+                }
             }
-            else if (targetType == CELL_RESOURCE && !holding) {
-                // Mining a resource - we become empty (unit moves to resource cell)
-                result = createEmpty();
-            }
-            else if (targetType == CELL_MINING_FACTORY && holding) {
-                // Depositing at factory - we become empty, lose the resource
-                result = createEmpty();
-            }
-            else {
-                // Can't move - stay put
+        } else {
+            // Not holding: random walk to find resources
+            int myDir = randomDirection(pos, u_time);
+            
+            if (myDir == 0) {
                 result = self;
+            } else {
+                vec2 offset = directionToOffset(myDir);
+                vec4 target = sampleOffset(v_uv, offset, texelSize);
+                float targetType = getCellType(target);
+                
+                if (targetType == CELL_EMPTY) {
+                    result = createEmpty(); // Move out
+                }
+                else if (targetType == CELL_RESOURCE) {
+                    result = createEmpty(); // Move out (onto resource)
+                }
+                else {
+                    result = self; // Blocked, stay
+                }
             }
         }
     }
