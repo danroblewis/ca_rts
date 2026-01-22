@@ -76,6 +76,78 @@ vec4 checkUnitMovingIn(vec4 neighbor, vec2 neighborOffset, int expectedDir) {
     return vec4(0.0);
 }
 
+// Check if unit at myPos can move to targetPos without collision
+// Returns true if we win the move (or no collision)
+bool canMoveWithoutCollision(vec2 myPos, vec2 targetPos, vec2 targetUV) {
+    // Check all 4 neighbors of the TARGET cell for other units trying to move there
+    vec4 tRight = sampleOffset(targetUV, vec2(1, 0));
+    vec4 tUp = sampleOffset(targetUV, vec2(0, 1));
+    vec4 tLeft = sampleOffset(targetUV, vec2(-1, 0));
+    vec4 tDown = sampleOffset(targetUV, vec2(0, -1));
+    
+    // For each neighbor of target, check if it's a unit moving INTO target
+    // Direction: if neighbor is to the RIGHT of target, it would move LEFT (dir=3) to enter
+    
+    // Right of target (moving left into target)
+    if (isMiningUnit(tRight)) {
+        vec2 nPos = targetPos + vec2(1, 0);
+        if (distance(nPos, myPos) > 0.5) { // Not us
+            vec2 nUV = (nPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(nPos, tRight, nUV);
+            if (dir == 3) {
+                // Collision! Use position-based tiebreaker (lower y*width+x wins)
+                float myPriority = myPos.y * u_resolution.x + myPos.x;
+                float theirPriority = nPos.y * u_resolution.x + nPos.x;
+                if (theirPriority < myPriority) return false; // They win
+            }
+        }
+    }
+    
+    // Up of target (moving down into target)
+    if (isMiningUnit(tUp)) {
+        vec2 nPos = targetPos + vec2(0, 1);
+        if (distance(nPos, myPos) > 0.5) {
+            vec2 nUV = (nPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(nPos, tUp, nUV);
+            if (dir == 4) {
+                float myPriority = myPos.y * u_resolution.x + myPos.x;
+                float theirPriority = nPos.y * u_resolution.x + nPos.x;
+                if (theirPriority < myPriority) return false;
+            }
+        }
+    }
+    
+    // Left of target (moving right into target)
+    if (isMiningUnit(tLeft)) {
+        vec2 nPos = targetPos + vec2(-1, 0);
+        if (distance(nPos, myPos) > 0.5) {
+            vec2 nUV = (nPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(nPos, tLeft, nUV);
+            if (dir == 1) {
+                float myPriority = myPos.y * u_resolution.x + myPos.x;
+                float theirPriority = nPos.y * u_resolution.x + nPos.x;
+                if (theirPriority < myPriority) return false;
+            }
+        }
+    }
+    
+    // Down of target (moving up into target)
+    if (isMiningUnit(tDown)) {
+        vec2 nPos = targetPos + vec2(0, -1);
+        if (distance(nPos, myPos) > 0.5) {
+            vec2 nUV = (nPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(nPos, tDown, nUV);
+            if (dir == 2) {
+                float myPriority = myPos.y * u_resolution.x + myPos.x;
+                float theirPriority = nPos.y * u_resolution.x + nPos.x;
+                if (theirPriority < myPriority) return false;
+            }
+        }
+    }
+    
+    return true; // No collision, or we win
+}
+
 // ============================================================================
 // EMPTY CELL - Check if unit moves in or factory spawns here
 // ============================================================================
@@ -181,12 +253,14 @@ vec4 updateMiningUnit(vec4 self) {
         if (dir == 0) return self;
         
         vec2 offset = directionToOffset(dir);
+        vec2 targetPos = g_pos + offset;
+        vec2 targetUV = (targetPos + 0.5) / u_resolution;
         vec4 target = sampleOffset(v_uv, offset);
         
-        if (isEmpty(target)) {
+        if (isEmpty(target) && canMoveWithoutCollision(g_pos, targetPos, targetUV)) {
             return createEmpty(); // Move out
         }
-        return self; // Blocked
+        return self; // Blocked or lost collision
     }
     
     // Not holding: look for resources
@@ -194,13 +268,18 @@ vec4 updateMiningUnit(vec4 self) {
     if (dir == 0) return self;
     
     vec2 offset = directionToOffset(dir);
+    vec2 targetPos = g_pos + offset;
+    vec2 targetUV = (targetPos + 0.5) / u_resolution;
     vec4 target = sampleOffset(v_uv, offset);
     float targetType = getCellType(target);
     
     if (targetType == CELL_EMPTY || targetType == CELL_RESOURCE) {
-        return createEmpty(); // Move out
+        // Check for collision before moving
+        if (canMoveWithoutCollision(g_pos, targetPos, targetUV)) {
+            return createEmpty(); // Move out
+        }
     }
-    return self; // Blocked
+    return self; // Blocked or lost collision
 }
 
 // ============================================================================
