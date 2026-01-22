@@ -16,6 +16,56 @@ vec4 sampleOffset(vec2 uv, vec2 offset, vec2 texelSize) {
     return texture(u_state, uv + offset * texelSize);
 }
 
+// Vision range for units
+const int VISION_RANGE = 3;
+
+// Find nearest resource within vision range
+// Returns the position of the nearest resource, or (-1,-1) if none found
+vec2 findNearestResource(vec2 pos, vec2 uv, vec2 texelSize) {
+    vec2 nearestPos = vec2(-1.0, -1.0);
+    float nearestDist = 999.0;
+    
+    for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++) {
+        for (int dx = -VISION_RANGE; dx <= VISION_RANGE; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            vec2 offset = vec2(float(dx), float(dy));
+            vec4 cell = sampleOffset(uv, offset, texelSize);
+            
+            if (isResource(cell)) {
+                float dist = abs(float(dx)) + abs(float(dy)); // Manhattan distance
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestPos = pos + offset;
+                }
+            }
+        }
+    }
+    
+    return nearestPos;
+}
+
+// Get the direction a unit at 'unitPos' would move given its state
+int getUnitMoveDirection(vec2 unitPos, vec4 unitCell, vec2 uv, vec2 texelSize, float time) {
+    bool holding = isHoldingResource(unitCell);
+    vec2 factoryLoc = getFactoryLocation(unitCell);
+    
+    if (holding) {
+        // Moving toward factory
+        return directionToward(unitPos, factoryLoc, time);
+    } else {
+        // Look for nearby resources
+        vec2 resourcePos = findNearestResource(unitPos, uv, texelSize);
+        if (resourcePos.x >= 0.0) {
+            // Found a resource, move toward it
+            return directionToward(unitPos, resourcePos, time);
+        } else {
+            // No resource visible, random walk
+            return randomDirection(unitPos, time);
+        }
+    }
+}
+
 void main() {
     vec2 texelSize = 1.0 / u_resolution;
     vec2 pos = floor(v_uv * u_resolution);
@@ -40,44 +90,36 @@ void main() {
         
         // Right neighbor (moving left into us)
         if (isMiningUnit(right)) {
-            vec2 factoryLoc = getFactoryLocation(right);
-            bool holding = isHoldingResource(right);
-            int dir = holding ? 
-                directionToward(pos + vec2(1, 0), factoryLoc, u_time) :
-                randomDirection(pos + vec2(1, 0), u_time);
+            vec2 neighborPos = pos + vec2(1, 0);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, right, neighborUV, texelSize, u_time);
             if (dir == 3) { // moving left
                 result = right;
             }
         }
         // Up neighbor (moving down into us)
         if (isMiningUnit(up) && isEmpty(result)) {
-            vec2 factoryLoc = getFactoryLocation(up);
-            bool holding = isHoldingResource(up);
-            int dir = holding ?
-                directionToward(pos + vec2(0, 1), factoryLoc, u_time) :
-                randomDirection(pos + vec2(0, 1), u_time);
+            vec2 neighborPos = pos + vec2(0, 1);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, up, neighborUV, texelSize, u_time);
             if (dir == 4) { // moving down
                 result = up;
             }
         }
         // Left neighbor (moving right into us)
         if (isMiningUnit(left) && isEmpty(result)) {
-            vec2 factoryLoc = getFactoryLocation(left);
-            bool holding = isHoldingResource(left);
-            int dir = holding ?
-                directionToward(pos + vec2(-1, 0), factoryLoc, u_time) :
-                randomDirection(pos + vec2(-1, 0), u_time);
+            vec2 neighborPos = pos + vec2(-1, 0);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, left, neighborUV, texelSize, u_time);
             if (dir == 1) { // moving right
                 result = left;
             }
         }
         // Down neighbor (moving up into us)
         if (isMiningUnit(down) && isEmpty(result)) {
-            vec2 factoryLoc = getFactoryLocation(down);
-            bool holding = isHoldingResource(down);
-            int dir = holding ?
-                directionToward(pos + vec2(0, -1), factoryLoc, u_time) :
-                randomDirection(pos + vec2(0, -1), u_time);
+            vec2 neighborPos = pos + vec2(0, -1);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, down, neighborUV, texelSize, u_time);
             if (dir == 2) { // moving up
                 result = down;
             }
@@ -147,54 +189,38 @@ void main() {
     // RESOURCE CELL - might be mined by an adjacent unit
     // =========================================================================
     else if (selfType == CELL_RESOURCE) {
-        bool beingMined = false;
+        vec4 miner = vec4(0.0);
         
         // Check if any adjacent mining unit (not holding) is trying to move onto us
         if (isMiningUnit(right) && !isHoldingResource(right)) {
-            int dir = randomDirection(pos + vec2(1, 0), u_time);
-            if (dir == 3) beingMined = true;
+            vec2 neighborPos = pos + vec2(1, 0);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, right, neighborUV, texelSize, u_time);
+            if (dir == 3) miner = right;
         }
-        if (isMiningUnit(up) && !isHoldingResource(up)) {
-            int dir = randomDirection(pos + vec2(0, 1), u_time);
-            if (dir == 4) beingMined = true;
+        if (miner.r == 0.0 && isMiningUnit(up) && !isHoldingResource(up)) {
+            vec2 neighborPos = pos + vec2(0, 1);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, up, neighborUV, texelSize, u_time);
+            if (dir == 4) miner = up;
         }
-        if (isMiningUnit(left) && !isHoldingResource(left)) {
-            int dir = randomDirection(pos + vec2(-1, 0), u_time);
-            if (dir == 1) beingMined = true;
+        if (miner.r == 0.0 && isMiningUnit(left) && !isHoldingResource(left)) {
+            vec2 neighborPos = pos + vec2(-1, 0);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, left, neighborUV, texelSize, u_time);
+            if (dir == 1) miner = left;
         }
-        if (isMiningUnit(down) && !isHoldingResource(down)) {
-            int dir = randomDirection(pos + vec2(0, -1), u_time);
-            if (dir == 2) beingMined = true;
+        if (miner.r == 0.0 && isMiningUnit(down) && !isHoldingResource(down)) {
+            vec2 neighborPos = pos + vec2(0, -1);
+            vec2 neighborUV = (neighborPos + 0.5) / u_resolution;
+            int dir = getUnitMoveDirection(neighborPos, down, neighborUV, texelSize, u_time);
+            if (dir == 2) miner = down;
         }
         
-        if (beingMined) {
+        if (miner.r > 0.0) {
             // Resource is extracted - becomes the mining unit (now holding)
-            // Find which unit mined us and copy it with holding=1
-            if (isMiningUnit(right) && !isHoldingResource(right)) {
-                int dir = randomDirection(pos + vec2(1, 0), u_time);
-                if (dir == 3) {
-                    vec2 fac = getFactoryLocation(right);
-                    result = createMiningUnit(1.0, fac.x, fac.y);
-                }
-            } else if (isMiningUnit(up) && !isHoldingResource(up)) {
-                int dir = randomDirection(pos + vec2(0, 1), u_time);
-                if (dir == 4) {
-                    vec2 fac = getFactoryLocation(up);
-                    result = createMiningUnit(1.0, fac.x, fac.y);
-                }
-            } else if (isMiningUnit(left) && !isHoldingResource(left)) {
-                int dir = randomDirection(pos + vec2(-1, 0), u_time);
-                if (dir == 1) {
-                    vec2 fac = getFactoryLocation(left);
-                    result = createMiningUnit(1.0, fac.x, fac.y);
-                }
-            } else if (isMiningUnit(down) && !isHoldingResource(down)) {
-                int dir = randomDirection(pos + vec2(0, -1), u_time);
-                if (dir == 2) {
-                    vec2 fac = getFactoryLocation(down);
-                    result = createMiningUnit(1.0, fac.x, fac.y);
-                }
-            }
+            vec2 fac = getFactoryLocation(miner);
+            result = createMiningUnit(1.0, fac.x, fac.y);
         }
     }
     
@@ -234,8 +260,8 @@ void main() {
                 }
             }
         } else {
-            // Not holding: random walk to find resources
-            int myDir = randomDirection(pos, u_time);
+            // Not holding: look for resources within vision range
+            int myDir = getUnitMoveDirection(pos, self, v_uv, texelSize, u_time);
             
             if (myDir == 0) {
                 result = self;
