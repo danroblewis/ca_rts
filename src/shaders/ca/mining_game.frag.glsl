@@ -163,6 +163,31 @@ bool canMoveWithoutCollision(vec2 myPos, vec2 targetPos, vec2 targetUV) {
     return true; // No collision, or we win
 }
 
+// Helper: Process incoming unit - adjust counter on arrival
+vec4 processIncomingUnit(vec4 unit) {
+    if (!isMiningUnit(unit)) return unit;
+    
+    float holding = getHoldingBit(unit);
+    float counter = getStationaryCounter(unit);
+    vec2 factoryLoc = getFactoryLocation(unit);
+    vec2 lastResourceLoc = getLastResourceLocation(unit);
+    bool hasMemory = hasLastResourceLocation(unit);
+    
+    // If walking, decrement counter. Otherwise reset to 0 (successful move).
+    float newCounter;
+    if (counter >= STATIONARY_THRESHOLD) {
+        newCounter = max(0.0, counter - 1.0); // Decrement during walk
+    } else {
+        newCounter = 0.0; // Reset on successful normal move
+    }
+    
+    if (hasMemory) {
+        return createMiningUnit(holding, newCounter, factoryLoc, lastResourceLoc);
+    } else {
+        return createMiningUnitSimple(holding, newCounter, factoryLoc);
+    }
+}
+
 // ============================================================================
 // EMPTY CELL - Check if unit moves in or factory spawns here
 // ============================================================================
@@ -171,24 +196,24 @@ vec4 updateEmpty(vec4 self) {
     
     // Check right neighbor moving left (dir=3)
     incoming = checkUnitMovingIn(g_right, vec2(1, 0), 3);
-    if (incoming.r > 0.0) return incoming;
+    if (incoming.r > 0.0) return processIncomingUnit(incoming);
     
     // Check up neighbor moving down (dir=4)
     incoming = checkUnitMovingIn(g_up, vec2(0, 1), 4);
-    if (incoming.r > 0.0) return incoming;
+    if (incoming.r > 0.0) return processIncomingUnit(incoming);
     
     // Check left neighbor moving right (dir=1)
     incoming = checkUnitMovingIn(g_left, vec2(-1, 0), 1);
-    if (incoming.r > 0.0) return incoming;
+    if (incoming.r > 0.0) return processIncomingUnit(incoming);
     
     // Check down neighbor moving up (dir=2)
     incoming = checkUnitMovingIn(g_down, vec2(0, -1), 2);
-    if (incoming.r > 0.0) return incoming;
+    if (incoming.r > 0.0) return processIncomingUnit(incoming);
     
     // Check if factory below is spawning (factory only spawns UP)
     if (isMiningFactory(g_down) && getFactoryResourceCount(g_down) >= SPAWN_COST) {
         vec2 facPos = getFactoryPosition(g_down);
-        return createMiningUnitSimple(0.0, facPos); // New unit, no resource memory
+        return createMiningUnitSimple(0.0, 0.0, facPos); // New unit, no resource memory, counter=0
     }
     
     return self;
@@ -207,7 +232,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_right, nUV) == 3) {
             vec2 fac = getFactoryLocation(g_right);
-            return createMiningUnit(1.0, fac, g_pos); // Remember this resource location!
+            return createMiningUnit(1.0, 0.0, fac, g_pos); // Remember this resource location! Reset counter.
         }
     }
     
@@ -217,7 +242,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_up, nUV) == 4) {
             vec2 fac = getFactoryLocation(g_up);
-            return createMiningUnit(1.0, fac, g_pos);
+            return createMiningUnit(1.0, 0.0, fac, g_pos);
         }
     }
     
@@ -227,7 +252,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_left, nUV) == 1) {
             vec2 fac = getFactoryLocation(g_left);
-            return createMiningUnit(1.0, fac, g_pos);
+            return createMiningUnit(1.0, 0.0, fac, g_pos);
         }
     }
     
@@ -237,7 +262,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_down, nUV) == 2) {
             vec2 fac = getFactoryLocation(g_down);
-            return createMiningUnit(1.0, fac, g_pos);
+            return createMiningUnit(1.0, 0.0, fac, g_pos);
         }
     }
     
@@ -249,9 +274,31 @@ vec4 updateResource(vec4 self) {
 // ============================================================================
 vec4 updateMiningUnit(vec4 self) {
     bool holding = isHoldingResource(self);
+    float counter = getStationaryCounter(self);
     vec2 factoryLoc = getFactoryLocation(self);
     vec2 lastResourceLoc = getLastResourceLocation(self);
     bool hasMemory = hasLastResourceLocation(self);
+    bool walking = isWalking(self); // counter >= STATIONARY_THRESHOLD
+    
+    // If walking (unstuck mode), do random walk and decrement counter
+    if (walking) {
+        int dir = randomDirection(g_pos, u_time);
+        vec2 offset = directionToOffset(dir);
+        vec2 targetPos = g_pos + offset;
+        vec2 targetUV = (targetPos + 0.5) / u_resolution;
+        vec4 target = sampleOffset(v_uv, offset);
+        
+        if (isEmpty(target) && canMoveWithoutCollision(g_pos, targetPos, targetUV)) {
+            return createEmpty(); // Move out, counter decrements on arrival
+        }
+        // Blocked during walk - decrement counter anyway to avoid infinite walk
+        float newCounter = max(0.0, counter - 1.0);
+        if (hasMemory) {
+            return createMiningUnit(holding ? 1.0 : 0.0, newCounter, factoryLoc, lastResourceLoc);
+        } else {
+            return createMiningUnitSimple(holding ? 1.0 : 0.0, newCounter, factoryLoc);
+        }
+    }
     
     // If holding, check if adjacent to our factory -> deposit
     if (holding) {
@@ -262,17 +309,24 @@ vec4 updateMiningUnit(vec4 self) {
         if (isMiningFactory(g_down) && distance(getFactoryPosition(g_down), factoryLoc) < 0.5) atFactory = true;
         
         if (atFactory) {
-            // Deposit and stay (now empty-handed, but keep resource memory!)
+            // Deposit and stay (now empty-handed, reset counter, keep memory!)
             if (hasMemory) {
-                return createMiningUnit(0.0, factoryLoc, lastResourceLoc);
+                return createMiningUnit(0.0, 0.0, factoryLoc, lastResourceLoc);
             } else {
-                return createMiningUnitSimple(0.0, factoryLoc);
+                return createMiningUnitSimple(0.0, 0.0, factoryLoc);
             }
         }
         
         // Move toward factory
         int dir = directionToward(g_pos, factoryLoc, u_time);
-        if (dir == 0) return self;
+        if (dir == 0) {
+            // Stuck! Increment counter
+            if (hasMemory) {
+                return createMiningUnit(1.0, counter + 1.0, factoryLoc, lastResourceLoc);
+            } else {
+                return createMiningUnitSimple(1.0, counter + 1.0, factoryLoc);
+            }
+        }
         
         vec2 offset = directionToOffset(dir);
         vec2 targetPos = g_pos + offset;
@@ -282,12 +336,24 @@ vec4 updateMiningUnit(vec4 self) {
         if (isEmpty(target) && canMoveWithoutCollision(g_pos, targetPos, targetUV)) {
             return createEmpty(); // Move out
         }
-        return self; // Blocked or lost collision
+        // Blocked! Increment counter
+        if (hasMemory) {
+            return createMiningUnit(1.0, counter + 1.0, factoryLoc, lastResourceLoc);
+        } else {
+            return createMiningUnitSimple(1.0, counter + 1.0, factoryLoc);
+        }
     }
     
     // Not holding: look for resources
     int dir = getUnitMoveDirection(g_pos, self, v_uv);
-    if (dir == 0) return self;
+    if (dir == 0) {
+        // Stuck! Increment counter
+        if (hasMemory) {
+            return createMiningUnit(0.0, counter + 1.0, factoryLoc, lastResourceLoc);
+        } else {
+            return createMiningUnitSimple(0.0, counter + 1.0, factoryLoc);
+        }
+    }
     
     vec2 offset = directionToOffset(dir);
     vec2 targetPos = g_pos + offset;
@@ -301,7 +367,12 @@ vec4 updateMiningUnit(vec4 self) {
             return createEmpty(); // Move out
         }
     }
-    return self; // Blocked or lost collision
+    // Blocked! Increment counter
+    if (hasMemory) {
+        return createMiningUnit(0.0, counter + 1.0, factoryLoc, lastResourceLoc);
+    } else {
+        return createMiningUnitSimple(0.0, counter + 1.0, factoryLoc);
+    }
 }
 
 // ============================================================================

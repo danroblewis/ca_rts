@@ -74,13 +74,36 @@ vec4 createResource(float amount) {
 
 // ============================================================================
 // MINING UNIT (with bit-packed locations)
-// G = holding (0 = empty, 1 = carrying resource)
+// G = packed: holding (bit 0) + stationary_counter * 2 (bits 1+)
+//     holding: 0 = empty, 1 = carrying resource
+//     stationary_counter: how long stuck, or countdown when walking
 // B = packed factory location (x + y * 128)
 // A = packed last resource location (x + y * 128), or -1 if none
 // ============================================================================
 
+// Threshold: after this many steps stuck, start walking
+const float STATIONARY_THRESHOLD = 8.0;
+
+// Unpack G channel
+float getHoldingBit(vec4 cell) {
+    return mod(floor(cell.g), 2.0);
+}
+
+float getStationaryCounter(vec4 cell) {
+    return floor(cell.g / 2.0);
+}
+
+// Pack holding + counter into G
+float packHoldingAndCounter(float holding, float counter) {
+    return floor(holding) + floor(counter) * 2.0;
+}
+
 bool isHoldingResource(vec4 cell) {
-    return cell.g > 0.5;
+    return getHoldingBit(cell) > 0.5;
+}
+
+bool isWalking(vec4 cell) {
+    return getStationaryCounter(cell) >= STATIONARY_THRESHOLD;
 }
 
 vec2 getFactoryLocation(vec4 cell) {
@@ -95,20 +118,20 @@ bool hasLastResourceLocation(vec4 cell) {
     return hasLocation(cell.a);
 }
 
-vec4 createMiningUnit(float holding, vec2 factoryPos, vec2 lastResourcePos) {
+vec4 createMiningUnit(float holding, float stationaryCounter, vec2 factoryPos, vec2 lastResourcePos) {
     return vec4(
         CELL_MINING_UNIT,
-        holding,
+        packHoldingAndCounter(holding, stationaryCounter),
         packCoords(factoryPos),
         hasLocation(lastResourcePos.x) ? packCoords(lastResourcePos) : NO_LOCATION
     );
 }
 
 // Convenience: create unit with no last resource memory
-vec4 createMiningUnitSimple(float holding, vec2 factoryPos) {
+vec4 createMiningUnitSimple(float holding, float stationaryCounter, vec2 factoryPos) {
     return vec4(
         CELL_MINING_UNIT,
-        holding,
+        packHoldingAndCounter(holding, stationaryCounter),
         packCoords(factoryPos),
         NO_LOCATION
     );
