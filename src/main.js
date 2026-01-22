@@ -60,14 +60,8 @@ function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
 // Fill with empty
 data.fill(0);
 
-// Place the mining factory in the center
-const factoryX = Math.floor(GRID_SIZE / 2);
-const factoryY = Math.floor(GRID_SIZE / 2);
-// Factory: type=3, resourceCount=10, selfX, selfY
-setCell(factoryX, factoryY, CELL_MINING_FACTORY, 10, factoryX, factoryY);
-
 // Place resources in blobs/clusters (more realistic RTS style)
-const NUM_BLOBS = 10;
+const NUM_BLOBS = 15;
 const BLOB_MIN_RADIUS = 3;
 const BLOB_MAX_RADIUS = 8;
 const BLOB_DENSITY = 0.6; // % of cells in blob that have resources
@@ -75,12 +69,9 @@ const BLOB_DENSITY = 0.6; // % of cells in blob that have resources
 let totalResources = 0;
 
 for (let b = 0; b < NUM_BLOBS; b++) {
-    // Pick blob center (not too close to factory)
-    let centerX, centerY;
-    do {
-        centerX = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
-        centerY = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
-    } while (Math.abs(centerX - factoryX) < 15 && Math.abs(centerY - factoryY) < 15);
+    // Pick blob center randomly
+    const centerX = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
+    const centerY = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
     
     // Random radius for this blob
     const radius = BLOB_MIN_RADIUS + Math.random() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
@@ -102,9 +93,6 @@ for (let b = 0; b < NUM_BLOBS; b++) {
             // Density check
             if (Math.random() > BLOB_DENSITY) continue;
             
-            // Don't overwrite factory
-            if (x === factoryX && y === factoryY) continue;
-            
             setCell(x, y, CELL_RESOURCE, 1.0);
             totalResources++;
         }
@@ -117,9 +105,45 @@ grid.upload(data);
 
 console.log(`Mining Game initialized:`);
 console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
-console.log(`  Factory at (${factoryX}, ${factoryY}) with 10 resources`);
 console.log(`  ${NUM_RESOURCES} resources scattered`);
-console.log(`  Factory will spawn 2 mining units, they will mine and return resources`);
+console.log(`  Click to place a mining factory!`);
+
+// ============================================================================
+// Click to Place Factory
+// ============================================================================
+
+canvas.addEventListener('click', (event) => {
+    // Convert screen coordinates to grid coordinates
+    const rect = canvas.getBoundingClientRect();
+    const screenX = event.clientX - rect.left;
+    const screenY = event.clientY - rect.top;
+    
+    // Canvas might be stretched - normalize to 0-1, then to grid
+    const normalizedX = screenX / rect.width;
+    const normalizedY = screenY / rect.height;
+    
+    // Grid Y is inverted (0 at bottom in WebGL, 0 at top in screen)
+    const gridX = Math.floor(normalizedX * GRID_SIZE);
+    const gridY = Math.floor((1 - normalizedY) * GRID_SIZE);
+    
+    // Clamp to grid bounds
+    const x = Math.max(0, Math.min(GRID_SIZE - 1, gridX));
+    const y = Math.max(0, Math.min(GRID_SIZE - 1, gridY));
+    
+    // Read current grid state, modify, and upload
+    const currentData = grid.download();
+    const idx = (y * GRID_SIZE + x) * 4;
+    
+    // Place factory: type=3, resourceCount=10, selfX, selfY
+    currentData[idx + 0] = CELL_MINING_FACTORY;
+    currentData[idx + 1] = 10; // 10 resources
+    currentData[idx + 2] = x;  // selfX
+    currentData[idx + 3] = y;  // selfY
+    
+    grid.upload(currentData);
+    
+    console.log(`Placed factory at (${x}, ${y}) with 10 resources`);
+});
 
 // ============================================================================
 // Simulation Loop
