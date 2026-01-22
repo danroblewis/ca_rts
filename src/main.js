@@ -1,7 +1,8 @@
 import { GPU } from './gpu/GPU.js';
-import { PingPongBuffer } from './gpu/PingPongBuffer.js';
 import { ComputeShader } from './gpu/ComputeShader.js';
 import { loadShader } from './shaders/load.js';
+import { CAGrid } from './ca/CAGrid.js';
+import { CELL_EMPTY, CELL_RESOURCE, CELL_UNIT, CELL_OBSTACLE } from './ca/CellTypes.js';
 
 // ============================================================================
 // Initialize GPU
@@ -11,7 +12,6 @@ const canvas = document.getElementById('canvas');
 const gpu = GPU.init(canvas);
 const gl = gpu.gl;
 
-// Handle window resize
 function resize() {
     const dpr = window.devicePixelRatio || 1;
     canvas.width = window.innerWidth * dpr;
@@ -23,71 +23,97 @@ resize();
 console.log('GPU compute framework initialized');
 
 // ============================================================================
-// Load Shaders and Initialize
+// Load Shaders
 // ============================================================================
 
-const [golShaderSource, renderShaderSource] = await Promise.all([
-    loadShader('./src/shaders/examples/gol/gol.frag.glsl'),
-    loadShader('./src/shaders/examples/gol/render.frag.glsl')
+const [simShaderSource, renderShaderSource] = await Promise.all([
+    loadShader('./src/shaders/ca/unit_walk.frag.glsl'),
+    loadShader('./src/shaders/ca/render.frag.glsl')
 ]);
 
-// ============================================================================
-// Test: Conway's Game of Life
-// ============================================================================
-
-const GRID_SIZE = 256;
-
-// Create ping-pong buffer for CA state
-const caBuffer = new PingPongBuffer(GRID_SIZE, GRID_SIZE, { format: 'float' });
-
-// Initialize with random data
-const initialData = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
-for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
-    // R channel = alive (0 or 1), GBA = unused
-    initialData[i * 4 + 0] = Math.random() > 0.7 ? 1.0 : 0.0;
-    initialData[i * 4 + 1] = 0.0;
-    initialData[i * 4 + 2] = 0.0;
-    initialData[i * 4 + 3] = 1.0;
-}
-caBuffer.upload(initialData);
-
-// Create shaders from loaded source
-const gameOfLifeShader = new ComputeShader(golShaderSource);
+const simShader = new ComputeShader(simShaderSource);
 const renderShader = new ComputeShader(renderShaderSource);
 
 // ============================================================================
-// Simulation Loop (runs as fast as possible)
+// Initialize World
+// ============================================================================
+
+const GRID_SIZE = 256;
+const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
+
+// Initialize the world
+const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
+
+// Helper to set a cell
+function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
+    const idx = (y * GRID_SIZE + x) * 4;
+    data[idx + 0] = type;
+    data[idx + 1] = dataA;
+    data[idx + 2] = dataB;
+    data[idx + 3] = dataC;
+}
+
+// Fill with empty
+data.fill(0);
+
+// Create border of obstacles
+for (let x = 0; x < GRID_SIZE; x++) {
+    setCell(x, 0, CELL_OBSTACLE);
+    setCell(x, GRID_SIZE - 1, CELL_OBSTACLE);
+}
+for (let y = 0; y < GRID_SIZE; y++) {
+    setCell(0, y, CELL_OBSTACLE);
+    setCell(GRID_SIZE - 1, y, CELL_OBSTACLE);
+}
+
+// Scatter some resources
+for (let i = 0; i < 500; i++) {
+    const x = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+    const y = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+    setCell(x, y, CELL_RESOURCE, 1.0); // amount = 1.0
+}
+
+// Scatter some units
+for (let i = 0; i < 200; i++) {
+    const x = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+    const y = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+    setCell(x, y, CELL_UNIT, 0, 0, 0); // dirX=0, dirY=0, team=0
+}
+
+grid.upload(data);
+
+// ============================================================================
+// Simulation Loop
 // ============================================================================
 
 let simStepCount = 0;
 let renderFrameCount = 0;
 let lastLogTime = performance.now();
-const LOG_INTERVAL = 1000; // Log every 1 second
-const SIM_BATCH_SIZE = 100; // Steps per batch before yielding
+let simTime = 0; // Time seed for randomness
+const LOG_INTERVAL = 1000;
+const SIM_BATCH_SIZE = 1;
 
-function runSimulationStep() {
-    // Bind write framebuffer
-    caBuffer.getWriteFramebuffer().bind();
-
-    // Run Game of Life shader
-    gameOfLifeShader.use();
-    gameOfLifeShader.setTexture('u_state', caBuffer.getReadTexture(), 0);
-    gameOfLifeShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
-    gameOfLifeShader.dispatch();
-
-    // Swap buffers
-    caBuffer.swap();
+function simulationStep() {
+    grid.getWriteFramebuffer().bind();
+    
+    simShader.use();
+    simShader.setTexture('u_state', grid.getReadTexture(), 0);
+    simShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
+    simShader.setFloat('u_time', simTime);
+    simShader.dispatch();
+    
+    grid.getWriteFramebuffer().unbind();
+    grid.swap();
     
     simStepCount++;
+    simTime += 1.0;
 }
 
 function simulationLoop() {
-    // Run a fixed batch of simulation steps
     for (let i = 0; i < SIM_BATCH_SIZE; i++) {
-        runSimulationStep();
+        simulationStep();
     }
     
-    // Log FPS (both simulation and render)
     const now = performance.now();
     const elapsed = now - lastLogTime;
     if (elapsed >= LOG_INTERVAL) {
@@ -99,31 +125,28 @@ function simulationLoop() {
         lastLogTime = now;
     }
     
-    // Yield to browser, then continue
     setTimeout(simulationLoop, 0);
 }
 
-// Start simulation loop
 simulationLoop();
 
 // ============================================================================
-// Render Loop (runs at display refresh rate)
+// Render Loop
 // ============================================================================
 
 function renderLoop() {
-    // Render to screen
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
 
     renderShader.use();
-    renderShader.setTexture('u_state', caBuffer.getReadTexture(), 0);
+    renderShader.setTexture('u_state', grid.getReadTexture(), 0);
     renderShader.dispatch();
 
     renderFrameCount++;
     requestAnimationFrame(renderLoop);
 }
 
-// Start render loop
 requestAnimationFrame(renderLoop);
 
-console.log('Game of Life simulation started');
+console.log('CA simulation started');
+console.log(`Grid: ${GRID_SIZE}x${GRID_SIZE}, Units: 200, Resources: 500`);
