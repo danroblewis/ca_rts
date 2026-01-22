@@ -2,25 +2,24 @@
  * Pseudo-random number generation for shaders
  */
 
-// Hash function for pseudo-random numbers
+// Hash function for pseudo-random numbers (0.0 to 1.0)
 float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
-// Hash with seed
+// Hash with seed - use seed to offset position
 float hash(vec2 p, float seed) {
-    return fract(sin(dot(p + seed * 0.1, vec2(127.1, 311.7))) * 43758.5453123);
+    return hash(p + vec2(seed * 7.23, seed * 13.17));
 }
 
-// Random direction (returns one of 4 cardinal directions or stay)
-// Returns: 0=stay, 1=right, 2=up, 3=left, 4=down
+// Random direction: returns 1=right, 2=up, 3=left, 4=down
+// No "stay" option - always moves
 int randomDirection(vec2 pos, float seed) {
     float r = hash(pos, seed);
-    if (r < 0.2) return 0; // stay (20% chance)
-    if (r < 0.4) return 1; // right
-    if (r < 0.6) return 2; // up
-    if (r < 0.8) return 3; // left
-    return 4; // down
+    // Map 0-1 to 1-4 evenly
+    return int(floor(r * 4.0)) + 1;
 }
 
 // Convert direction ID to offset
@@ -29,10 +28,10 @@ vec2 directionToOffset(int dir) {
     if (dir == 2) return vec2(0.0, 1.0);  // up
     if (dir == 3) return vec2(-1.0, 0.0); // left
     if (dir == 4) return vec2(0.0, -1.0); // down
-    return vec2(0.0, 0.0); // stay
+    return vec2(0.0, 0.0); // stay (dir == 0)
 }
 
-// Get direction toward a target (simple, picks one axis)
+// Get direction toward a target (picks axis randomly to avoid straight-line movement)
 int directionToward(vec2 from, vec2 to, float seed) {
     vec2 diff = to - from;
     
@@ -41,19 +40,22 @@ int directionToward(vec2 from, vec2 to, float seed) {
         return 0;
     }
     
-    // Randomly pick X or Y axis to move along
-    float r = hash(from, seed);
+    bool canMoveX = abs(diff.x) > 0.5;
+    bool canMoveY = abs(diff.y) > 0.5;
     
-    if (r < 0.5 && abs(diff.x) > 0.5) {
-        // Move along X
-        return diff.x > 0.0 ? 1 : 3; // right or left
-    } else if (abs(diff.y) > 0.5) {
-        // Move along Y
-        return diff.y > 0.0 ? 2 : 4; // up or down
-    } else if (abs(diff.x) > 0.5) {
-        // Fallback to X if Y is zero
+    if (canMoveX && canMoveY) {
+        // Both axes valid - pick randomly
+        float r = hash(from, seed);
+        if (r < 0.5) {
+            return diff.x > 0.0 ? 1 : 3; // right or left
+        } else {
+            return diff.y > 0.0 ? 2 : 4; // up or down
+        }
+    } else if (canMoveX) {
         return diff.x > 0.0 ? 1 : 3;
+    } else if (canMoveY) {
+        return diff.y > 0.0 ? 2 : 4;
     }
     
-    return 0; // Already at target
+    return 0;
 }
