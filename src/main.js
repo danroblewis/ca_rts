@@ -67,7 +67,7 @@ const factoryY = Math.floor(GRID_SIZE / 2);
 setCell(factoryX, factoryY, CELL_MINING_FACTORY, 10, factoryX, factoryY);
 
 // Place resources in blobs/clusters (more realistic RTS style)
-const NUM_BLOBS = 20;
+const NUM_BLOBS = 10;
 const BLOB_MIN_RADIUS = 3;
 const BLOB_MAX_RADIUS = 8;
 const BLOB_DENSITY = 0.6; // % of cells in blob that have resources
@@ -179,6 +179,7 @@ function renderLoop() {
 
     renderShader.use();
     renderShader.setTexture('u_state', grid.getReadTexture(), 0);
+    renderShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
     renderShader.dispatch();
 
     renderFrameCount++;
