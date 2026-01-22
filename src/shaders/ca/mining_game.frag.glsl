@@ -22,10 +22,10 @@ vec4 sampleOffset(vec2 uv, vec2 offset) {
 }
 
 // Vision range for units
-const int VISION_RANGE = 10;
+const int VISION_RANGE = 5;
 
 // Resources needed to spawn a new mining unit
-const float SPAWN_COST = 5.0;
+const float SPAWN_COST = 10.0;
 
 // Find nearest resource within vision range
 vec2 findNearestResource(vec2 pos, vec2 uv) {
@@ -67,13 +67,14 @@ int getUnitMoveDirection(vec2 unitPos, vec4 unitCell, vec2 uv) {
         return directionToward(unitPos, resourcePos, u_time);
     }
     
-    // 2. Resource memory DISABLED for debugging
-    // if (hasLastResourceLocation(unitCell)) {
-    //     vec2 lastPos = getLastResourceLocation(unitCell);
-    //     if (distance(unitPos, lastPos) > 0.5) {
-    //         return directionToward(unitPos, lastPos, u_time);
-    //     }
-    // }
+    // 2. Go to remembered resource location (if we have one and aren't there yet)
+    if (hasLastResourceLocation(unitCell)) {
+        vec2 lastPos = getLastResourceLocation(unitCell);
+        if (distance(unitPos, lastPos) > 0.5) {
+            return directionToward(unitPos, lastPos, u_time);
+        }
+        // If we're AT the remembered location, we'll check if resource is gone in updateMiningUnit
+    }
     
     // 3. Random walk
     return randomDirection(unitPos, u_time);
@@ -344,10 +345,22 @@ vec4 updateMiningUnit(vec4 self) {
         }
     }
     
+    // Not holding: check if we should forget our remembered location
+    // If we're AT the remembered location and there's no resource, forget it
+    if (hasMemory && distance(g_pos, lastResourceLoc) < 0.5) {
+        // We're at the remembered spot - is there a resource adjacent?
+        bool foundResource = isResource(g_right) || isResource(g_up) || 
+                            isResource(g_left) || isResource(g_down);
+        if (!foundResource) {
+            // Resource is gone, forget the location
+            hasMemory = false;
+        }
+    }
+    
     // Not holding: look for resources
     int dir = getUnitMoveDirection(g_pos, self, v_uv);
     if (dir == 0) {
-        // Stuck! Increment counter
+        // Stuck! Increment counter (use updated hasMemory)
         if (hasMemory) {
             return createMiningUnit(0.0, counter + 1.0, factoryLoc, lastResourceLoc);
         } else {
@@ -367,7 +380,7 @@ vec4 updateMiningUnit(vec4 self) {
             return createEmpty(); // Move out
         }
     }
-    // Blocked! Increment counter
+    // Blocked! Increment counter (use updated hasMemory)
     if (hasMemory) {
         return createMiningUnit(0.0, counter + 1.0, factoryLoc, lastResourceLoc);
     } else {
