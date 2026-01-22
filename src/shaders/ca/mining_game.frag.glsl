@@ -25,7 +25,7 @@ vec4 sampleOffset(vec2 uv, vec2 offset) {
 const int VISION_RANGE = 3;
 
 // Resources needed to spawn a new mining unit
-const float SPAWN_COST = 5.0;
+const float SPAWN_COST = 2.0;
 
 // Find nearest resource within vision range
 vec2 findNearestResource(vec2 pos, vec2 uv) {
@@ -60,10 +60,23 @@ int getUnitMoveDirection(vec2 unitPos, vec4 unitCell, vec2 uv) {
         return directionToward(unitPos, factoryLoc, u_time);
     }
     
+    // Not holding: look for resources
+    // 1. Check if there's a visible resource nearby
     vec2 resourcePos = findNearestResource(unitPos, uv);
     if (resourcePos.x >= 0.0) {
         return directionToward(unitPos, resourcePos, u_time);
     }
+    
+    // 2. Check if we remember a previous resource location
+    if (hasLastResourceLocation(unitCell)) {
+        vec2 lastPos = getLastResourceLocation(unitCell);
+        // Only go there if we're not already at that location
+        if (distance(unitPos, lastPos) > 0.5) {
+            return directionToward(unitPos, lastPos, u_time);
+        }
+    }
+    
+    // 3. Random walk
     return randomDirection(unitPos, u_time);
 }
 
@@ -176,7 +189,7 @@ vec4 updateEmpty(vec4 self) {
     // Check if factory below is spawning (factory only spawns UP)
     if (isMiningFactory(g_down) && getFactoryResourceCount(g_down) >= SPAWN_COST) {
         vec2 facPos = getFactoryPosition(g_down);
-        return createMiningUnit(0.0, facPos.x, facPos.y);
+        return createMiningUnitSimple(0.0, facPos); // New unit, no resource memory
     }
     
     return self;
@@ -187,6 +200,7 @@ vec4 updateEmpty(vec4 self) {
 // ============================================================================
 vec4 updateResource(vec4 self) {
     // Check if any adjacent non-holding unit is moving onto us
+    // When mined, the unit remembers THIS location (g_pos) as last resource
     
     // Right neighbor moving left
     if (isMiningUnit(g_right) && !isHoldingResource(g_right)) {
@@ -194,7 +208,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_right, nUV) == 3) {
             vec2 fac = getFactoryLocation(g_right);
-            return createMiningUnit(1.0, fac.x, fac.y);
+            return createMiningUnit(1.0, fac, g_pos); // Remember this resource location!
         }
     }
     
@@ -204,7 +218,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_up, nUV) == 4) {
             vec2 fac = getFactoryLocation(g_up);
-            return createMiningUnit(1.0, fac.x, fac.y);
+            return createMiningUnit(1.0, fac, g_pos);
         }
     }
     
@@ -214,7 +228,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_left, nUV) == 1) {
             vec2 fac = getFactoryLocation(g_left);
-            return createMiningUnit(1.0, fac.x, fac.y);
+            return createMiningUnit(1.0, fac, g_pos);
         }
     }
     
@@ -224,7 +238,7 @@ vec4 updateResource(vec4 self) {
         vec2 nUV = (nPos + 0.5) / u_resolution;
         if (getUnitMoveDirection(nPos, g_down, nUV) == 2) {
             vec2 fac = getFactoryLocation(g_down);
-            return createMiningUnit(1.0, fac.x, fac.y);
+            return createMiningUnit(1.0, fac, g_pos);
         }
     }
     
@@ -237,6 +251,8 @@ vec4 updateResource(vec4 self) {
 vec4 updateMiningUnit(vec4 self) {
     bool holding = isHoldingResource(self);
     vec2 factoryLoc = getFactoryLocation(self);
+    vec2 lastResourceLoc = getLastResourceLocation(self);
+    bool hasMemory = hasLastResourceLocation(self);
     
     // If holding, check if adjacent to our factory -> deposit
     if (holding) {
@@ -247,8 +263,12 @@ vec4 updateMiningUnit(vec4 self) {
         if (isMiningFactory(g_down) && distance(getFactoryPosition(g_down), factoryLoc) < 0.5) atFactory = true;
         
         if (atFactory) {
-            // Deposit and stay (now empty-handed)
-            return createMiningUnit(0.0, factoryLoc.x, factoryLoc.y);
+            // Deposit and stay (now empty-handed, but keep resource memory!)
+            if (hasMemory) {
+                return createMiningUnit(0.0, factoryLoc, lastResourceLoc);
+            } else {
+                return createMiningUnitSimple(0.0, factoryLoc);
+            }
         }
         
         // Move toward factory
