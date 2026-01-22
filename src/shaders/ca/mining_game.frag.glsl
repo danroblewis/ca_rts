@@ -25,7 +25,7 @@ vec4 sampleOffset(vec2 uv, vec2 offset) {
 const int VISION_RANGE = 3;
 
 // Resources needed to spawn a new mining unit
-const float SPAWN_COST = 2.0;
+const float SPAWN_COST = 5.0;
 
 // Find nearest resource within vision range
 vec2 findNearestResource(vec2 pos, vec2 uv) {
@@ -67,14 +67,13 @@ int getUnitMoveDirection(vec2 unitPos, vec4 unitCell, vec2 uv) {
         return directionToward(unitPos, resourcePos, u_time);
     }
     
-    // 2. Check if we remember a previous resource location
-    if (hasLastResourceLocation(unitCell)) {
-        vec2 lastPos = getLastResourceLocation(unitCell);
-        // Only go there if we're not already at that location
-        if (distance(unitPos, lastPos) > 0.5) {
-            return directionToward(unitPos, lastPos, u_time);
-        }
-    }
+    // 2. Resource memory DISABLED for debugging
+    // if (hasLastResourceLocation(unitCell)) {
+    //     vec2 lastPos = getLastResourceLocation(unitCell);
+    //     if (distance(unitPos, lastPos) > 0.5) {
+    //         return directionToward(unitPos, lastPos, u_time);
+    //     }
+    // }
     
     // 3. Random walk
     return randomDirection(unitPos, u_time);

@@ -43,10 +43,28 @@ int directionToward(vec2 from, vec2 to, float seed) {
     bool canMoveX = abs(diff.x) > 0.5;
     bool canMoveY = abs(diff.y) > 0.5;
     
+    float r = hash(from, seed);
+    
+    // 20% chance to pick a random perpendicular direction (helps navigate around obstacles)
+    if (r < 0.2) {
+        if (canMoveX && canMoveY) {
+            // Pick any of the 4 directions
+            return randomDirection(from, seed + 1.0);
+        } else if (canMoveX) {
+            // Moving along X, but randomly go up or down sometimes
+            float r2 = hash(from, seed + 2.0);
+            return r2 < 0.5 ? 2 : 4; // up or down
+        } else if (canMoveY) {
+            // Moving along Y, but randomly go left or right sometimes
+            float r2 = hash(from, seed + 2.0);
+            return r2 < 0.5 ? 1 : 3; // right or left
+        }
+    }
+    
+    // 80% chance: move toward target
     if (canMoveX && canMoveY) {
         // Both axes valid - pick randomly
-        float r = hash(from, seed);
-        if (r < 0.5) {
+        if (r < 0.6) { // 0.2-0.6 = X, 0.6-1.0 = Y
             return diff.x > 0.0 ? 1 : 3; // right or left
         } else {
             return diff.y > 0.0 ? 2 : 4; // up or down
