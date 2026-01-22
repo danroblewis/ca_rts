@@ -11,8 +11,8 @@
 // Cell type constants
 const float CELL_EMPTY = 0.0;
 const float CELL_RESOURCE = 1.0;
-const float CELL_UNIT = 2.0;
-const float CELL_OBSTACLE = 3.0;
+const float CELL_MINING_UNIT = 2.0;
+const float CELL_MINING_FACTORY = 3.0;
 
 // Get cell type from cell data
 float getCellType(vec4 cell) {
@@ -28,43 +28,61 @@ bool isResource(vec4 cell) {
     return getCellType(cell) == CELL_RESOURCE;
 }
 
-bool isUnit(vec4 cell) {
-    return getCellType(cell) == CELL_UNIT;
+bool isMiningUnit(vec4 cell) {
+    return getCellType(cell) == CELL_MINING_UNIT;
 }
 
-bool isObstacle(vec4 cell) {
-    return getCellType(cell) == CELL_OBSTACLE;
+bool isMiningFactory(vec4 cell) {
+    return getCellType(cell) == CELL_MINING_FACTORY;
 }
 
-// Unit data accessors (when cell is a unit)
-// G = direction X, B = direction Y, A = team
-vec2 getUnitDirection(vec4 cell) {
-    return vec2(cell.g, cell.b);
-}
+// === RESOURCE ===
+// G = amount (unused for now)
 
-float getUnitTeam(vec4 cell) {
-    return cell.a;
-}
-
-// Resource data (when cell is a resource)
-// G = amount
 float getResourceAmount(vec4 cell) {
     return cell.g;
-}
-
-// Create cells
-vec4 createEmpty() {
-    return vec4(CELL_EMPTY, 0.0, 0.0, 0.0);
 }
 
 vec4 createResource(float amount) {
     return vec4(CELL_RESOURCE, amount, 0.0, 0.0);
 }
 
-vec4 createUnit(float dirX, float dirY, float team) {
-    return vec4(CELL_UNIT, dirX, dirY, team);
+// === MINING UNIT ===
+// G = holding (0 = empty, 1 = carrying resource)
+// B = factory X coordinate
+// A = factory Y coordinate
+
+bool isHoldingResource(vec4 cell) {
+    return cell.g > 0.5;
 }
 
-vec4 createObstacle() {
-    return vec4(CELL_OBSTACLE, 0.0, 0.0, 0.0);
+vec2 getFactoryLocation(vec4 cell) {
+    return vec2(cell.b, cell.a);
+}
+
+vec4 createMiningUnit(float holding, float factoryX, float factoryY) {
+    return vec4(CELL_MINING_UNIT, holding, factoryX, factoryY);
+}
+
+// === MINING FACTORY ===
+// G = resource count
+// B = self X coordinate
+// A = self Y coordinate
+
+float getFactoryResourceCount(vec4 cell) {
+    return cell.g;
+}
+
+vec2 getFactoryPosition(vec4 cell) {
+    return vec2(cell.b, cell.a);
+}
+
+vec4 createMiningFactory(float resourceCount, float selfX, float selfY) {
+    return vec4(CELL_MINING_FACTORY, resourceCount, selfX, selfY);
+}
+
+// === EMPTY ===
+
+vec4 createEmpty() {
+    return vec4(CELL_EMPTY, 0.0, 0.0, 0.0);
 }

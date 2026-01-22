@@ -16,29 +16,30 @@ void main() {
     
     if (cellType == CELL_EMPTY) {
         // Dark background
-        color = vec3(0.05, 0.08, 0.12);
+        color = vec3(0.08, 0.1, 0.14);
     }
     else if (cellType == CELL_RESOURCE) {
-        // Green for resources, brightness based on amount
-        float amount = getResourceAmount(cell);
-        color = vec3(0.2, 0.6 + 0.4 * amount, 0.2);
+        // Yellow/gold for resources
+        color = vec3(0.9, 0.7, 0.2);
     }
-    else if (cellType == CELL_UNIT) {
-        // Cyan for units
-        float team = getUnitTeam(cell);
-        if (team == 0.0) {
-            color = vec3(0.2, 0.8, 0.9); // Player units: cyan
+    else if (cellType == CELL_MINING_UNIT) {
+        // Mining unit - cyan when empty, green when carrying
+        bool holding = isHoldingResource(cell);
+        if (holding) {
+            color = vec3(0.3, 0.9, 0.4); // Bright green = carrying
         } else {
-            color = vec3(0.9, 0.3, 0.2); // Enemy units: red
+            color = vec3(0.2, 0.7, 0.9); // Cyan = searching
         }
     }
-    else if (cellType == CELL_OBSTACLE) {
-        // Gray for obstacles
-        color = vec3(0.3, 0.3, 0.35);
+    else if (cellType == CELL_MINING_FACTORY) {
+        // Factory - purple/magenta, brighter with more resources
+        float resources = getFactoryResourceCount(cell);
+        float brightness = 0.5 + min(resources / 10.0, 0.5);
+        color = vec3(0.7, 0.2, 0.8) * brightness;
     }
     else {
-        // Unknown - magenta for debugging
-        color = vec3(1.0, 0.0, 1.0);
+        // Unknown - red for debugging
+        color = vec3(1.0, 0.0, 0.0);
     }
     
     fragColor = vec4(color, 1.0);

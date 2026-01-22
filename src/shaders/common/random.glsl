@@ -9,7 +9,7 @@ float hash(vec2 p) {
 
 // Hash with seed
 float hash(vec2 p, float seed) {
-    return fract(sin(dot(p + seed, vec2(127.1, 311.7))) * 43758.5453123);
+    return fract(sin(dot(p + seed * 0.1, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
 // Random direction (returns one of 4 cardinal directions or stay)
@@ -30,4 +30,30 @@ vec2 directionToOffset(int dir) {
     if (dir == 3) return vec2(-1.0, 0.0); // left
     if (dir == 4) return vec2(0.0, -1.0); // down
     return vec2(0.0, 0.0); // stay
+}
+
+// Get direction toward a target (simple, picks one axis)
+int directionToward(vec2 from, vec2 to, float seed) {
+    vec2 diff = to - from;
+    
+    // If we're at the target, stay
+    if (abs(diff.x) < 0.5 && abs(diff.y) < 0.5) {
+        return 0;
+    }
+    
+    // Randomly pick X or Y axis to move along
+    float r = hash(from, seed);
+    
+    if (r < 0.5 && abs(diff.x) > 0.5) {
+        // Move along X
+        return diff.x > 0.0 ? 1 : 3; // right or left
+    } else if (abs(diff.y) > 0.5) {
+        // Move along Y
+        return diff.y > 0.0 ? 2 : 4; // up or down
+    } else if (abs(diff.x) > 0.5) {
+        // Fallback to X if Y is zero
+        return diff.x > 0.0 ? 1 : 3;
+    }
+    
+    return 0; // Already at target
 }

@@ -2,7 +2,12 @@ import { GPU } from './gpu/GPU.js';
 import { ComputeShader } from './gpu/ComputeShader.js';
 import { loadShader } from './shaders/load.js';
 import { CAGrid } from './ca/CAGrid.js';
-import { CELL_EMPTY, CELL_RESOURCE, CELL_UNIT, CELL_OBSTACLE } from './ca/CellTypes.js';
+
+// Cell type constants (must match GLSL)
+const CELL_EMPTY = 0;
+const CELL_RESOURCE = 1;
+const CELL_MINING_UNIT = 2;
+const CELL_MINING_FACTORY = 3;
 
 // ============================================================================
 // Initialize GPU
@@ -27,7 +32,7 @@ console.log('GPU compute framework initialized');
 // ============================================================================
 
 const [simShaderSource, renderShaderSource] = await Promise.all([
-    loadShader('./src/shaders/ca/unit_walk.frag.glsl'),
+    loadShader('./src/shaders/ca/mining_game.frag.glsl'),
     loadShader('./src/shaders/ca/render.frag.glsl')
 ]);
 
@@ -38,10 +43,9 @@ const renderShader = new ComputeShader(renderShaderSource);
 // Initialize World
 // ============================================================================
 
-const GRID_SIZE = 256;
+const GRID_SIZE = 128;
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
 
-// Initialize the world
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 
 // Helper to set a cell
@@ -56,31 +60,31 @@ function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
 // Fill with empty
 data.fill(0);
 
-// Create border of obstacles
-for (let x = 0; x < GRID_SIZE; x++) {
-    setCell(x, 0, CELL_OBSTACLE);
-    setCell(x, GRID_SIZE - 1, CELL_OBSTACLE);
-}
-for (let y = 0; y < GRID_SIZE; y++) {
-    setCell(0, y, CELL_OBSTACLE);
-    setCell(GRID_SIZE - 1, y, CELL_OBSTACLE);
-}
+// Place the mining factory in the center
+const factoryX = Math.floor(GRID_SIZE / 2);
+const factoryY = Math.floor(GRID_SIZE / 2);
+// Factory: type=3, resourceCount=10, selfX, selfY
+setCell(factoryX, factoryY, CELL_MINING_FACTORY, 10, factoryX, factoryY);
 
-// Scatter some resources
-for (let i = 0; i < 500; i++) {
-    const x = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-    const y = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-    setCell(x, y, CELL_RESOURCE, 1.0); // amount = 1.0
-}
-
-// Scatter some units
-for (let i = 0; i < 200; i++) {
-    const x = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-    const y = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-    setCell(x, y, CELL_UNIT, 0, 0, 0); // dirX=0, dirY=0, team=0
+// Scatter resources around the map (not too close to factory)
+const NUM_RESOURCES = 300;
+for (let i = 0; i < NUM_RESOURCES; i++) {
+    let x, y;
+    do {
+        x = Math.floor(Math.random() * GRID_SIZE);
+        y = Math.floor(Math.random() * GRID_SIZE);
+    } while (Math.abs(x - factoryX) < 5 && Math.abs(y - factoryY) < 5);
+    
+    setCell(x, y, CELL_RESOURCE, 1.0);
 }
 
 grid.upload(data);
+
+console.log(`Mining Game initialized:`);
+console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
+console.log(`  Factory at (${factoryX}, ${factoryY}) with 10 resources`);
+console.log(`  ${NUM_RESOURCES} resources scattered`);
+console.log(`  Factory will spawn 2 mining units, they will mine and return resources`);
 
 // ============================================================================
 // Simulation Loop
@@ -89,9 +93,9 @@ grid.upload(data);
 let simStepCount = 0;
 let renderFrameCount = 0;
 let lastLogTime = performance.now();
-let simTime = 0; // Time seed for randomness
+let simTime = 0;
 const LOG_INTERVAL = 1000;
-const SIM_BATCH_SIZE = 1;
+const SIM_BATCH_SIZE = 1; // Slower to watch the action
 
 function simulationStep() {
     grid.getWriteFramebuffer().bind();
@@ -119,7 +123,7 @@ function simulationLoop() {
     if (elapsed >= LOG_INTERVAL) {
         const simFps = (simStepCount / elapsed) * 1000;
         const renderFps = (renderFrameCount / elapsed) * 1000;
-        console.log(`Sim: ${simFps.toFixed(0)} steps/sec | Render: ${renderFps.toFixed(0)} fps`);
+        console.log(`Sim: ${simFps.toFixed(0)} steps/sec | Render: ${renderFps.toFixed(0)} fps | Step: ${Math.floor(simTime)}`);
         simStepCount = 0;
         renderFrameCount = 0;
         lastLogTime = now;
@@ -147,6 +151,3 @@ function renderLoop() {
 }
 
 requestAnimationFrame(renderLoop);
-
-console.log('CA simulation started');
-console.log(`Grid: ${GRID_SIZE}x${GRID_SIZE}, Units: 200, Resources: 500`);
