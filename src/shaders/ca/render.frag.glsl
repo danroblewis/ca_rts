@@ -9,28 +9,54 @@ uniform vec2 u_resolution;
 in vec2 v_uv;
 out vec4 fragColor;
 
-// Sample cell type at offset
-float sampleType(vec2 uv, vec2 offset) {
+// Calculate "density" of a cell type in a radius - creates metaball effect
+float calcDensity(vec2 uv, float targetType) {
     vec2 texelSize = 1.0 / u_resolution;
-    return getCellType(texture(u_state, uv + offset * texelSize));
-}
-
-// Count same-type neighbors for blob effect
-float countSameNeighbors(vec2 uv, float myType) {
-    float count = 0.0;
-    vec2 texelSize = 1.0 / u_resolution;
+    float density = 0.0;
     
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            if (dx == 0 && dy == 0) continue;
+    // Sample in a 5x5 area with distance falloff
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
             vec2 offset = vec2(float(dx), float(dy));
-            float neighborType = getCellType(texture(u_state, uv + offset * texelSize));
-            if (neighborType == myType) {
-                count += 1.0;
+            vec4 cellSample = texture(u_state, uv + offset * texelSize);
+            float sampleType = getCellType(cellSample);
+            
+            if (sampleType == targetType) {
+                // Inverse distance weighting for smooth blending
+                float dist = length(offset);
+                if (dist < 0.5) dist = 0.5; // Center cell gets max weight
+                density += 1.0 / (dist * dist);
             }
         }
     }
-    return count;
+    return density;
+}
+
+// Calculate unit density with holding info
+vec2 calcUnitDensity(vec2 uv) {
+    vec2 texelSize = 1.0 / u_resolution;
+    float emptyDensity = 0.0;
+    float holdingDensity = 0.0;
+    
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            vec2 offset = vec2(float(dx), float(dy));
+            vec4 cellSample = texture(u_state, uv + offset * texelSize);
+            
+            if (isMiningUnit(cellSample)) {
+                float dist = length(offset);
+                if (dist < 0.5) dist = 0.5;
+                float weight = 1.0 / (dist * dist);
+                
+                if (isHoldingResource(cellSample)) {
+                    holdingDensity += weight;
+                } else {
+                    emptyDensity += weight;
+                }
+            }
+        }
+    }
+    return vec2(emptyDensity, holdingDensity);
 }
 
 // Smooth noise for texture
@@ -40,137 +66,101 @@ float hash(vec2 p) {
     return fract((p3.x + p3.y) * p3.z);
 }
 
-float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
 void main() {
-    vec2 texelSize = 1.0 / u_resolution;
     vec2 pixelPos = v_uv * u_resolution;
     
-    vec4 cell = texture(u_state, v_uv);
-    float cellType = getCellType(cell);
-    
-    // Sub-pixel position within the cell (0-1)
-    vec2 subPixel = fract(pixelPos);
-    vec2 cellCenter = vec2(0.5);
-    float distFromCenter = length(subPixel - cellCenter);
-    
-    vec3 color;
-    float alpha = 1.0;
-    
-    // Background gradient
+    // Background with subtle gradient
     vec3 bgColor = mix(
-        vec3(0.04, 0.06, 0.1),   // Dark blue at bottom
-        vec3(0.08, 0.1, 0.16),   // Slightly lighter at top
+        vec3(0.02, 0.04, 0.08),
+        vec3(0.06, 0.08, 0.12),
         v_uv.y
     );
     
-    if (cellType == CELL_EMPTY) {
-        color = bgColor;
+    vec3 color = bgColor;
+    
+    // Calculate densities for each type
+    float resourceDensity = calcDensity(v_uv, CELL_RESOURCE);
+    float factoryDensity = calcDensity(v_uv, CELL_MINING_FACTORY);
+    vec2 unitDensity = calcUnitDensity(v_uv);
+    float emptyUnitDensity = unitDensity.x;
+    float holdingUnitDensity = unitDensity.y;
+    
+    // Thresholds for blob effect (lower = more blobby/connected)
+    float resourceThreshold = 0.8;
+    float unitThreshold = 1.5;
+    float factoryThreshold = 1.0;
+    
+    // Resources - golden blobs
+    if (resourceDensity > resourceThreshold) {
+        float blobStrength = smoothstep(resourceThreshold, resourceThreshold + 2.0, resourceDensity);
         
-        // Add subtle grid lines
-        float gridLine = 0.0;
-        if (fract(pixelPos.x) < 0.08 || fract(pixelPos.y) < 0.08) {
-            gridLine = 0.02;
+        // Rich gold color with subtle variation
+        float n = hash(floor(pixelPos * 0.3));
+        vec3 goldDark = vec3(0.65, 0.45, 0.08);
+        vec3 goldBright = vec3(1.0, 0.8, 0.25);
+        vec3 resourceColor = mix(goldDark, goldBright, blobStrength * 0.6 + n * 0.2);
+        
+        // Inner glow
+        float innerGlow = smoothstep(resourceThreshold, resourceThreshold + 4.0, resourceDensity);
+        resourceColor += vec3(0.2, 0.15, 0.0) * innerGlow;
+        
+        color = mix(color, resourceColor, blobStrength);
+    }
+    
+    // Mining units - cyan (empty) or green (holding) blobs
+    float totalUnitDensity = emptyUnitDensity + holdingUnitDensity;
+    if (totalUnitDensity > unitThreshold) {
+        float blobStrength = smoothstep(unitThreshold, unitThreshold + 2.0, totalUnitDensity);
+        
+        // Blend between cyan and green based on holding ratio
+        float holdingRatio = holdingUnitDensity / max(totalUnitDensity, 0.001);
+        
+        vec3 cyanColor = vec3(0.2, 0.7, 0.95);
+        vec3 greenColor = vec3(0.3, 0.9, 0.35);
+        vec3 unitColor = mix(cyanColor, greenColor, holdingRatio);
+        
+        // Brighter core
+        float coreGlow = smoothstep(unitThreshold, unitThreshold + 3.0, totalUnitDensity);
+        unitColor += vec3(0.15) * coreGlow;
+        
+        // Outer glow effect
+        float glowStrength = smoothstep(unitThreshold * 0.5, unitThreshold, totalUnitDensity);
+        vec3 glowColor = mix(vec3(0.05, 0.2, 0.3), vec3(0.1, 0.3, 0.1), holdingRatio);
+        color = mix(color, color + glowColor, glowStrength * 0.5);
+        
+        color = mix(color, unitColor, blobStrength);
+    }
+    
+    // Factory - purple/magenta blob with energy glow
+    if (factoryDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, factoryDensity);
+        
+        // Get resource count from center cell
+        vec4 centerCell = texture(u_state, v_uv);
+        float resources = 0.0;
+        if (isMiningFactory(centerCell)) {
+            resources = getFactoryResourceCount(centerCell);
         }
-        color += vec3(gridLine);
-    }
-    else if (cellType == CELL_RESOURCE) {
-        // Gold/amber resources with blob effect
-        float neighbors = countSameNeighbors(v_uv, CELL_RESOURCE);
-        float blobFactor = neighbors / 8.0;
+        float energyLevel = min(resources / 10.0, 1.0);
         
-        // Organic blob shape - more round at edges
-        float radius = 0.35 + blobFactor * 0.15;
-        float blob = 1.0 - smoothstep(radius - 0.1, radius + 0.1, distFromCenter);
+        // Purple base with energy brightness
+        vec3 purpleDark = vec3(0.4, 0.1, 0.5);
+        vec3 purpleBright = vec3(0.8, 0.3, 1.0);
+        vec3 factoryColor = mix(purpleDark, purpleBright, 0.3 + energyLevel * 0.7);
         
-        // Rich gold color with variation
-        float n = noise(pixelPos * 0.5);
-        vec3 goldDark = vec3(0.7, 0.5, 0.1);
-        vec3 goldBright = vec3(1.0, 0.85, 0.3);
-        color = mix(goldDark, goldBright, 0.5 + n * 0.5);
+        // Energy core glow
+        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, factoryDensity);
+        factoryColor += vec3(0.2, 0.1, 0.3) * coreGlow * energyLevel;
         
-        // Shiny highlight
-        float highlight = pow(max(0.0, 1.0 - distFromCenter * 2.5), 3.0);
-        color += vec3(0.3, 0.25, 0.1) * highlight;
-        
-        // Blend with background at edges
-        color = mix(bgColor, color, blob);
-    }
-    else if (cellType == CELL_MINING_UNIT) {
-        bool holding = isHoldingResource(cell);
-        
-        // Circular unit with glow
-        float radius = 0.4;
-        float blob = 1.0 - smoothstep(radius - 0.15, radius, distFromCenter);
-        float glow = 1.0 - smoothstep(0.0, 0.6, distFromCenter);
-        
-        vec3 coreColor;
-        vec3 glowColor;
-        
-        if (holding) {
-            // Carrying resource - warm green/yellow
-            coreColor = vec3(0.4, 0.95, 0.3);
-            glowColor = vec3(0.2, 0.6, 0.1);
-        } else {
-            // Searching - cool cyan/blue
-            coreColor = vec3(0.3, 0.85, 1.0);
-            glowColor = vec3(0.1, 0.4, 0.6);
-        }
-        
-        // Core with bright center
-        float centerBright = pow(max(0.0, 1.0 - distFromCenter * 2.0), 2.0);
-        color = coreColor + vec3(0.3) * centerBright;
-        
-        // Outer glow
-        color = mix(bgColor + glowColor * glow * 0.5, color, blob);
-    }
-    else if (cellType == CELL_MINING_FACTORY) {
-        float resources = getFactoryResourceCount(cell);
-        float resourceGlow = min(resources / 10.0, 1.0);
-        
-        // Factory is a square-ish building with glow
-        vec2 squareDist = abs(subPixel - cellCenter);
-        float boxDist = max(squareDist.x, squareDist.y);
-        float box = 1.0 - smoothstep(0.3, 0.4, boxDist);
-        
-        // Purple/magenta base
-        vec3 baseColor = vec3(0.5, 0.15, 0.6);
-        vec3 brightColor = vec3(0.8, 0.3, 1.0);
-        color = mix(baseColor, brightColor, resourceGlow);
-        
-        // Energy glow based on resources
-        float pulse = sin(resources * 0.5) * 0.1 + 0.9;
-        float glow = (1.0 - smoothstep(0.0, 0.7, boxDist)) * resourceGlow * pulse;
-        
-        // Add glow
-        color = mix(bgColor + vec3(0.3, 0.1, 0.4) * glow, color, box);
-        
-        // Center bright spot
-        float center = pow(max(0.0, 1.0 - boxDist * 3.0), 2.0);
-        color += vec3(0.2, 0.1, 0.3) * center * resourceGlow;
-    }
-    else {
-        // Unknown - red for debugging
-        color = vec3(1.0, 0.0, 0.0);
+        color = mix(color, factoryColor, blobStrength);
     }
     
     // Subtle vignette
-    float vignette = 1.0 - length(v_uv - 0.5) * 0.4;
+    float vignette = 1.0 - length(v_uv - 0.5) * 0.3;
     color *= vignette;
     
-    // Gamma correction for nicer colors
-    color = pow(color, vec3(0.9));
+    // Slight gamma for nicer colors
+    color = pow(color, vec3(0.95));
     
     fragColor = vec4(color, 1.0);
 }
