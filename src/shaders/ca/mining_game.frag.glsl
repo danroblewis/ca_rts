@@ -25,7 +25,7 @@ vec4 sampleOffset(vec2 uv, vec2 offset) {
 const int VISION_RANGE = 5;
 
 // Resources needed to spawn a new mining unit
-const float SPAWN_COST = 10.0;
+const float SPAWN_COST = 5.0;
 
 // Find nearest resource within vision range
 vec2 findNearestResource(vec2 pos, vec2 uv) {

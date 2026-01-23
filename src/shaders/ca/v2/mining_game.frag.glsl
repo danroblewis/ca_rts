@@ -94,16 +94,15 @@ void main() {
     if (deposit.happened) {
         // Am I the depositing unit? (I become empty-handed)
         if (distance(deposit.unitPos, myPos) < 0.5) {
-            // Decay memory
-            float freshness = max(0.0, getUnitMemoryFreshness(myRaw) - 1.0);
-            vec2 memPos = freshness > 0.0 ? getUnitMemoryPos(myRaw) : vec2(-1.0);
+            // Use Memory trait to evaluate memory state
+            MemoryState mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
             
             fragColor = encodeUnit(
                 false,  // no longer holding
                 0,      // reset counter
                 getUnitFactory(myRaw),
-                memPos,
-                freshness
+                mem.position,
+                mem.freshness
             );
             return;
         }
@@ -128,7 +127,7 @@ void main() {
     // ========================================================================
     
     if (myType == TYPE_UNIT) {
-        // Unit staying in place - might be blocked, increment counter
+        // Unit staying in place - might be blocked, update counter
         int counter = getUnitCounter(myRaw);
         bool walking = float(counter) >= STATIONARY_THRESHOLD;
         
@@ -139,41 +138,15 @@ void main() {
             newCounter = counter + 1;  // Increment toward threshold
         }
         
-        // Decay memory
-        float freshness = max(0.0, getUnitMemoryFreshness(myRaw) - 1.0);
-        vec2 memPos = freshness > 0.0 ? getUnitMemoryPos(myRaw) : vec2(-1.0);
-        
-        // Check if at remembered location with no resource nearby - forget
-        if (freshness > 0.0 && distance(myPos, memPos) < 0.5) {
-            bool foundResource = false;
-            for (int d = 1; d <= 4; d++) {
-                vec4 neighbor = texture(u_state, (myPos + dirToOffset(d) + 0.5) / u_resolution);
-                if (getType(neighbor) == TYPE_RESOURCE) {
-                    foundResource = true;
-                    break;
-                }
-            }
-            if (!foundResource) {
-                freshness = 0.0;
-                memPos = vec2(-1.0);
-            }
-        }
-        
-        // Try to get shared memory if we don't have any
-        if (freshness <= 0.0 && !getUnitHolding(myRaw)) {
-            vec3 shared = findSharedMemory(myPos, u_state, u_resolution);
-            if (shared.z > 0.0) {
-                memPos = shared.xy;
-                freshness = shared.z;
-            }
-        }
+        // Use Memory trait to evaluate memory state
+        MemoryState mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
         
         fragColor = encodeUnit(
             getUnitHolding(myRaw),
             newCounter,
             getUnitFactory(myRaw),
-            memPos,
-            freshness
+            mem.position,
+            mem.freshness
         );
         return;
     }

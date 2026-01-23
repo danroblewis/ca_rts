@@ -14,6 +14,7 @@
 #include "../core/types.glsl"
 #include "../core/traits.glsl"
 #include "../core/random.glsl"
+#include "./memory.glsl"
 
 // ============================================================================
 // Movement Constants
@@ -21,8 +22,6 @@
 
 const int VISION_RANGE = 5;
 const float STATIONARY_THRESHOLD = 8.0;
-const float MEMORY_MAX_FRESHNESS = 30.0;
-const float MEMORY_SHARE_PENALTY = 5.0;
 
 // ============================================================================
 // Movement Result - what happened in the local region
@@ -91,35 +90,7 @@ vec2 findResource(vec2 pos, sampler2D state, vec2 resolution) {
     return nearest;
 }
 
-// Find shared memory from nearby units
-vec3 findSharedMemory(vec2 pos, sampler2D state, vec2 resolution) {
-    vec2 texelSize = 1.0 / resolution;
-    vec3 best = vec3(-1.0, -1.0, 0.0);
-    float nearestDist = 999.0;
-    
-    for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++) {
-        for (int dx = -VISION_RANGE; dx <= VISION_RANGE; dx++) {
-            if (dx == 0 && dy == 0) continue;
-            
-            vec2 checkPos = pos + vec2(float(dx), float(dy));
-            vec2 uv = (checkPos + 0.5) / resolution;
-            vec4 cell = texture(state, uv);
-            
-            if (getType(cell) == TYPE_UNIT) {
-                float freshness = getUnitMemoryFreshness(cell);
-                if (freshness > 0.0) {
-                    float dist = abs(float(dx)) + abs(float(dy));
-                    if (dist < nearestDist) {
-                        nearestDist = dist;
-                        vec2 memPos = getUnitMemoryPos(cell);
-                        best = vec3(memPos, max(0.0, freshness - MEMORY_SHARE_PENALTY));
-                    }
-                }
-            }
-        }
-    }
-    return best;
-}
+// Note: findNearbyMemory is now in memory.glsl
 
 // Check if adjacent to own factory
 bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolution) {
@@ -311,6 +282,7 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
 
 // ============================================================================
 // Transform arriving cell based on what it's moving onto
+// Uses Memory trait for memory state management
 // ============================================================================
 
 vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
@@ -321,18 +293,19 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
     if (arrivingType == TYPE_UNIT && destType == TYPE_RESOURCE) {
         bool wasHolding = getUnitHolding(arrivingCell);
         if (!wasHolding) {
-            // Mine the resource!
+            // Mine the resource! Create fresh memory of this location
+            MemoryState mem = createFreshMemory(destPos);
             return encodeUnit(
                 true,  // now holding
                 0,     // reset counter
                 getUnitFactory(arrivingCell),
-                destPos,  // remember this location
-                MEMORY_MAX_FRESHNESS
+                mem.position,
+                mem.freshness
             );
         }
     }
     
-    // Unit arriving at empty = just move, update counter
+    // Unit arriving at empty = just move, update counter, decay memory
     if (arrivingType == TYPE_UNIT && destType == TYPE_EMPTY) {
         int counter = getUnitCounter(arrivingCell);
         int newCounter;
@@ -342,7 +315,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
             newCounter = 0;  // Successful move, reset
         }
         
-        // Decay memory
+        // Decay memory (simple decay, not full evaluation since we just moved)
         float freshness = max(0.0, getUnitMemoryFreshness(arrivingCell) - 1.0);
         vec2 memPos = freshness > 0.0 ? getUnitMemoryPos(arrivingCell) : vec2(-1.0);
         
