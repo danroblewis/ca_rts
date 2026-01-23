@@ -18,9 +18,12 @@
 // Memory Constants
 // ============================================================================
 
-const float MEMORY_MAX_FRESHNESS = 80.0;
+const float MEMORY_MAX_FRESHNESS = 200.0;
 const float MEMORY_SHARE_PENALTY = 5.0;
 const int MEMORY_VISION_RANGE = 5;
+
+// Homesick: if a unit wanders too long without finding resources, it returns home
+const float HOMESICK_THRESHOLD = 100.0;  // Steps before returning to factory
 
 // ============================================================================
 // Memory Result - the updated memory state for a unit
@@ -30,6 +33,7 @@ struct MemoryState {
     bool hasMemory;
     vec2 position;
     float freshness;
+    float homesickTimer;  // Increments while wandering, triggers return when high
 };
 
 // ============================================================================
@@ -83,19 +87,41 @@ vec3 findNearbyMemory(vec2 pos, sampler2D state, vec2 resolution) {
 }
 
 // ============================================================================
+// Helper: Check if unit is adjacent to its factory
+// ============================================================================
+
+bool isAdjacentToOwnFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolution) {
+    for (int d = 1; d <= 4; d++) {
+        vec2 checkPos = pos + dirToOffset(d);
+        vec2 uv = (checkPos + 0.5) / resolution;
+        vec4 cell = texture(state, uv);
+        
+        if (getType(cell) == TYPE_FACTORY) {
+            vec2 fPos = getFactoryPos(cell);
+            if (distance(fPos, factoryPos) < 0.5) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// ============================================================================
 // THE CANONICAL MEMORY EVALUATION
 // 
 // Determines the updated memory state for a unit.
-// Handles: decay, forgetting at empty locations, knowledge sharing.
+// Handles: decay, forgetting at empty locations, knowledge sharing, homesick timer.
 // Does NOT handle: acquiring memory from mining (that's in movement/transformArrival)
 // ============================================================================
 
 MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution) {
     MemoryState result;
     
-    // Get current memory
+    // Get current memory and homesick timer
     vec2 memPos = getUnitMemoryPos(raw);
     float freshness = getUnitMemoryFreshness(raw);
+    float homesickTimer = getUnitHomesickTimer(raw);
+    vec2 factoryPos = getUnitFactory(raw);
     
     // 1. Decay freshness
     freshness = max(0.0, freshness - 1.0);
@@ -119,12 +145,27 @@ MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution)
         if (shared.z > 0.0) {
             memPos = shared.xy;
             freshness = shared.z;
+            homesickTimer = 0.0;  // Found a lead, reset homesick
         }
+    }
+    
+    // 5. If still no memory and not holding, manage homesick timer
+    if (freshness <= 0.0 && !getUnitHolding(raw)) {
+        // Check if we reached home (adjacent to factory) - reset and go back out
+        if (homesickTimer >= HOMESICK_THRESHOLD && isAdjacentToOwnFactory(pos, factoryPos, state, resolution)) {
+            homesickTimer = 0.0;  // Reset, will now explore again
+        } else {
+            homesickTimer += 1.0;
+        }
+    } else {
+        // Has memory or is holding - reset homesick timer
+        homesickTimer = 0.0;
     }
     
     result.hasMemory = (freshness > 0.0 && memPos.x >= 0.0);
     result.position = memPos;
     result.freshness = freshness;
+    result.homesickTimer = homesickTimer;
     
     return result;
 }
@@ -138,11 +179,12 @@ MemoryState createFreshMemory(vec2 resourcePos) {
     result.hasMemory = true;
     result.position = resourcePos;
     result.freshness = MEMORY_MAX_FRESHNESS;
+    result.homesickTimer = 0.0;  // Just found something, not homesick
     return result;
 }
 
 // ============================================================================
-// Create empty memory
+// Create empty memory (optionally with existing homesick timer)
 // ============================================================================
 
 MemoryState noMemory() {
@@ -150,7 +192,25 @@ MemoryState noMemory() {
     result.hasMemory = false;
     result.position = vec2(-1.0);
     result.freshness = 0.0;
+    result.homesickTimer = 0.0;
     return result;
+}
+
+MemoryState noMemoryWithTimer(float timer) {
+    MemoryState result;
+    result.hasMemory = false;
+    result.position = vec2(-1.0);
+    result.freshness = 0.0;
+    result.homesickTimer = timer;
+    return result;
+}
+
+// ============================================================================
+// Check if unit is homesick (should return to factory)
+// ============================================================================
+
+bool isHomesick(MemoryState mem) {
+    return !mem.hasMemory && mem.homesickTimer >= HOMESICK_THRESHOLD;
 }
 
 // ============================================================================
@@ -158,7 +218,7 @@ MemoryState noMemory() {
 // ============================================================================
 
 vec4 encodeUnit(bool holding, int counter, vec2 factoryPos, MemoryState mem) {
-    return encodeUnitRaw(holding, counter, factoryPos, mem.position, mem.freshness);
+    return encodeUnitRaw(holding, counter, factoryPos, mem.position, mem.freshness, mem.homesickTimer);
 }
 
 #endif

@@ -70,7 +70,9 @@ vec4 encodeResource(float amount) {
 // UNIT
 // G = holding (bit 0) + stationaryCounter * 2
 // B = packed factory location
-// A = packed resource memory with freshness, or -1
+// A = packed resource memory with freshness, OR negative homesick timer
+//     A >= 0: has memory (packCoords + freshness * MEMORY_PACK_BASE)
+//     A < 0: no memory, homesick timer = -A - 1  (so -1 = timer 0, -2 = timer 1, etc)
 // ============================================================================
 
 bool getUnitHolding(vec4 raw) {
@@ -95,19 +97,32 @@ float getUnitMemoryFreshness(vec4 raw) {
     return floor(raw.a / MEMORY_PACK_BASE);
 }
 
+// Homesick timer: stored as negative values when no memory
+// -1 = timer 0, -2 = timer 1, etc.
+float getUnitHomesickTimer(vec4 raw) {
+    if (raw.a >= 0.0) return 0.0;  // Has memory, no homesick timer
+    return -raw.a - 1.0;
+}
+
 // Forward declare MemoryState struct (defined in memory.glsl)
 // We use raw components here to avoid circular dependency
-vec4 encodeUnitRaw(bool holding, int counter, vec2 factoryPos, vec2 memoryPos, float freshness) {
+// homesickTimer is only used when freshness <= 0
+vec4 encodeUnitRaw(bool holding, int counter, vec2 factoryPos, vec2 memoryPos, float freshness, float homesickTimer) {
     float g = (holding ? 1.0 : 0.0) + float(counter) * 2.0;
     float b = packCoords(factoryPos);
-    float a = (freshness > 0.0 && memoryPos.x >= 0.0) 
-        ? packCoords(memoryPos) + freshness * MEMORY_PACK_BASE 
-        : -1.0;
+    float a;
+    if (freshness > 0.0 && memoryPos.x >= 0.0) {
+        // Has memory
+        a = packCoords(memoryPos) + freshness * MEMORY_PACK_BASE;
+    } else {
+        // No memory - encode homesick timer as negative
+        a = -(homesickTimer + 1.0);
+    }
     return vec4(float(TYPE_UNIT), g, b, a);
 }
 
 vec4 encodeUnitSimple(bool holding, int counter, vec2 factoryPos) {
-    return encodeUnitRaw(holding, counter, factoryPos, vec2(-1.0), 0.0);
+    return encodeUnitRaw(holding, counter, factoryPos, vec2(-1.0), 0.0, 0.0);
 }
 
 // ============================================================================

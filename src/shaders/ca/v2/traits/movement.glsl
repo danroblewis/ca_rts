@@ -115,21 +115,34 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     vec2 factoryPos = getUnitFactory(raw);
     vec2 memoryPos = getUnitMemoryPos(raw);
     float freshness = getUnitMemoryFreshness(raw);
+    float homesickTimer = getUnitHomesickTimer(raw);
     
     bool walking = float(counter) >= STATIONARY_THRESHOLD;
+    bool hasMemory = (freshness > 0.0 && memoryPos.x >= 0.0);
+    bool homesick = (!hasMemory && homesickTimer >= HOMESICK_THRESHOLD);
     
     // If holding and adjacent to factory, don't move (deposit instead)
     if (holding && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
         return DIR_NONE;  // Will deposit, not move
     }
     
-    // Walking mode = random walk
+    // If homesick and adjacent to factory, stop (will reset timer in memory eval)
+    if (homesick && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
+        return DIR_NONE;  // Reached home, timer will reset
+    }
+    
+    // Walking mode = random walk (stuck, trying to unstick)
     if (walking) {
         return randomDir(pos, time);
     }
     
     // Holding = go to factory
     if (holding) {
+        return dirToward(pos, factoryPos, time + pos.x * 0.1);
+    }
+    
+    // Homesick = go to factory (wandered too long without finding anything)
+    if (homesick) {
         return dirToward(pos, factoryPos, time + pos.x * 0.1);
     }
     
@@ -140,7 +153,7 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     }
     
     // Go to remembered location
-    if (freshness > 0.0 && memoryPos.x >= 0.0) {
+    if (hasMemory) {
         if (distance(pos, memoryPos) > 0.5) {
             return dirToward(pos, memoryPos, time + pos.x * 0.1);
         }
@@ -294,6 +307,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         bool wasHolding = getUnitHolding(arrivingCell);
         if (!wasHolding) {
             // Mine the resource! Create fresh memory of this location
+            // Also resets homesick timer (createFreshMemory sets it to 0)
             MemoryState mem = createFreshMemory(destPos);
             return encodeUnit(
                 true,  // now holding
@@ -315,6 +329,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         }
         
         bool holding = getUnitHolding(arrivingCell);
+        float homesickTimer = getUnitHomesickTimer(arrivingCell);
         
         // Only decay memory while NOT holding - preserve memory on return trip
         MemoryState mem;
@@ -323,12 +338,19 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
             mem.position = getUnitMemoryPos(arrivingCell);
             mem.freshness = getUnitMemoryFreshness(arrivingCell);
             mem.hasMemory = mem.freshness > 0.0;
+            mem.homesickTimer = 0.0;  // Not homesick when holding
         } else {
-            // Decay memory while searching
+            // Decay memory while searching, preserve homesick timer
             float freshness = max(0.0, getUnitMemoryFreshness(arrivingCell) - 1.0);
             mem.position = freshness > 0.0 ? getUnitMemoryPos(arrivingCell) : vec2(-1.0);
             mem.freshness = freshness;
             mem.hasMemory = freshness > 0.0;
+            // Increment homesick timer while searching without memory
+            if (!mem.hasMemory) {
+                mem.homesickTimer = homesickTimer + 1.0;
+            } else {
+                mem.homesickTimer = 0.0;
+            }
         }
         
         return encodeUnit(
