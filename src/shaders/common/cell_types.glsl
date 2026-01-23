@@ -13,6 +13,7 @@ const float CELL_EMPTY = 0.0;
 const float CELL_RESOURCE = 1.0;
 const float CELL_MINING_UNIT = 2.0;
 const float CELL_MINING_FACTORY = 3.0;
+const float CELL_WALL = 4.0;
 
 // ============================================================================
 // Coordinate packing (for grids up to 128x128)
@@ -57,6 +58,10 @@ bool isMiningUnit(vec4 cell) {
 
 bool isMiningFactory(vec4 cell) {
     return getCellType(cell) == CELL_MINING_FACTORY;
+}
+
+bool isWall(vec4 cell) {
+    return getCellType(cell) == CELL_WALL;
 }
 
 // ============================================================================
@@ -190,4 +195,13 @@ vec4 createMiningFactory(float resourceCount, float selfX, float selfY) {
 
 vec4 createEmpty() {
     return vec4(CELL_EMPTY, 0.0, 0.0, 0.0);
+}
+
+// ============================================================================
+// WALL
+// Simple obstacle - immovable and not minable
+// ============================================================================
+
+vec4 createWall() {
+    return vec4(CELL_WALL, 0.0, 0.0, 0.0);
 }

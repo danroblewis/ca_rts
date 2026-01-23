@@ -31,6 +31,9 @@ void main() {
         float brightness = 0.5 + min(getFactoryResources(raw) / 10.0, 0.5);
         color = vec3(0.7, 0.2, 0.8) * brightness;
     }
+    else if (cellType == TYPE_WALL) {
+        color = vec3(0.35, 0.35, 0.4);  // Gray wall
+    }
     else {
         color = vec3(1.0, 0.0, 0.0);  // Red = unknown
     }

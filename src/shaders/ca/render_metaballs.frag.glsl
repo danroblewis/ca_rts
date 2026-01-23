@@ -136,6 +136,23 @@ void main() {
         color = mix(color, unitColor, blobStrength);
     }
     
+    // Walls - solid gray blocks
+    float wallDensity = calcDensity(v_uv, CELL_WALL);
+    if (wallDensity > 0.5) {
+        float blobStrength = smoothstep(0.5, 2.0, wallDensity);
+        
+        // Dark gray stone-like color
+        vec3 grayDark = vec3(0.25, 0.25, 0.28);
+        vec3 grayLight = vec3(0.45, 0.45, 0.5);
+        vec3 wallColor = mix(grayDark, grayLight, blobStrength * 0.5);
+        
+        // Subtle variation using position
+        float n = fract(sin(dot(floor(v_uv * u_resolution), vec2(12.9898, 78.233))) * 43758.5453);
+        wallColor += vec3(0.05) * n - vec3(0.025);
+        
+        color = mix(color, wallColor, blobStrength * 0.95);
+    }
+    
     // Factory - purple/magenta blob with energy glow
     if (factoryDensity > factoryThreshold) {
         float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, factoryDensity);

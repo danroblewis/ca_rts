@@ -21,12 +21,13 @@ const CELL_EMPTY = 0;
 const CELL_RESOURCE = 1;
 const CELL_MINING_UNIT = 2;
 const CELL_MINING_FACTORY = 3;
+const CELL_WALL = 4;
 
 // Constants from shader (must match)
 const STATIONARY_THRESHOLD = 8;
-const MEMORY_MAX_FRESHNESS = 30;
+const MEMORY_MAX_FRESHNESS = 200;  // Updated to match shader
 const MEMORY_SHARE_PENALTY = 5;
-const SPAWN_COST = 10;
+const SPAWN_COST = 30;  // Updated to match shader
 const VISION_RANGE = 5;
 
 // Grid size for tests
@@ -97,6 +98,10 @@ function createMiningUnit(holding, stationaryCounter, factoryX, factoryY, lastRe
 
 function createMiningFactory(resources, selfX, selfY) {
     return [CELL_MINING_FACTORY, resources, selfX, selfY];
+}
+
+function createWall() {
+    return [CELL_WALL, 0, 0, 0];
 }
 
 // ============================================================================
@@ -831,6 +836,130 @@ export async function runMiningTests() {
         // Both units should exist
         const unitCount = sim.countCellType(result, CELL_MINING_UNIT);
         assert(unitCount === 2, `Both units should exist, got ${unitCount}`);
+        
+        sim.destroy();
+    });
+    
+    // ========================================================================
+    // Wall Tests
+    // ========================================================================
+    
+    logSection('Mining Game - Walls');
+    
+    await runTest('Wall: wall cell persists through simulation', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        sim.setCell(data, 5, 5, createWall());
+        sim.upload(data);
+        
+        // Run simulation
+        sim.stepN(10);
+        const result = sim.download();
+        
+        // Wall should still be there
+        const wallCell = sim.getCell(result, 5, 5);
+        assert(getCellType(wallCell) === CELL_WALL, 'Wall should persist');
+        
+        sim.destroy();
+    });
+    
+    await runTest('Wall: unit cannot move into wall', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Create a unit surrounded by walls on 3 sides, open on one side
+        // Factory at bottom so unit has a home
+        sim.setCell(data, 5, 5, createMiningFactory(5, 5, 5));
+        sim.setCell(data, 5, 6, createMiningUnit(false, 0, 5, 5)); // Unit above factory
+        sim.setCell(data, 4, 6, createWall()); // Wall to left
+        sim.setCell(data, 6, 6, createWall()); // Wall to right
+        sim.setCell(data, 5, 7, createWall()); // Wall above
+        // Resource far away to give unit somewhere to go (but blocked)
+        sim.setCell(data, 5, 10, createResource());
+        sim.upload(data);
+        
+        // Run a few steps
+        sim.stepN(5);
+        const result = sim.download();
+        
+        // All walls should still exist
+        assert(getCellType(sim.getCell(result, 4, 6)) === CELL_WALL, 'Left wall should persist');
+        assert(getCellType(sim.getCell(result, 6, 6)) === CELL_WALL, 'Right wall should persist');
+        assert(getCellType(sim.getCell(result, 5, 7)) === CELL_WALL, 'Top wall should persist');
+        
+        // Unit should not be inside any wall
+        assert(getCellType(sim.getCell(result, 4, 6)) === CELL_WALL, 'Unit should not enter left wall');
+        assert(getCellType(sim.getCell(result, 6, 6)) === CELL_WALL, 'Unit should not enter right wall');
+        assert(getCellType(sim.getCell(result, 5, 7)) === CELL_WALL, 'Unit should not enter top wall');
+        
+        sim.destroy();
+    });
+    
+    await runTest('Wall: wall is not minable', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory and unit
+        sim.setCell(data, 5, 5, createMiningFactory(5, 5, 5));
+        sim.setCell(data, 5, 6, createMiningUnit(false, 0, 5, 5));
+        // Wall right next to unit
+        sim.setCell(data, 5, 7, createWall());
+        sim.upload(data);
+        
+        // Run simulation
+        sim.stepN(10);
+        const result = sim.download();
+        
+        // Wall should still be wall (not mined)
+        assert(getCellType(sim.getCell(result, 5, 7)) === CELL_WALL, 'Wall should not be mined');
+        
+        // Unit should not be holding (can't mine wall)
+        const unitCount = sim.countCellType(result, CELL_MINING_UNIT);
+        if (unitCount > 0) {
+            // Find the unit and check if it's holding
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        assert(!isHolding(cell), 'Unit should not be holding (cannot mine wall)');
+                    }
+                }
+            }
+        }
+        
+        sim.destroy();
+    });
+    
+    await runTest('Wall: unit conservation with walls (unit is not lost)', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Create unit in corner with walls
+        sim.setCell(data, 8, 8, createMiningFactory(5, 8, 8));
+        sim.setCell(data, 8, 9, createMiningUnit(false, 0, 8, 8));
+        // Surround with walls
+        sim.setCell(data, 7, 9, createWall());
+        sim.setCell(data, 9, 9, createWall());
+        sim.setCell(data, 7, 10, createWall());
+        sim.setCell(data, 8, 10, createWall());
+        sim.setCell(data, 9, 10, createWall());
+        sim.upload(data);
+        
+        // Initial count
+        const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
+        
+        // Run many steps
+        sim.stepN(50);
+        const result = sim.download();
+        
+        // Unit should still exist (not lost due to wall interactions)
+        const finalUnits = sim.countCellType(result, CELL_MINING_UNIT);
+        assert(finalUnits >= initialUnits, `Unit should not be lost (had ${initialUnits}, now ${finalUnits})`);
         
         sim.destroy();
     });

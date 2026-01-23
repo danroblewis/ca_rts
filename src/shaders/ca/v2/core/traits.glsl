@@ -30,7 +30,15 @@ int getTraits(int cellType) {
     if (cellType == TYPE_UNIT) return TRAIT_MOBILE;
     if (cellType == TYPE_FACTORY) return TRAIT_SPAWNER;
     if (cellType == TYPE_RESOURCE) return TRAIT_MINABLE;
-    return 0;  // EMPTY has no traits
+    // TYPE_WALL and TYPE_EMPTY have no traits
+    return 0;
+}
+
+// Check if a cell type blocks movement (cannot be entered)
+bool blocksMovement(int cellType) {
+    // Can move into: empty, resources (to mine), units (collision handled separately)
+    // Cannot move into: walls, factories
+    return cellType == TYPE_WALL || cellType == TYPE_FACTORY;
 }
 
 bool hasTrait(int cellType, int trait) {

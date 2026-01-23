@@ -33,7 +33,8 @@ console.log('GPU compute framework initialized');
 
 const [simShaderSource, renderShaderSource] = await Promise.all([
     loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
-    loadShader('./src/shaders/ca/v2/render.frag.glsl')
+    loadShader('./src/shaders/ca/render_metaballs.frag.glsl')  // Pretty metaball renderer
+    // loadShader('./src/shaders/ca/v2/render.frag.glsl')
 ]);
 
 const simShader = new ComputeShader(simShaderSource);
@@ -136,7 +137,7 @@ canvas.addEventListener('click', (event) => {
     
     // Place factory: type=3, resourceCount=10, selfX, selfY
     currentData[idx + 0] = CELL_MINING_FACTORY;
-    currentData[idx + 1] = 10; // 10 resources
+    currentData[idx + 1] = 30; // 10 resources
     currentData[idx + 2] = x;  // selfX
     currentData[idx + 3] = y;  // selfY
     
@@ -154,7 +155,7 @@ let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
 const LOG_INTERVAL = 1000;
-const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
+const SIM_BATCH_SIZE = 1; // Steps per batch in fast mode
 
 // Toggle: true = sync with render (debug), false = fast as possible
 let SYNC_SIM_WITH_RENDER = true;

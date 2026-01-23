@@ -17,6 +17,7 @@ const int TYPE_EMPTY = 0;
 const int TYPE_RESOURCE = 1;
 const int TYPE_UNIT = 2;
 const int TYPE_FACTORY = 3;
+const int TYPE_WALL = 4;
 
 // ============================================================================
 // Encoding Constants  
@@ -142,6 +143,15 @@ vec2 getFactoryPos(vec4 raw) {
 
 vec4 encodeFactory(float resources, vec2 selfPos) {
     return vec4(float(TYPE_FACTORY), resources, selfPos.x, selfPos.y);
+}
+
+// ============================================================================
+// WALL
+// Simple obstacle - no additional data needed
+// ============================================================================
+
+vec4 encodeWall() {
+    return vec4(float(TYPE_WALL), 0.0, 0.0, 0.0);
 }
 
 #endif
