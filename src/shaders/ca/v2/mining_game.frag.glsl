@@ -13,7 +13,7 @@ precision highp float;
  * To add a new trait:
  *   1. Create traits/new_trait.glsl with evaluateNewTrait()
  *   2. Include it here
- *   3. Add role extraction in main update logic
+ *   3. Add role extraction in compute()
  * 
  * To add a new mobile type:
  *   1. Add type constant in core/types.glsl
@@ -35,13 +35,10 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 // ============================================================================
-// Main Update - Evaluate all traits and extract my role
+// Compute - Evaluate all traits and return the new cell state
 // ============================================================================
 
-void main() {
-    vec2 myPos = floor(v_uv * u_resolution);
-    vec4 myRaw = texture(u_state, (myPos + 0.5) / u_resolution);
-    int myType = getType(myRaw);
+vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     
     // ========================================================================
     // Evaluate all traits that might affect me
@@ -59,15 +56,12 @@ void main() {
     if (movement.happened) {
         // Am I the source? (I become empty)
         if (distance(movement.fromPos, myPos) < 0.5) {
-            fragColor = encodeEmpty();
-            return;
+            return encodeEmpty();
         }
         
         // Am I the destination? (I receive the arriving cell)
         if (distance(movement.toPos, myPos) < 0.5) {
-            vec4 arriving = transformArrival(movement.arrivingCell, myRaw, myPos);
-            fragColor = arriving;
-            return;
+            return transformArrival(movement.arrivingCell, myRaw, myPos);
         }
     }
     
@@ -75,8 +69,7 @@ void main() {
     if (spawning.happened) {
         // Am I the spawn location? (I become the spawned cell)
         if (distance(spawning.spawnPos, myPos) < 0.5) {
-            fragColor = spawning.spawnedCell;
-            return;
+            return spawning.spawnedCell;
         }
         
         // Am I the spawner? (I spend resources)
@@ -85,8 +78,7 @@ void main() {
             // Also count any deposits happening this frame
             int deposits = countDeposits(myPos, getFactoryPos(myRaw), u_state, u_resolution);
             newResources += float(deposits);
-            fragColor = encodeFactory(newResources, getFactoryPos(myRaw));
-            return;
+            return encodeFactory(newResources, getFactoryPos(myRaw));
         }
     }
     
@@ -94,17 +86,14 @@ void main() {
     if (deposit.happened) {
         // Am I the depositing unit? (I become empty-handed)
         if (distance(deposit.unitPos, myPos) < 0.5) {
-            // Use Memory trait to evaluate memory state
             MemoryState mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
-            
-            fragColor = encodeUnit(
+            return encodeUnit(
                 false,  // no longer holding
                 0,      // reset counter
                 getUnitFactory(myRaw),
                 mem.position,
                 mem.freshness
             );
-            return;
         }
         
         // Am I the receiving factory? (I gain resources)
@@ -117,8 +106,7 @@ void main() {
                 newResources -= SPAWN_COST;
             }
             
-            fragColor = encodeFactory(newResources, getFactoryPos(myRaw));
-            return;
+            return encodeFactory(newResources, getFactoryPos(myRaw));
         }
     }
     
@@ -138,27 +126,36 @@ void main() {
             newCounter = counter + 1;  // Increment toward threshold
         }
         
-        // Use Memory trait to evaluate memory state
         MemoryState mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
         
-        fragColor = encodeUnit(
+        return encodeUnit(
             getUnitHolding(myRaw),
             newCounter,
             getUnitFactory(myRaw),
             mem.position,
             mem.freshness
         );
-        return;
     }
     
     if (myType == TYPE_FACTORY) {
         // Factory not spawning - just count deposits
         int deposits = countDeposits(myPos, getFactoryPos(myRaw), u_state, u_resolution);
         float newResources = getFactoryResources(myRaw) + float(deposits);
-        fragColor = encodeFactory(newResources, getFactoryPos(myRaw));
-        return;
+        return encodeFactory(newResources, getFactoryPos(myRaw));
     }
     
     // Everything else stays as-is
-    fragColor = myRaw;
+    return myRaw;
+}
+
+// ============================================================================
+// Main - Entry point
+// ============================================================================
+
+void main() {
+    vec2 myPos = floor(v_uv * u_resolution);
+    vec4 myRaw = texture(u_state, (myPos + 0.5) / u_resolution);
+    int myType = getType(myRaw);
+    
+    fragColor = compute(myPos, myRaw, myType);
 }
