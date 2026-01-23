@@ -138,9 +138,15 @@ function getFactoryPosition(cell) {
 
 let miningShaderSource = null;
 
+// Toggle this to switch between v1 and v2 shaders for testing
+const SHADER_VERSION = 'v2'; // 'v1' or 'v2'
+
 async function loadMiningShader() {
     if (!miningShaderSource) {
-        miningShaderSource = await loadShader('./src/shaders/ca/mining_game.frag.glsl');
+        const shaderPath = SHADER_VERSION === 'v2' 
+            ? './src/shaders/ca/v2/mining_game.frag.glsl'
+            : './src/shaders/ca/v1/mining_game.frag.glsl';
+        miningShaderSource = await loadShader(shaderPath);
     }
     return miningShaderSource;
 }
