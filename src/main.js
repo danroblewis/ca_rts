@@ -28,12 +28,12 @@ resize();
 console.log('GPU compute framework initialized');
 
 // ============================================================================
-// Load Shaders
+// Load Shaders (v2 architecture)
 // ============================================================================
 
 const [simShaderSource, renderShaderSource] = await Promise.all([
-    loadShader('./src/shaders/ca/mining_game.frag.glsl'),
-    loadShader('./src/shaders/ca/render.frag.glsl')
+    loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
+    loadShader('./src/shaders/ca/v2/render.frag.glsl')
 ]);
 
 const simShader = new ComputeShader(simShaderSource);
