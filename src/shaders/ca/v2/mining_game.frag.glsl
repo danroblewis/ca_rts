@@ -23,6 +23,7 @@ precision highp float;
 
 #include "./core/types.glsl"
 #include "./core/traits.glsl"
+#include "./traits/memory.glsl"
 #include "./traits/movement.glsl"
 #include "./traits/spawning.glsl"
 #include "./traits/deposit.glsl"
@@ -86,13 +87,17 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     if (deposit.happened) {
         // Am I the depositing unit? (I become empty-handed)
         if (distance(deposit.unitPos, myPos) < 0.5) {
-            MemoryState mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
+            // Keep the memory we had - we didn't decay it while holding
+            MemoryState mem;
+            mem.position = getUnitMemoryPos(myRaw);
+            mem.freshness = getUnitMemoryFreshness(myRaw);
+            mem.hasMemory = mem.freshness > 0.0;
+            
             return encodeUnit(
                 false,  // no longer holding
                 0,      // reset counter
                 getUnitFactory(myRaw),
-                mem.position,
-                mem.freshness
+                mem
             );
         }
         
@@ -118,6 +123,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         // Unit staying in place - might be blocked, update counter
         int counter = getUnitCounter(myRaw);
         bool walking = float(counter) >= STATIONARY_THRESHOLD;
+        bool holding = getUnitHolding(myRaw);
         
         int newCounter;
         if (walking) {
@@ -126,14 +132,22 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             newCounter = counter + 1;  // Increment toward threshold
         }
         
-        MemoryState mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
+        // Only decay/evaluate memory when not holding
+        MemoryState mem;
+        if (holding) {
+            // Keep memory intact while carrying resource
+            mem.position = getUnitMemoryPos(myRaw);
+            mem.freshness = getUnitMemoryFreshness(myRaw);
+            mem.hasMemory = mem.freshness > 0.0;
+        } else {
+            mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
+        }
         
         return encodeUnit(
-            getUnitHolding(myRaw),
+            holding,
             newCounter,
             getUnitFactory(myRaw),
-            mem.position,
-            mem.freshness
+            mem
         );
     }
     

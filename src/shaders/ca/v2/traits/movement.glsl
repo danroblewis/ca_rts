@@ -299,13 +299,12 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
                 true,  // now holding
                 0,     // reset counter
                 getUnitFactory(arrivingCell),
-                mem.position,
-                mem.freshness
+                mem
             );
         }
     }
     
-    // Unit arriving at empty = just move, update counter, decay memory
+    // Unit arriving at empty = just move, update counter
     if (arrivingType == TYPE_UNIT && destType == TYPE_EMPTY) {
         int counter = getUnitCounter(arrivingCell);
         int newCounter;
@@ -315,16 +314,28 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
             newCounter = 0;  // Successful move, reset
         }
         
-        // Decay memory (simple decay, not full evaluation since we just moved)
-        float freshness = max(0.0, getUnitMemoryFreshness(arrivingCell) - 1.0);
-        vec2 memPos = freshness > 0.0 ? getUnitMemoryPos(arrivingCell) : vec2(-1.0);
+        bool holding = getUnitHolding(arrivingCell);
+        
+        // Only decay memory while NOT holding - preserve memory on return trip
+        MemoryState mem;
+        if (holding) {
+            // Keep memory intact while carrying resource back
+            mem.position = getUnitMemoryPos(arrivingCell);
+            mem.freshness = getUnitMemoryFreshness(arrivingCell);
+            mem.hasMemory = mem.freshness > 0.0;
+        } else {
+            // Decay memory while searching
+            float freshness = max(0.0, getUnitMemoryFreshness(arrivingCell) - 1.0);
+            mem.position = freshness > 0.0 ? getUnitMemoryPos(arrivingCell) : vec2(-1.0);
+            mem.freshness = freshness;
+            mem.hasMemory = freshness > 0.0;
+        }
         
         return encodeUnit(
-            getUnitHolding(arrivingCell),
+            holding,
             newCounter,
             getUnitFactory(arrivingCell),
-            memPos,
-            freshness
+            mem
         );
     }
     

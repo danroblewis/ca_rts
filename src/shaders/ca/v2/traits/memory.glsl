@@ -153,4 +153,12 @@ MemoryState noMemory() {
     return result;
 }
 
+// ============================================================================
+// Encode a unit with MemoryState object (cleaner API)
+// ============================================================================
+
+vec4 encodeUnit(bool holding, int counter, vec2 factoryPos, MemoryState mem) {
+    return encodeUnitRaw(holding, counter, factoryPos, mem.position, mem.freshness);
+}
+
 #endif

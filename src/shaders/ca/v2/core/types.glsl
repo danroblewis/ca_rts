@@ -95,7 +95,9 @@ float getUnitMemoryFreshness(vec4 raw) {
     return floor(raw.a / MEMORY_PACK_BASE);
 }
 
-vec4 encodeUnit(bool holding, int counter, vec2 factoryPos, vec2 memoryPos, float freshness) {
+// Forward declare MemoryState struct (defined in memory.glsl)
+// We use raw components here to avoid circular dependency
+vec4 encodeUnitRaw(bool holding, int counter, vec2 factoryPos, vec2 memoryPos, float freshness) {
     float g = (holding ? 1.0 : 0.0) + float(counter) * 2.0;
     float b = packCoords(factoryPos);
     float a = (freshness > 0.0 && memoryPos.x >= 0.0) 
@@ -105,7 +107,7 @@ vec4 encodeUnit(bool holding, int counter, vec2 factoryPos, vec2 memoryPos, floa
 }
 
 vec4 encodeUnitSimple(bool holding, int counter, vec2 factoryPos) {
-    return encodeUnit(holding, counter, factoryPos, vec2(-1.0), 0.0);
+    return encodeUnitRaw(holding, counter, factoryPos, vec2(-1.0), 0.0);
 }
 
 // ============================================================================
