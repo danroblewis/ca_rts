@@ -18,7 +18,7 @@
 // Memory Constants
 // ============================================================================
 
-const float MEMORY_MAX_FRESHNESS = 30.0;
+const float MEMORY_MAX_FRESHNESS = 80.0;
 const float MEMORY_SHARE_PENALTY = 5.0;
 const int MEMORY_VISION_RANGE = 5;
 
