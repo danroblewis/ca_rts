@@ -154,7 +154,21 @@ let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
 const LOG_INTERVAL = 1000;
-const SIM_BATCH_SIZE = 1; // Slower to watch the action
+const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
+
+// Toggle: true = sync with render (debug), false = fast as possible
+let SYNC_SIM_WITH_RENDER = true;
+
+// Expose toggle to console for easy switching
+window.toggleSimSync = () => {
+    SYNC_SIM_WITH_RENDER = !SYNC_SIM_WITH_RENDER;
+    console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'}`);
+    if (!SYNC_SIM_WITH_RENDER) {
+        // Start the fast loop when switching to fast mode
+        fastSimulationLoop();
+    }
+};
+console.log('Call toggleSimSync() in console to switch between synced/fast simulation');
 
 function simulationStep() {
     grid.getWriteFramebuffer().bind();
@@ -172,11 +186,7 @@ function simulationStep() {
     simTime += 1.0;
 }
 
-function simulationLoop() {
-    for (let i = 0; i < SIM_BATCH_SIZE; i++) {
-        simulationStep();
-    }
-    
+function logStats() {
     const now = performance.now();
     const elapsed = now - lastLogTime;
     if (elapsed >= LOG_INTERVAL) {
@@ -187,17 +197,33 @@ function simulationLoop() {
         renderFrameCount = 0;
         lastLogTime = now;
     }
-    
-    setTimeout(simulationLoop, 0);
 }
 
-simulationLoop();
+// Fast simulation loop (runs as fast as possible via setTimeout)
+function fastSimulationLoop() {
+    if (SYNC_SIM_WITH_RENDER) return; // Stop if switched to sync mode
+    
+    for (let i = 0; i < SIM_BATCH_SIZE; i++) {
+        simulationStep();
+    }
+    
+    logStats();
+    
+    setTimeout(fastSimulationLoop, 0);
+}
 
 // ============================================================================
-// Render Loop
+// Render Loop (also runs synced simulation if enabled)
 // ============================================================================
 
 function renderLoop() {
+    // Run simulation step if synced mode
+    if (SYNC_SIM_WITH_RENDER) {
+        simulationStep();
+        logStats();
+    }
+    
+    // Render
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
 
@@ -210,4 +236,10 @@ function renderLoop() {
     requestAnimationFrame(renderLoop);
 }
 
+// Start render loop (simulation runs here if synced, or separately if fast)
 requestAnimationFrame(renderLoop);
+
+// If starting in fast mode, kick off the fast loop
+if (!SYNC_SIM_WITH_RENDER) {
+    fastSimulationLoop();
+}
