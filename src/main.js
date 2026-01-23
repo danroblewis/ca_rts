@@ -8,6 +8,7 @@ const CELL_EMPTY = 0;
 const CELL_RESOURCE = 1;
 const CELL_MINING_UNIT = 2;
 const CELL_MINING_FACTORY = 3;
+const CELL_WALL = 4;
 
 // ============================================================================
 // Initialize GPU
@@ -102,11 +103,77 @@ for (let b = 0; b < NUM_BLOBS; b++) {
 
 const NUM_RESOURCES = totalResources;
 
+// ============================================================================
+// Generate Walls - random barriers and obstacles
+// ============================================================================
+
+const NUM_WALL_LINES = 8;      // Number of wall lines
+const WALL_MIN_LENGTH = 5;
+const WALL_MAX_LENGTH = 20;
+const NUM_WALL_BLOBS = 5;      // Small wall clusters
+const WALL_BLOB_RADIUS = 3;
+
+let totalWalls = 0;
+
+// Helper to check if a cell is empty (don't overwrite resources)
+function isEmpty(x, y) {
+    const idx = (y * GRID_SIZE + x) * 4;
+    return data[idx] === CELL_EMPTY;
+}
+
+// Generate wall lines (horizontal or vertical)
+for (let i = 0; i < NUM_WALL_LINES; i++) {
+    const horizontal = Math.random() > 0.5;
+    const length = Math.floor(WALL_MIN_LENGTH + Math.random() * (WALL_MAX_LENGTH - WALL_MIN_LENGTH));
+    
+    // Pick starting position (leave margin from edges)
+    const startX = Math.floor(Math.random() * (GRID_SIZE - length - 10)) + 5;
+    const startY = Math.floor(Math.random() * (GRID_SIZE - length - 10)) + 5;
+    
+    for (let j = 0; j < length; j++) {
+        const x = horizontal ? startX + j : startX;
+        const y = horizontal ? startY : startY + j;
+        
+        // Only place if cell is empty (don't overwrite resources)
+        if (x >= 1 && x < GRID_SIZE - 1 && y >= 1 && y < GRID_SIZE - 1 && isEmpty(x, y)) {
+            setCell(x, y, CELL_WALL);
+            totalWalls++;
+        }
+    }
+}
+
+// Generate small wall clusters
+for (let b = 0; b < NUM_WALL_BLOBS; b++) {
+    const centerX = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
+    const centerY = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
+    
+    for (let dy = -WALL_BLOB_RADIUS; dy <= WALL_BLOB_RADIUS; dy++) {
+        for (let dx = -WALL_BLOB_RADIUS; dx <= WALL_BLOB_RADIUS; dx++) {
+            const x = centerX + dx;
+            const y = centerY + dy;
+            
+            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
+            
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > WALL_BLOB_RADIUS * 0.8) continue;
+            
+            // 70% density
+            if (Math.random() > 0.7) continue;
+            
+            if (isEmpty(x, y)) {
+                setCell(x, y, CELL_WALL);
+                totalWalls++;
+            }
+        }
+    }
+}
+
 grid.upload(data);
 
 console.log(`Mining Game initialized:`);
 console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
 console.log(`  ${NUM_RESOURCES} resources scattered`);
+console.log(`  ${totalWalls} walls placed`);
 console.log(`  Click to place a mining factory!`);
 
 // ============================================================================
