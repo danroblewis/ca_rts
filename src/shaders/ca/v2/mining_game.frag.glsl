@@ -139,6 +139,12 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         MemoryState mem;
         vec2 factoryPos = getUnitFactory(myRaw);
         
+        // Check for visible factories - units ALWAYS adopt visible factories
+        vec2 visibleFactory = findVisibleFactory(myPos, u_state, u_resolution);
+        if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
+            factoryPos = visibleFactory;  // Adopt the visible factory as new home
+        }
+        
         if (holding) {
             // Keep memory intact while carrying resource
             mem.position = getUnitMemoryPos(myRaw);
