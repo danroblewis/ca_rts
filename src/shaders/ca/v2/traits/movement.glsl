@@ -121,13 +121,16 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     bool hasMemory = (freshness > 0.0 && memoryPos.x >= 0.0);
     bool homesick = (!hasMemory && homesickTimer >= HOMESICK_THRESHOLD);
     
+    // Check if unit has a valid home factory
+    bool hasHome = (factoryPos.x >= 0.0);
+    
     // If holding and adjacent to factory, don't move (deposit instead)
-    if (holding && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
+    if (holding && hasHome && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
         return DIR_NONE;  // Will deposit, not move
     }
     
     // If homesick and adjacent to factory, stop (will reset timer in memory eval)
-    if (homesick && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
+    if (homesick && hasHome && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
         return DIR_NONE;  // Reached home, timer will reset
     }
     
@@ -136,12 +139,22 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
         return randomDir(pos, time);
     }
     
-    // Holding = go to factory
+    // Holding but homeless = random walk looking for a factory to adopt
+    if (holding && !hasHome) {
+        return randomDir(pos, time);  // Wander until we see a factory
+    }
+    
+    // Holding with home = go to factory
     if (holding) {
         return dirToward(pos, factoryPos, time + pos.x * 0.1);
     }
     
-    // Homesick = go to factory (wandered too long without finding anything)
+    // Homesick but homeless = just random walk
+    if (homesick && !hasHome) {
+        return randomDir(pos, time);
+    }
+    
+    // Homesick with home = go to factory (wandered too long without finding anything)
     if (homesick) {
         return dirToward(pos, factoryPos, time + pos.x * 0.1);
     }

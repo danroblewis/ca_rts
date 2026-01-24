@@ -139,6 +139,12 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         MemoryState mem;
         vec2 factoryPos = getUnitFactory(myRaw);
         
+        // Check if our factory still exists - if not, forget it!
+        // This handles deleted factories - unit becomes "homeless"
+        if (factoryPos.x >= 0.0 && isNearFactoryLocation(myPos, factoryPos) && !factoryExistsAt(factoryPos, u_state, u_resolution)) {
+            factoryPos = vec2(-1.0);  // Factory was deleted, become homeless
+        }
+        
         // Check for visible factories - units ALWAYS adopt visible factories
         vec2 visibleFactory = findVisibleFactory(myPos, u_state, u_resolution);
         if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
