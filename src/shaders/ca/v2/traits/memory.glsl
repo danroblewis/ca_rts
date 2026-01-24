@@ -155,6 +155,35 @@ bool isAdjacentToOwnFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 res
 }
 
 // ============================================================================
+// Helper: Check if factory exists at expected location
+// Returns true if factory exists, false if it's gone (was deleted)
+// ============================================================================
+
+bool factoryExistsAt(vec2 factoryPos, sampler2D state, vec2 resolution) {
+    // Check if factory position is valid
+    if (factoryPos.x < 0.0) return false;
+    
+    // Sample the factory location directly
+    vec2 uv = (factoryPos + 0.5) / resolution;
+    vec4 cell = texture(state, uv);
+    
+    if (getType(cell) == TYPE_FACTORY) {
+        // Verify it's the same factory (position matches)
+        vec2 fPos = getFactoryPos(cell);
+        return distance(fPos, factoryPos) < 0.5;
+    }
+    return false;
+}
+
+// ============================================================================
+// Helper: Check if unit is near its factory location (within vision range)
+// ============================================================================
+
+bool isNearFactoryLocation(vec2 pos, vec2 factoryPos) {
+    return factoryPos.x >= 0.0 && distance(pos, factoryPos) <= float(MEMORY_VISION_RANGE);
+}
+
+// ============================================================================
 // THE CANONICAL MEMORY EVALUATION
 // 
 // Determines the updated memory state for a unit.
@@ -187,6 +216,15 @@ MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution)
             freshness = 0.0;
             memPos = vec2(-1.0);
         }
+    }
+    
+    // 3.5. If near factory location but factory doesn't exist, forget factory
+    //      This handles deleted factories - units will become "homeless"
+    if (isNearFactoryLocation(pos, factoryPos) && !factoryExistsAt(factoryPos, state, resolution)) {
+        // Factory was deleted! Forget it and become homeless
+        factoryPos = vec2(-1.0);
+        result.factoryChanged = true;
+        result.newFactoryPos = vec2(-1.0);
     }
     
     // 4. If no memory and not holding, try to acquire knowledge from nearby unit
