@@ -277,22 +277,45 @@ canvas.addEventListener('click', (event) => {
             console.log(`Deleted ${deletedCount} factory(ies) around (${gridPos.x}, ${gridPos.y})`);
         }
     } else {
-        // NORMAL CLICK: Place factory
-        const idx = (gridPos.y * GRID_SIZE + gridPos.x) * 4;
+        // NORMAL CLICK: Place 3x3 factory grid
+        // The click position becomes the CENTER of the factory
+        const centerX = gridPos.x;
+        const centerY = gridPos.y;
         
-        // Only the first factory gets starting resources
-        const resourceCount = (factoriesPlaced === 0) ? FIRST_FACTORY_RESOURCES : 0;
+        // Check bounds for 3x3
+        if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
+            console.log('Too close to edge for 3x3 factory');
+            return;
+        }
         
-        // Place factory: type=3, resourceCount, selfX, selfY
-        currentData[idx + 0] = CELL_MINING_FACTORY;
-        currentData[idx + 1] = resourceCount;
-        currentData[idx + 2] = gridPos.x;  // selfX
-        currentData[idx + 3] = gridPos.y;  // selfY
+        // Only the first factory gets starting resources (distributed among 9 cells)
+        const totalResources = (factoriesPlaced === 0) ? FIRST_FACTORY_RESOURCES : 0;
+        const resourcesPerCell = totalResources / 9.0;
+        
+        // Place 3x3 grid of factory cells
+        // All cells store the center position as "selfPos"
+        let placed = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const x = centerX + dx;
+                const y = centerY + dy;
+                const idx = (y * GRID_SIZE + x) * 4;
+                
+                // Only place if cell is empty or resource (don't overwrite walls)
+                if (currentData[idx] === CELL_EMPTY || currentData[idx] === CELL_RESOURCE) {
+                    currentData[idx + 0] = CELL_MINING_FACTORY;
+                    currentData[idx + 1] = resourcesPerCell;
+                    currentData[idx + 2] = centerX;  // All cells reference the center
+                    currentData[idx + 3] = centerY;
+                    placed++;
+                }
+            }
+        }
         
         grid.upload(currentData);
         factoriesPlaced++;
         
-        console.log(`Placed factory #${factoriesPlaced} at (${gridPos.x}, ${gridPos.y}) with ${resourceCount} resources`);
+        console.log(`Placed 3x3 factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) with ${totalResources} total resources (${placed} cells)`);
     }
 });
 

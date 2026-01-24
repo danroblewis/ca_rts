@@ -73,13 +73,14 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             return spawning.spawnedCell;
         }
         
-        // Am I the spawner? (I spend resources)
-        if (distance(spawning.spawnerPos, myPos) < 0.5) {
-            float newResources = getFactoryResources(myRaw) - SPAWN_COST;
+        // Am I part of the 3x3 factory that's spawning? (subtract 1/9 of cost from each cell)
+        if (myType == TYPE_FACTORY && distance(getFactoryPos(myRaw), spawning.factoryCenter) < 0.5) {
+            float costPerCell = SPAWN_COST / 9.0;
+            float newResources = getFactoryResources(myRaw) - costPerCell;
             // Also count any deposits happening this frame
             int deposits = countDeposits(myPos, getFactoryPos(myRaw), u_state, u_resolution);
             newResources += float(deposits);
-            return encodeFactory(newResources, getFactoryPos(myRaw));
+            return encodeFactory(max(0.0, newResources), getFactoryPos(myRaw));
         }
     }
     
