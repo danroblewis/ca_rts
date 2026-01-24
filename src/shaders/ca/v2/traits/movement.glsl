@@ -22,7 +22,7 @@
 
 const int VISION_RANGE = 5;
 const float STATIONARY_THRESHOLD = 8.0;
-const float MAX_WANDER_DISTANCE = 60.0;  // Max distance from factory before returning
+const float MAX_WANDER_DISTANCE = 100.0;  // Max distance from factory before returning
 
 // ============================================================================
 // Movement Result - what happened in the local region
@@ -377,7 +377,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         if (holding) {
             newAge = age;
         } else if (nearFactory) {
-            newAge = max(0.0, age - 2.0);  // Heal near factory
+            newAge = 0.0;  // Heal near factory
         } else {
             newAge = age + 1.0;  // Starving
         }
