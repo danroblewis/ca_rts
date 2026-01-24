@@ -6,6 +6,34 @@ const results = [];
 const testResults = []; // Track individual test pass/fail for visual summary
 let passed = 0;
 let failed = 0;
+let totalExpected = 0;
+
+/**
+ * Set the expected total number of tests for progress display
+ */
+export function setTotalTests(count) {
+    totalExpected = count;
+}
+
+/**
+ * Update the progress display
+ */
+function updateProgress(currentTest = null) {
+    const output = document.getElementById('output');
+    const completed = passed + failed;
+    const progressText = totalExpected > 0 
+        ? `Running tests... ${completed}/${totalExpected}`
+        : `Running tests... ${completed} completed`;
+    
+    const barWidth = 30;
+    const filledWidth = totalExpected > 0 ? Math.round((completed / totalExpected) * barWidth) : 0;
+    const progressBar = totalExpected > 0 
+        ? `[${'█'.repeat(filledWidth)}${'░'.repeat(barWidth - filledWidth)}]`
+        : '';
+    
+    const currentLine = currentTest ? `\n▶ ${currentTest}` : '';
+    output.textContent = `${progressText}\n${progressBar}${currentLine}`;
+}
 
 export function assert(condition, message) {
     if (!condition) {
@@ -31,6 +59,7 @@ export function assertArrayApprox(actual, expected, epsilon = 0.001, message = '
 }
 
 export async function runTest(name, fn) {
+    updateProgress(name);
     try {
         await fn();
         results.push({ type: 'pass', name });
@@ -41,6 +70,7 @@ export async function runTest(name, fn) {
         testResults.push({ passed: false, name });
         failed++;
     }
+    updateProgress();
 }
 
 export function outputResults() {
