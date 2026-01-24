@@ -34,6 +34,8 @@ struct MemoryState {
     vec2 position;
     float freshness;
     float homesickTimer;  // Increments while wandering, triggers return when high
+    bool factoryChanged;  // True if factory was adopted from another unit
+    vec2 newFactoryPos;   // The new factory position (if changed)
 };
 
 // ============================================================================
@@ -53,12 +55,28 @@ bool hasAdjacentResource(vec2 pos, sampler2D state, vec2 resolution) {
 }
 
 // ============================================================================
-// Helper: Find shared memory from nearby units
-// Returns vec3(x, y, freshness) or (-1, -1, 0) if none
+// Shared Knowledge - what a unit learns from nearby units
 // ============================================================================
 
-vec3 findNearbyMemory(vec2 pos, sampler2D state, vec2 resolution) {
-    vec3 best = vec3(-1.0, -1.0, 0.0);
+struct SharedKnowledge {
+    bool found;
+    vec2 resourcePos;
+    float freshness;
+    vec2 factoryPos;  // Also adopt the sharing unit's factory
+};
+
+// ============================================================================
+// Helper: Find shared knowledge from nearby units
+// Returns resource memory AND factory location from the sharing unit
+// ============================================================================
+
+SharedKnowledge findNearbyKnowledge(vec2 pos, sampler2D state, vec2 resolution) {
+    SharedKnowledge result;
+    result.found = false;
+    result.resourcePos = vec2(-1.0);
+    result.freshness = 0.0;
+    result.factoryPos = vec2(-1.0);
+    
     float nearestDist = 999.0;
     
     for (int dy = -MEMORY_VISION_RANGE; dy <= MEMORY_VISION_RANGE; dy++) {
@@ -75,15 +93,16 @@ vec3 findNearbyMemory(vec2 pos, sampler2D state, vec2 resolution) {
                     float dist = abs(float(dx)) + abs(float(dy));
                     if (dist < nearestDist) {
                         nearestDist = dist;
-                        vec2 memPos = getUnitMemoryPos(cell);
-                        // Apply share penalty
-                        best = vec3(memPos, max(0.0, freshness - MEMORY_SHARE_PENALTY));
+                        result.found = true;
+                        result.resourcePos = getUnitMemoryPos(cell);
+                        result.freshness = max(0.0, freshness - MEMORY_SHARE_PENALTY);
+                        result.factoryPos = getUnitFactory(cell);  // Adopt their factory too!
                     }
                 }
             }
         }
     }
-    return best;
+    return result;
 }
 
 // ============================================================================
@@ -116,6 +135,8 @@ bool isAdjacentToOwnFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 res
 
 MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution) {
     MemoryState result;
+    result.factoryChanged = false;
+    result.newFactoryPos = vec2(-1.0);
     
     // Get current memory and homesick timer
     vec2 memPos = getUnitMemoryPos(raw);
@@ -139,13 +160,17 @@ MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution)
         }
     }
     
-    // 4. If no memory and not holding, try to acquire from nearby unit
+    // 4. If no memory and not holding, try to acquire knowledge from nearby unit
+    //    This includes both resource location AND factory location!
     if (freshness <= 0.0 && !getUnitHolding(raw)) {
-        vec3 shared = findNearbyMemory(pos, state, resolution);
-        if (shared.z > 0.0) {
-            memPos = shared.xy;
-            freshness = shared.z;
+        SharedKnowledge shared = findNearbyKnowledge(pos, state, resolution);
+        if (shared.found && shared.freshness > 0.0) {
+            memPos = shared.resourcePos;
+            freshness = shared.freshness;
             homesickTimer = 0.0;  // Found a lead, reset homesick
+            // Also adopt the factory of the unit we learned from!
+            result.factoryChanged = true;
+            result.newFactoryPos = shared.factoryPos;
         }
     }
     
@@ -180,6 +205,8 @@ MemoryState createFreshMemory(vec2 resourcePos) {
     result.position = resourcePos;
     result.freshness = MEMORY_MAX_FRESHNESS;
     result.homesickTimer = 0.0;  // Just found something, not homesick
+    result.factoryChanged = false;
+    result.newFactoryPos = vec2(-1.0);
     return result;
 }
 
@@ -193,6 +220,8 @@ MemoryState noMemory() {
     result.position = vec2(-1.0);
     result.freshness = 0.0;
     result.homesickTimer = 0.0;
+    result.factoryChanged = false;
+    result.newFactoryPos = vec2(-1.0);
     return result;
 }
 
@@ -202,6 +231,8 @@ MemoryState noMemoryWithTimer(float timer) {
     result.position = vec2(-1.0);
     result.freshness = 0.0;
     result.homesickTimer = timer;
+    result.factoryChanged = false;
+    result.newFactoryPos = vec2(-1.0);
     return result;
 }
 

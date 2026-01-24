@@ -45,7 +45,7 @@ const renderShader = new ComputeShader(renderShaderSource);
 // Initialize World
 // ============================================================================
 
-const GRID_SIZE = 128;
+const GRID_SIZE = 256;
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
 
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
@@ -63,7 +63,7 @@ function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
 data.fill(0);
 
 // Place resources in blobs/clusters (more realistic RTS style)
-const NUM_BLOBS = 15;
+const NUM_BLOBS = 150;
 const BLOB_MIN_RADIUS = 3;
 const BLOB_MAX_RADIUS = 8;
 const BLOB_DENSITY = 0.6; // % of cells in blob that have resources
@@ -107,7 +107,7 @@ const NUM_RESOURCES = totalResources;
 // Generate Walls - random barriers and obstacles
 // ============================================================================
 
-const NUM_WALL_LINES = 8;      // Number of wall lines
+const NUM_WALL_LINES = 44;      // Number of wall lines
 const WALL_MIN_LENGTH = 5;
 const WALL_MAX_LENGTH = 20;
 const NUM_WALL_BLOBS = 5;      // Small wall clusters
@@ -204,7 +204,7 @@ canvas.addEventListener('click', (event) => {
     
     // Place factory: type=3, resourceCount=10, selfX, selfY
     currentData[idx + 0] = CELL_MINING_FACTORY;
-    currentData[idx + 1] = 30; // 10 resources
+    currentData[idx + 1] = 50; // 10 resources
     currentData[idx + 2] = x;  // selfX
     currentData[idx + 3] = y;  // selfY
     
@@ -222,7 +222,7 @@ let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
 const LOG_INTERVAL = 1000;
-const SIM_BATCH_SIZE = 1; // Steps per batch in fast mode
+const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
 
 // Toggle: true = sync with render (debug), false = fast as possible
 let SYNC_SIM_WITH_RENDER = true;

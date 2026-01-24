@@ -92,6 +92,9 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             mem.position = getUnitMemoryPos(myRaw);
             mem.freshness = getUnitMemoryFreshness(myRaw);
             mem.hasMemory = mem.freshness > 0.0;
+            mem.homesickTimer = 0.0;
+            mem.factoryChanged = false;
+            mem.newFactoryPos = vec2(-1.0);
             
             return encodeUnit(
                 false,  // no longer holding
@@ -134,19 +137,26 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         
         // Only decay/evaluate memory when not holding
         MemoryState mem;
+        vec2 factoryPos = getUnitFactory(myRaw);
+        
         if (holding) {
             // Keep memory intact while carrying resource
             mem.position = getUnitMemoryPos(myRaw);
             mem.freshness = getUnitMemoryFreshness(myRaw);
             mem.hasMemory = mem.freshness > 0.0;
+            mem.factoryChanged = false;
         } else {
             mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
+            // If we learned from another unit, adopt their factory too!
+            if (mem.factoryChanged) {
+                factoryPos = mem.newFactoryPos;
+            }
         }
         
         return encodeUnit(
             holding,
             newCounter,
-            getUnitFactory(myRaw),
+            factoryPos,
             mem
         );
     }

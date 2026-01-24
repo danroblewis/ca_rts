@@ -27,7 +27,7 @@ const CELL_WALL = 4;
 const STATIONARY_THRESHOLD = 8;
 const MEMORY_MAX_FRESHNESS = 200;  // Updated to match shader
 const MEMORY_SHARE_PENALTY = 5;
-const SPAWN_COST = 30;  // Updated to match shader
+const SPAWN_COST = 50;  // Updated to match shader
 const VISION_RANGE = 5;
 
 // Grid size for tests
@@ -37,14 +37,17 @@ const TEST_GRID_SIZE = 16;
 // Cell Data Encoding (mirrors GLSL cell_types.glsl)
 // ============================================================================
 
+// Coordinate packing (supports up to 256x256 grids)
+const COORD_PACK_BASE = 256;
+
 function packCoords(x, y) {
-    return Math.floor(x) + Math.floor(y) * 128;
+    return Math.floor(x) + Math.floor(y) * COORD_PACK_BASE;
 }
 
 function unpackCoords(packed) {
     return {
-        x: packed % 128,
-        y: Math.floor(packed / 128)
+        x: packed % COORD_PACK_BASE,
+        y: Math.floor(packed / COORD_PACK_BASE)
     };
 }
 
@@ -59,19 +62,22 @@ function unpackHoldingAndCounter(packed) {
     };
 }
 
+// Memory packing (supports up to 256x256 grids)
+const MEMORY_PACK_BASE = COORD_PACK_BASE * COORD_PACK_BASE;  // 65536
+
 function packMemory(x, y, freshness) {
     if (freshness <= 0) return -1;
-    return packCoords(x, y) + Math.floor(freshness) * 16384;
+    return packCoords(x, y) + Math.floor(freshness) * MEMORY_PACK_BASE;
 }
 
 function unpackMemory(packed) {
     if (packed < 0) return { x: -1, y: -1, freshness: 0 };
-    const coordPart = packed % 16384;
+    const coordPart = packed % MEMORY_PACK_BASE;
     const coords = unpackCoords(coordPart);
     return {
         x: coords.x,
         y: coords.y,
-        freshness: Math.floor(packed / 16384)
+        freshness: Math.floor(packed / MEMORY_PACK_BASE)
     };
 }
 
@@ -502,8 +508,9 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        // Factory at (5,5) with SPAWN_COST resources
-        sim.setCell(data, 5, 5, createMiningFactory(SPAWN_COST, 5, 5));
+        // Factory at (5,5) with exactly SPAWN_COST resources (should spawn and have 0 left)
+        const initialResources = SPAWN_COST * 2;  // Give more to see relative change
+        sim.setCell(data, 5, 5, createMiningFactory(initialResources, 5, 5));
         sim.upload(data);
         
         const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
@@ -516,10 +523,12 @@ export async function runMiningTests() {
         const unitAbove = sim.getCell(result, 5, 6);
         assert(getCellType(unitAbove) === CELL_MINING_UNIT, 'Unit should spawn above factory');
         
-        // Factory should have spent resources
+        // Factory should have spent SPAWN_COST resources
         const factory = sim.getCell(result, 5, 5);
         const factoryResources = getFactoryResources(factory);
-        assert(factoryResources === 0, `Factory should have 0 resources after spawn, got ${factoryResources}`);
+        const expectedResources = initialResources - SPAWN_COST;
+        assert(factoryResources === expectedResources, 
+            `Factory should have ${expectedResources} resources after spawn, got ${factoryResources}`);
         
         sim.destroy();
     });

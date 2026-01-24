@@ -333,6 +333,9 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         
         // Only decay memory while NOT holding - preserve memory on return trip
         MemoryState mem;
+        mem.factoryChanged = false;  // No factory change during movement
+        mem.newFactoryPos = vec2(-1.0);
+        
         if (holding) {
             // Keep memory intact while carrying resource back
             mem.position = getUnitMemoryPos(arrivingCell);

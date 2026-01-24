@@ -20,11 +20,11 @@ const int TYPE_FACTORY = 3;
 const int TYPE_WALL = 4;
 
 // ============================================================================
-// Encoding Constants  
+// Encoding Constants (supports up to 256x256 grids)
 // ============================================================================
 
-const float COORD_PACK_BASE = 128.0;
-const float MEMORY_PACK_BASE = 16384.0;  // 128 * 128
+const float COORD_PACK_BASE = 256.0;
+const float MEMORY_PACK_BASE = 65536.0;  // 256 * 256
 
 // ============================================================================
 // Raw Access
