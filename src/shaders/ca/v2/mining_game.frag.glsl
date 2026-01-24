@@ -100,6 +100,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             return encodeUnit(
                 false,  // no longer holding
                 0,      // reset counter
+                0.0,    // reset age (just deposited successfully)
                 getUnitFactory(myRaw),
                 mem
             );
@@ -128,12 +129,26 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         int counter = getUnitCounter(myRaw);
         bool walking = float(counter) >= STATIONARY_THRESHOLD;
         bool holding = getUnitHolding(myRaw);
+        float age = getUnitAge(myRaw);
         
         int newCounter;
         if (walking) {
             newCounter = max(0, counter - 1);  // Decrement in walking mode
         } else {
             newCounter = counter + 1;  // Increment toward threshold
+        }
+        
+        // Age handling:
+        // - If holding, don't age (carrying resource is productive)
+        // - If not holding, increment age (searching/starving)
+        // - If age reaches MAX_AGE, unit dies!
+        float newAge = age;
+        if (!holding) {
+            newAge = age + 1.0;
+            if (newAge >= MAX_AGE) {
+                // Unit starved to death!
+                return encodeEmpty();
+            }
         }
         
         // Only decay/evaluate memory when not holding
@@ -169,6 +184,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         return encodeUnit(
             holding,
             newCounter,
+            newAge,
             factoryPos,
             mem
         );

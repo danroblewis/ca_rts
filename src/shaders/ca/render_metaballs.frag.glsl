@@ -32,11 +32,14 @@ float calcDensity(vec2 uv, float targetType) {
     return density;
 }
 
-// Calculate unit density with holding info - larger radius for more blobby units
-vec2 calcUnitDensity(vec2 uv) {
+// Calculate unit density with holding info and age - larger radius for more blobby units
+// Returns vec3(emptyDensity, holdingDensity, weightedAge)
+vec3 calcUnitDensityWithAge(vec2 uv) {
     vec2 texelSize = 1.0 / u_resolution;
     float emptyDensity = 0.0;
     float holdingDensity = 0.0;
+    float totalWeight = 0.0;
+    float weightedAge = 0.0;
     
     // Larger 9x9 sampling area for units (they're often several pixels apart)
     for (int dy = -4; dy <= 4; dy++) {
@@ -49,6 +52,10 @@ vec2 calcUnitDensity(vec2 uv) {
                 if (dist < 0.5) dist = 0.5;
                 float weight = 1.0 / (dist * dist);
                 
+                float age = getUnitAge(cellSample);
+                weightedAge += age * weight;
+                totalWeight += weight;
+                
                 if (isHoldingResource(cellSample)) {
                     holdingDensity += weight;
                 } else {
@@ -57,7 +64,10 @@ vec2 calcUnitDensity(vec2 uv) {
             }
         }
     }
-    return vec2(emptyDensity, holdingDensity);
+    
+    // Normalize age by total weight
+    float avgAge = totalWeight > 0.0 ? weightedAge / totalWeight : 0.0;
+    return vec3(emptyDensity, holdingDensity, avgAge);
 }
 
 // Smooth noise for texture
@@ -82,9 +92,11 @@ void main() {
     // Calculate densities for each type
     float resourceDensity = calcDensity(v_uv, CELL_RESOURCE);
     float factoryDensity = calcDensity(v_uv, CELL_MINING_FACTORY);
-    vec2 unitDensity = calcUnitDensity(v_uv);
-    float emptyUnitDensity = unitDensity.x;
-    float holdingUnitDensity = unitDensity.y;
+    vec3 unitInfo = calcUnitDensityWithAge(v_uv);
+    float emptyUnitDensity = unitInfo.x;
+    float holdingUnitDensity = unitInfo.y;
+    float avgAge = unitInfo.z;
+    float ageRatio = avgAge / MAX_AGE;  // 0 = fresh, 1 = about to die
     
     // Thresholds for blob effect (lower = more blobby/connected)
     float resourceThreshold = 0.8;
@@ -108,14 +120,40 @@ void main() {
         color = mix(color, resourceColor, blobStrength);
     }
     
-    // Mining units - cyan (empty) or green (holding) blobs
+    // Mining units - cyan (empty) or green (holding) blobs, with age-based fading
     float totalUnitDensity = emptyUnitDensity + holdingUnitDensity;
+    
+    // Age-based color modifiers
+    float fadeStart = 0.3;  // Start fading at 30% age
+    float deathFlashStart = 0.9;  // Flash starts at 90% age
+    float ageBrightness = 1.0;
+    vec3 ageColorMod = vec3(1.0);
+    
+    if (ageRatio >= fadeStart && ageRatio < deathFlashStart) {
+        // Aging - gradually darken
+        float fadeFactor = (ageRatio - fadeStart) / (deathFlashStart - fadeStart);
+        ageBrightness = 1.0 - fadeFactor * 0.7;  // Fade to 30% brightness
+    } else if (ageRatio >= deathFlashStart) {
+        // Death flash - bright white burst then rapid fade
+        float deathProgress = (ageRatio - deathFlashStart) / (1.0 - deathFlashStart);
+        if (deathProgress < 0.3) {
+            // White flash
+            float flashIntensity = deathProgress / 0.3;
+            ageColorMod = mix(vec3(0.3), vec3(3.0), flashIntensity);  // Oversaturate for flash
+        } else {
+            // Rapid fade out
+            float fadeOut = (deathProgress - 0.3) / 0.7;
+            ageBrightness = mix(1.5, 0.1, fadeOut);
+            ageColorMod = vec3(1.0);
+        }
+    }
     
     // Outer glow first (shows even at low density)
     if (totalUnitDensity > unitThreshold * 0.3) {
         float holdingRatio = holdingUnitDensity / max(totalUnitDensity, 0.001);
         float glowStrength = smoothstep(0.0, unitThreshold, totalUnitDensity);
         vec3 glowColor = mix(vec3(0.05, 0.25, 0.4), vec3(0.1, 0.35, 0.1), holdingRatio);
+        glowColor *= ageBrightness * ageColorMod;
         color = color + glowColor * glowStrength * 0.6;
     }
     
@@ -126,13 +164,13 @@ void main() {
         // Blend between cyan and green based on holding ratio
         float holdingRatio = holdingUnitDensity / max(totalUnitDensity, 0.001);
         
-        vec3 cyanColor = vec3(0.3, 0.8, 1.0);
-        vec3 greenColor = vec3(0.4, 0.95, 0.4);
+        vec3 cyanColor = vec3(0.3, 0.8, 1.0) * ageBrightness * ageColorMod;
+        vec3 greenColor = vec3(0.4, 0.95, 0.4) * ageBrightness * ageColorMod;
         vec3 unitColor = mix(cyanColor, greenColor, holdingRatio);
         
         // Brighter core for dense groups
         float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, totalUnitDensity);
-        unitColor += vec3(0.2) * coreGlow;
+        unitColor += vec3(0.2) * coreGlow * ageBrightness;
         
         color = mix(color, unitColor, blobStrength);
     }

@@ -346,6 +346,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
             return encodeUnit(
                 true,  // now holding
                 0,     // reset counter
+                0.0,   // reset age (just mined successfully!)
                 getUnitFactory(arrivingCell),
                 mem
             );
@@ -364,6 +365,10 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         
         bool holding = getUnitHolding(arrivingCell);
         float homesickTimer = getUnitHomesickTimer(arrivingCell);
+        float age = getUnitAge(arrivingCell);
+        
+        // Age handling: only age while not holding (searching/starving)
+        float newAge = holding ? age : (age + 1.0);
         
         // Only decay memory while NOT holding - preserve memory on return trip
         MemoryState mem;
@@ -393,6 +398,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         return encodeUnit(
             holding,
             newCounter,
+            newAge,
             getUnitFactory(arrivingCell),
             mem
         );

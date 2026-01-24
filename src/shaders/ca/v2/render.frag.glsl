@@ -21,10 +21,39 @@ void main() {
         color = vec3(0.9, 0.7, 0.2);
     }
     else if (cellType == TYPE_UNIT) {
+        float age = getUnitAge(raw);
+        float ageRatio = age / MAX_AGE;  // 0 = fresh, 1 = about to die
+        
+        vec3 baseColor;
         if (getUnitHolding(raw)) {
-            color = vec3(0.3, 0.9, 0.4);  // Green = carrying
+            baseColor = vec3(0.3, 0.9, 0.4);  // Green = carrying
         } else {
-            color = vec3(0.2, 0.7, 0.9);  // Cyan = searching
+            baseColor = vec3(0.2, 0.7, 0.9);  // Cyan = searching
+        }
+        
+        // Age effect: fade to darker as unit gets older
+        float fadeStart = 0.3;  // Start fading at 30% age
+        float deathFlashStart = 0.9;  // Flash starts at 90% age
+        
+        if (ageRatio < fadeStart) {
+            // Young and healthy - full brightness
+            color = baseColor;
+        } else if (ageRatio < deathFlashStart) {
+            // Aging - gradually darken
+            float fadeFactor = (ageRatio - fadeStart) / (deathFlashStart - fadeStart);
+            color = baseColor * (1.0 - fadeFactor * 0.7);  // Fade to 30% brightness
+        } else {
+            // Death flash - bright white burst then rapid fade
+            float deathProgress = (ageRatio - deathFlashStart) / (1.0 - deathFlashStart);
+            if (deathProgress < 0.3) {
+                // White flash
+                float flashIntensity = deathProgress / 0.3;
+                color = mix(baseColor * 0.3, vec3(1.0, 1.0, 1.0), flashIntensity);
+            } else {
+                // Rapid fade out
+                float fadeOut = (deathProgress - 0.3) / 0.7;
+                color = mix(vec3(1.0, 1.0, 1.0), vec3(0.05), fadeOut);
+            }
         }
     }
     else if (cellType == TYPE_FACTORY) {

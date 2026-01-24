@@ -79,17 +79,22 @@ vec4 createResource(float amount) {
 
 // ============================================================================
 // MINING UNIT (with bit-packed locations)
-// G = packed: holding (bit 0) + stationary_counter * 2 (bits 1+)
+// G = packed: holding (bit 0) + stationary_counter * 2 + age * 32
 //     holding: 0 = empty, 1 = carrying resource
-//     stationary_counter: how long stuck, or countdown when walking
-// B = packed factory location (x + y * 128)
-// A = packed: resource location + freshness * 16384, or -1 if none
-//     location: x + y * 128 (0-16383)
+//     stationary_counter: how long stuck (0-15)
+//     age: hunger/starvation counter (increments when empty-handed)
+// B = packed factory location (x + y * 256)
+// A = packed: resource location + freshness * 65536, or -1 if none
+//     location: x + y * 256 (0-65535)
 //     freshness: how fresh the memory is (decrements each step, 0 = expired)
 // ============================================================================
 
 // Threshold: after this many steps stuck, start walking
 const float STATIONARY_THRESHOLD = 8.0;
+
+// Age/starvation settings
+const float AGE_PACK_BASE = 32.0;  // Age starts at bit 5
+const float MAX_AGE = 500.0;       // Steps before unit dies from starvation
 
 // Memory freshness settings
 const float MEMORY_MAX_FRESHNESS = 30.0;  // Starts at this when mining
@@ -102,12 +107,21 @@ float getHoldingBit(vec4 cell) {
 }
 
 float getStationaryCounter(vec4 cell) {
-    return floor(cell.g / 2.0);
+    return mod(floor(cell.g / 2.0), 16.0);  // 4 bits for counter (0-15)
 }
 
-// Pack holding + counter into G
+float getUnitAge(vec4 cell) {
+    return floor(cell.g / AGE_PACK_BASE);
+}
+
+// Pack holding + counter + age into G
+float packHoldingCounterAge(float holding, float counter, float age) {
+    return floor(holding) + floor(counter) * 2.0 + floor(age) * AGE_PACK_BASE;
+}
+
+// Legacy function for backward compatibility
 float packHoldingAndCounter(float holding, float counter) {
-    return floor(holding) + floor(counter) * 2.0;
+    return packHoldingCounterAge(holding, counter, 0.0);
 }
 
 bool isHoldingResource(vec4 cell) {

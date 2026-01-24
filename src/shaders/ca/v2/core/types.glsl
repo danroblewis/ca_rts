@@ -80,19 +80,29 @@ vec4 encodeResource(float amount) {
 
 // ============================================================================
 // UNIT
-// G = holding (bit 0) + stationaryCounter * 2
+// G = holding (bit 0) + stationaryCounter * 2 + age * 32
+//     holding: 0 or 1
+//     counter: 0-15 (4 bits)
+//     age: 0-∞ (hunger/starvation counter)
 // B = packed factory location
 // A = packed resource memory with freshness, OR negative homesick timer
 //     A >= 0: has memory (packCoords + freshness * MEMORY_PACK_BASE)
 //     A < 0: no memory, homesick timer = -A - 1  (so -1 = timer 0, -2 = timer 1, etc)
 // ============================================================================
 
+const float AGE_PACK_BASE = 32.0;  // counter uses bits 1-4, age starts at bit 5
+const float MAX_AGE = 500.0;       // Steps before unit dies from starvation
+
 bool getUnitHolding(vec4 raw) {
     return mod(floor(raw.g), 2.0) > 0.5;
 }
 
 int getUnitCounter(vec4 raw) {
-    return int(floor(raw.g / 2.0));
+    return int(mod(floor(raw.g / 2.0), 16.0));  // 4 bits for counter (0-15)
+}
+
+float getUnitAge(vec4 raw) {
+    return floor(raw.g / AGE_PACK_BASE);
 }
 
 vec2 getUnitFactory(vec4 raw) {
@@ -119,8 +129,8 @@ float getUnitHomesickTimer(vec4 raw) {
 // Forward declare MemoryState struct (defined in memory.glsl)
 // We use raw components here to avoid circular dependency
 // homesickTimer is only used when freshness <= 0
-vec4 encodeUnitRaw(bool holding, int counter, vec2 factoryPos, vec2 memoryPos, float freshness, float homesickTimer) {
-    float g = (holding ? 1.0 : 0.0) + float(counter) * 2.0;
+vec4 encodeUnitRaw(bool holding, int counter, float age, vec2 factoryPos, vec2 memoryPos, float freshness, float homesickTimer) {
+    float g = (holding ? 1.0 : 0.0) + float(counter) * 2.0 + age * AGE_PACK_BASE;
     float b = packCoords(factoryPos);
     float a;
     if (freshness > 0.0 && memoryPos.x >= 0.0) {
@@ -134,7 +144,7 @@ vec4 encodeUnitRaw(bool holding, int counter, vec2 factoryPos, vec2 memoryPos, f
 }
 
 vec4 encodeUnitSimple(bool holding, int counter, vec2 factoryPos) {
-    return encodeUnitRaw(holding, counter, factoryPos, vec2(-1.0), 0.0, 0.0);
+    return encodeUnitRaw(holding, counter, 0.0, factoryPos, vec2(-1.0), 0.0, 0.0);
 }
 
 // ============================================================================
