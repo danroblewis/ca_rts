@@ -138,12 +138,25 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             newCounter = counter + 1;  // Increment toward threshold
         }
         
+        // Get factory position early for age calculation
+        vec2 factoryPos = getUnitFactory(myRaw);
+        
         // Age handling:
         // - If holding, don't age (carrying resource is productive)
-        // - If not holding, increment age (searching/starving)
+        // - If near factory, heal (reduce age)
+        // - If not holding and far from factory, increment age (starving)
         // - If age reaches MAX_AGE, unit dies!
         float newAge = age;
-        if (!holding) {
+        bool nearFactory = (factoryPos.x >= 0.0 && distance(myPos, factoryPos) <= FACTORY_SAFE_ZONE);
+        
+        if (holding) {
+            // Don't age while carrying resources
+            newAge = age;
+        } else if (nearFactory) {
+            // Heal while near factory - reduce age
+            newAge = max(0.0, age - 2.0);  // Heal twice as fast as starving
+        } else {
+            // Starving - increment age
             newAge = age + 1.0;
             if (newAge >= MAX_AGE) {
                 // Unit starved to death!
@@ -153,7 +166,6 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         
         // Only decay/evaluate memory when not holding
         MemoryState mem;
-        vec2 factoryPos = getUnitFactory(myRaw);
         
         // Check if our factory still exists - if not, forget it!
         // This handles deleted factories - unit becomes "homeless"

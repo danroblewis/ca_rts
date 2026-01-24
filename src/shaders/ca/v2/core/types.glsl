@@ -92,6 +92,7 @@ vec4 encodeResource(float amount) {
 
 const float AGE_PACK_BASE = 32.0;  // counter uses bits 1-4, age starts at bit 5
 const float MAX_AGE = 500.0;       // Steps before unit dies from starvation
+const float FACTORY_SAFE_ZONE = 10.0;  // Units within this distance of factory don't starve
 
 bool getUnitHolding(vec4 raw) {
     return mod(floor(raw.g), 2.0) > 0.5;

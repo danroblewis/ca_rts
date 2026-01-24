@@ -366,9 +366,21 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         bool holding = getUnitHolding(arrivingCell);
         float homesickTimer = getUnitHomesickTimer(arrivingCell);
         float age = getUnitAge(arrivingCell);
+        vec2 factoryPos = getUnitFactory(arrivingCell);
         
-        // Age handling: only age while not holding (searching/starving)
-        float newAge = holding ? age : (age + 1.0);
+        // Age handling:
+        // - If holding, don't age
+        // - If near factory, heal (reduce age)  
+        // - Otherwise, starve (increase age)
+        bool nearFactory = (factoryPos.x >= 0.0 && distance(destPos, factoryPos) <= FACTORY_SAFE_ZONE);
+        float newAge;
+        if (holding) {
+            newAge = age;
+        } else if (nearFactory) {
+            newAge = max(0.0, age - 2.0);  // Heal near factory
+        } else {
+            newAge = age + 1.0;  // Starving
+        }
         
         // Only decay memory while NOT holding - preserve memory on return trip
         MemoryState mem;
