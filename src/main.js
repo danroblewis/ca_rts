@@ -180,6 +180,9 @@ console.log(`  Click to place a mining factory!`);
 // Click to Place Factory
 // ============================================================================
 
+let factoriesPlaced = 0;
+const FIRST_FACTORY_RESOURCES = 30;  // Only first factory gets resources
+
 canvas.addEventListener('click', (event) => {
     // Convert screen coordinates to grid coordinates
     const rect = canvas.getBoundingClientRect();
@@ -202,15 +205,19 @@ canvas.addEventListener('click', (event) => {
     const currentData = grid.download();
     const idx = (y * GRID_SIZE + x) * 4;
     
-    // Place factory: type=3, resourceCount=10, selfX, selfY
+    // Only the first factory gets starting resources
+    const resourceCount = (factoriesPlaced === 0) ? FIRST_FACTORY_RESOURCES : 0;
+    
+    // Place factory: type=3, resourceCount, selfX, selfY
     currentData[idx + 0] = CELL_MINING_FACTORY;
-    currentData[idx + 1] = 50; // 10 resources
+    currentData[idx + 1] = resourceCount;
     currentData[idx + 2] = x;  // selfX
     currentData[idx + 3] = y;  // selfY
     
     grid.upload(currentData);
+    factoriesPlaced++;
     
-    console.log(`Placed factory at (${x}, ${y}) with 10 resources`);
+    console.log(`Placed factory #${factoriesPlaced} at (${x}, ${y}) with ${resourceCount} resources`);
 });
 
 // ============================================================================

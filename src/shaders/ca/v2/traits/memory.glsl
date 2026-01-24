@@ -106,6 +106,35 @@ SharedKnowledge findNearbyKnowledge(vec2 pos, sampler2D state, vec2 resolution) 
 }
 
 // ============================================================================
+// Helper: Find nearest visible factory
+// Returns factory position or (-1, -1) if none visible
+// ============================================================================
+
+vec2 findVisibleFactory(vec2 pos, sampler2D state, vec2 resolution) {
+    float nearestDist = 999.0;
+    vec2 nearestFactory = vec2(-1.0);
+    
+    for (int dy = -MEMORY_VISION_RANGE; dy <= MEMORY_VISION_RANGE; dy++) {
+        for (int dx = -MEMORY_VISION_RANGE; dx <= MEMORY_VISION_RANGE; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            vec2 checkPos = pos + vec2(float(dx), float(dy));
+            vec2 uv = (checkPos + 0.5) / resolution;
+            vec4 cell = texture(state, uv);
+            
+            if (getType(cell) == TYPE_FACTORY) {
+                float dist = abs(float(dx)) + abs(float(dy));
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestFactory = getFactoryPos(cell);
+                }
+            }
+        }
+    }
+    return nearestFactory;
+}
+
+// ============================================================================
 // Helper: Check if unit is adjacent to its factory
 // ============================================================================
 
@@ -172,6 +201,15 @@ MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution)
             result.factoryChanged = true;
             result.newFactoryPos = shared.factoryPos;
         }
+    }
+    
+    // 4.5. If a factory is visible, adopt it as home (regardless of current state)
+    //      This allows units to change allegiance to nearby factories
+    vec2 visibleFactory = findVisibleFactory(pos, state, resolution);
+    if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
+        // Found a visible factory that's different from current home
+        result.factoryChanged = true;
+        result.newFactoryPos = visibleFactory;
     }
     
     // 5. If still no memory and not holding, manage homesick timer
