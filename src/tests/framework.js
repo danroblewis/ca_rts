@@ -7,6 +7,16 @@ const testResults = []; // Track individual test pass/fail for visual summary
 let passed = 0;
 let failed = 0;
 let totalExpected = 0;
+let totalDuration = 0;
+
+/**
+ * Format duration in human-readable form
+ */
+function formatDuration(ms) {
+    if (ms < 1) return '<1ms';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+}
 
 /**
  * Set the expected total number of tests for progress display
@@ -60,14 +70,19 @@ export function assertArrayApprox(actual, expected, epsilon = 0.001, message = '
 
 export async function runTest(name, fn) {
     updateProgress(name);
+    const startTime = performance.now();
     try {
         await fn();
-        results.push({ type: 'pass', name });
-        testResults.push({ passed: true, name });
+        const duration = performance.now() - startTime;
+        totalDuration += duration;
+        results.push({ type: 'pass', name, duration });
+        testResults.push({ passed: true, name, duration });
         passed++;
     } catch (e) {
-        results.push({ type: 'fail', name, error: e.message });
-        testResults.push({ passed: false, name });
+        const duration = performance.now() - startTime;
+        totalDuration += duration;
+        results.push({ type: 'fail', name, error: e.message, duration });
+        testResults.push({ passed: false, name, duration });
         failed++;
     }
     updateProgress();
@@ -165,6 +180,7 @@ export function outputResults() {
             <span><span class="dot green"></span> ${passed} passed</span>
             <span><span class="dot red"></span> ${failed} failed</span>
             <span>${total} total</span>
+            <span>⏱ ${formatDuration(totalDuration)}</span>
         </div>
         ${failed > 0 ? `
         <div class="failing-list">
@@ -180,15 +196,15 @@ export function outputResults() {
         if (result.type === 'section') {
             detailedResults += `\n--- ${result.name} ---\n`;
         } else if (result.type === 'pass') {
-            detailedResults += `🟢 [PASS] ${result.name}\n`;
+            detailedResults += `🟢 [PASS] ${result.name} (${formatDuration(result.duration)})\n`;
         } else if (result.type === 'fail') {
-            detailedResults += `🔴 [FAIL] ${result.name}\n`;
+            detailedResults += `🔴 [FAIL] ${result.name} (${formatDuration(result.duration)})\n`;
             detailedResults += `         ${result.error}\n`;
         }
     }
     
     // Final summary line
-    const finalSummary = `\n${'═'.repeat(50)}\nTests: ${passed} passed, ${failed} failed, ${total} total\n`;
+    const finalSummary = `\n${'═'.repeat(50)}\nTests: ${passed} passed, ${failed} failed, ${total} total in ${formatDuration(totalDuration)}\n`;
     
     // Insert summary div before output, set output content
     output.parentNode.insertBefore(summaryDiv, output);
