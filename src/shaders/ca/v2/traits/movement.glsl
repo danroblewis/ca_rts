@@ -216,8 +216,15 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
             vec4 targetRaw = texture(state, (targetPos + 0.5) / resolution);
             int targetType = getType(targetRaw);
             
-            // Can only move to empty or minable
-            if (targetType == TYPE_EMPTY || isMinable(targetType)) {
+            // Check if this unit can move to the target
+            // - Units can always move to empty cells
+            // - Only NON-holding units can mine (move into minable cells)
+            bool canMoveToTarget = (targetType == TYPE_EMPTY);
+            if (myType == TYPE_UNIT && !getUnitHolding(myRaw) && isMinable(targetType)) {
+                canMoveToTarget = true;  // Empty-handed unit can mine
+            }
+            
+            if (canMoveToTarget) {
                 // Check for collisions - am I the winner?
                 bool iWin = true;
                 float myPriority = getPriority(myPos, resolution);
@@ -262,8 +269,16 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
         for (int d = 1; d <= 4; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+            int neighborType = getType(neighborRaw);
             
-            if (!isMobile(getType(neighborRaw))) continue;
+            if (!isMobile(neighborType)) continue;
+            
+            // If I'm a minable resource, only empty-handed units can mine me
+            if (isMinable(myType)) {
+                if (neighborType != TYPE_UNIT || getUnitHolding(neighborRaw)) {
+                    continue;  // Holding units can't mine
+                }
+            }
             
             int theirDir = getMobileDirection(neighborPos, neighborRaw, time, state, resolution);
             
