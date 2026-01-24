@@ -38,11 +38,22 @@ int getType(vec4 raw) {
 // Coordinate Packing (for 128x128 grids)
 // ============================================================================
 
+// Special sentinel value for invalid/no coordinates
+const float INVALID_PACKED_COORDS = -1.0;
+
 float packCoords(vec2 pos) {
+    // Handle invalid coordinates (negative values mean "no position")
+    if (pos.x < 0.0 || pos.y < 0.0) {
+        return INVALID_PACKED_COORDS;
+    }
     return floor(pos.x) + floor(pos.y) * COORD_PACK_BASE;
 }
 
 vec2 unpackCoords(float packed) {
+    // Handle invalid packed value
+    if (packed < 0.0) {
+        return vec2(-1.0);
+    }
     return vec2(mod(packed, COORD_PACK_BASE), floor(packed / COORD_PACK_BASE));
 }
 
