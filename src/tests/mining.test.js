@@ -29,6 +29,10 @@ const MEMORY_MAX_FRESHNESS = 200;  // Updated to match shader
 const MEMORY_SHARE_PENALTY = 5;
 const SPAWN_COST = 50;  // Updated to match shader
 const VISION_RANGE = 5;
+const MAX_AGE = 500;  // Steps before unit dies from starvation
+const FACTORY_SAFE_ZONE = 10;  // Units within this distance heal
+const AGE_PACK_BASE = 32;  // Age packing base in G channel
+const MAX_WANDER_DISTANCE = 100;  // Units return when exceeding this
 
 // Grid size for tests
 const TEST_GRID_SIZE = 16;
@@ -51,15 +55,26 @@ function unpackCoords(packed) {
     };
 }
 
+function packHoldingCounterAge(holding, counter, age = 0) {
+    return Math.floor(holding) + Math.floor(counter) * 2 + Math.floor(age) * AGE_PACK_BASE;
+}
+
+// Legacy wrapper for backwards compatibility
 function packHoldingAndCounter(holding, counter) {
-    return Math.floor(holding) + Math.floor(counter) * 2;
+    return packHoldingCounterAge(holding, counter, 0);
+}
+
+function unpackHoldingCounterAge(packed) {
+    return {
+        holding: packed % 2,
+        counter: Math.floor(packed / 2) % 16,  // 4 bits for counter
+        age: Math.floor(packed / AGE_PACK_BASE)
+    };
 }
 
 function unpackHoldingAndCounter(packed) {
-    return {
-        holding: packed % 2,
-        counter: Math.floor(packed / 2)
-    };
+    const result = unpackHoldingCounterAge(packed);
+    return { holding: result.holding, counter: result.counter };
 }
 
 // Memory packing (supports up to 256x256 grids)
@@ -93,13 +108,18 @@ function createResource(amount = 1) {
     return [CELL_RESOURCE, amount, 0, 0];
 }
 
-function createMiningUnit(holding, stationaryCounter, factoryX, factoryY, lastResourceX = -1, lastResourceY = -1, freshness = 0) {
-    const g = packHoldingAndCounter(holding ? 1 : 0, stationaryCounter);
+function createMiningUnit(holding, stationaryCounter, factoryX, factoryY, lastResourceX = -1, lastResourceY = -1, freshness = 0, age = 0) {
+    const g = packHoldingCounterAge(holding ? 1 : 0, stationaryCounter, age);
     const b = packCoords(factoryX, factoryY);
     const a = (freshness > 0 && lastResourceX >= 0) 
         ? packMemory(lastResourceX, lastResourceY, freshness)
         : -1;
     return [CELL_MINING_UNIT, g, b, a];
+}
+
+// Create unit with specific age (for testing aging)
+function createAgingUnit(holding, factoryX, factoryY, age) {
+    return createMiningUnit(holding, 0, factoryX, factoryY, -1, -1, 0, age);
 }
 
 function createMiningFactory(resources, selfX, selfY) {
@@ -124,7 +144,11 @@ function isHolding(cell) {
 }
 
 function getStationaryCounter(cell) {
-    return Math.floor(cell[1] / 2);
+    return Math.floor(cell[1] / 2) % 16;
+}
+
+function getUnitAge(cell) {
+    return Math.floor(cell[1] / AGE_PACK_BASE);
 }
 
 function getFactoryLocation(cell) {
@@ -969,6 +993,230 @@ export async function runMiningTests() {
         // Unit should still exist (not lost due to wall interactions)
         const finalUnits = sim.countCellType(result, CELL_MINING_UNIT);
         assert(finalUnits >= initialUnits, `Unit should not be lost (had ${initialUnits}, now ${finalUnits})`);
+        
+        sim.destroy();
+    });
+    
+    // ========================================================================
+    // UNIT AGING / STARVATION TESTS
+    // ========================================================================
+    
+    logSection('Mining Game - Unit Aging/Starvation');
+    
+    await runTest('Aging: unit age increases when empty-handed and away from factory', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory in corner, unit far away (no resources nearby)
+        sim.setCell(data, 0, 0, createMiningFactory(10, 0, 0));
+        sim.setCell(data, 10, 10, createMiningUnit(false, 0, 0, 0));  // Far from factory
+        sim.upload(data);
+        
+        // Run a few steps
+        sim.stepN(10);
+        const result = sim.download();
+        
+        // Find the unit and check its age
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    const age = getUnitAge(cell);
+                    assert(age > 0, `Unit age should increase when empty-handed (age: ${age})`);
+                }
+            }
+        }
+        
+        sim.destroy();
+    });
+    
+    await runTest('Aging: unit heals (age resets) when near factory', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory with aged unit nearby
+        sim.setCell(data, 8, 8, createMiningFactory(10, 8, 8));
+        sim.setCell(data, 8, 9, createAgingUnit(false, 8, 8, 100));  // Start with age 100
+        sim.upload(data);
+        
+        // Run a few steps
+        sim.stepN(5);
+        const result = sim.download();
+        
+        // Find the unit and check its age decreased
+        let foundUnit = false;
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    const age = getUnitAge(cell);
+                    assert(age < 100, `Unit near factory should heal (age: ${age}, started at 100)`);
+                    foundUnit = true;
+                }
+            }
+        }
+        assert(foundUnit, 'Unit should still exist');
+        
+        sim.destroy();
+    });
+    
+    await runTest('Aging: unit does not age while holding resource', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory far away, holding unit with some age
+        sim.setCell(data, 0, 0, createMiningFactory(10, 0, 0));
+        sim.setCell(data, 10, 10, createAgingUnit(true, 0, 0, 50));  // Holding, age 50
+        sim.upload(data);
+        
+        // Run a few steps
+        sim.stepN(10);
+        const result = sim.download();
+        
+        // Find the unit and check its age hasn't increased significantly
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    const age = getUnitAge(cell);
+                    // Age should be same or less (might heal if passed near factory)
+                    assert(age <= 50, `Holding unit should not age (age: ${age}, started at 50)`);
+                }
+            }
+        }
+        
+        sim.destroy();
+    });
+    
+    await runTest('Aging: unit dies when age reaches MAX_AGE', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory in corner, unit far away with age near max
+        sim.setCell(data, 0, 0, createMiningFactory(10, 0, 0));
+        sim.setCell(data, 10, 10, createAgingUnit(false, 0, 0, MAX_AGE - 5));  // Almost dead
+        sim.upload(data);
+        
+        // Count initial units
+        const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
+        assert(initialUnits === 1, 'Should start with 1 unit');
+        
+        // Run enough steps for unit to die
+        sim.stepN(20);
+        const result = sim.download();
+        
+        // Unit should be dead (no units)
+        const finalUnits = sim.countCellType(result, CELL_MINING_UNIT);
+        assert(finalUnits === 0, `Unit should die from starvation (units remaining: ${finalUnits})`);
+        
+        sim.destroy();
+    });
+    
+    await runTest('Aging: age resets when mining a resource', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Aged unit next to resource
+        sim.setCell(data, 5, 5, createMiningFactory(10, 5, 5));
+        sim.setCell(data, 7, 7, createAgingUnit(false, 5, 5, 200));  // Old unit
+        sim.setCell(data, 7, 8, createResource());  // Resource nearby
+        sim.upload(data);
+        
+        // Run enough for unit to find and mine resource
+        sim.stepN(20);
+        const result = sim.download();
+        
+        // Find holding unit and check age reset
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT && isHolding(cell)) {
+                    const age = getUnitAge(cell);
+                    assert(age < 50, `Age should reset after mining (age: ${age})`);
+                }
+            }
+        }
+        
+        sim.destroy();
+    });
+    
+    // ========================================================================
+    // HOLDING UNITS CAN'T MINE TESTS
+    // ========================================================================
+    
+    logSection('Mining Game - Holding Units Cannot Mine');
+    
+    await runTest('Holding unit cannot mine additional resources', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory, holding unit surrounded by resources
+        sim.setCell(data, 8, 8, createMiningFactory(10, 8, 8));
+        sim.setCell(data, 5, 5, createMiningUnit(true, 0, 8, 8));  // Already holding
+        // Resources around the unit
+        sim.setCell(data, 4, 5, createResource());
+        sim.setCell(data, 6, 5, createResource());
+        sim.setCell(data, 5, 4, createResource());
+        sim.setCell(data, 5, 6, createResource());
+        sim.upload(data);
+        
+        // Count initial resources
+        const initialResources = sim.countCellType(data, CELL_RESOURCE);
+        
+        // Run simulation
+        sim.stepN(20);
+        const result = sim.download();
+        
+        // Resources should still exist (holding unit can't mine them)
+        const finalResources = sim.countCellType(result, CELL_RESOURCE);
+        assert(finalResources === initialResources, 
+            `Holding unit should not mine resources (had ${initialResources}, now ${finalResources})`);
+        
+        sim.destroy();
+    });
+    
+    // ========================================================================
+    // FACTORY ADOPTION TESTS  
+    // ========================================================================
+    
+    logSection('Mining Game - Factory Adoption');
+    
+    await runTest('Unit adopts visible factory when it has none', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory
+        sim.setCell(data, 8, 8, createMiningFactory(10, 8, 8));
+        // Unit with no factory (invalid coords)
+        const homeless = createMiningUnit(false, 0, -1, -1);
+        // Need to create with negative packed coords - use packCoords behavior
+        // Actually, let's place unit near factory so it will adopt it
+        sim.setCell(data, 8, 10, homeless);  // Within VISION_RANGE of factory
+        sim.upload(data);
+        
+        // Run simulation
+        sim.stepN(5);
+        const result = sim.download();
+        
+        // Find unit and check it now has a factory
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    const factory = getFactoryLocation(cell);
+                    // Unit should have adopted the factory
+                    assert(factory.x >= 0 && factory.y >= 0, 
+                        `Unit should adopt visible factory (factory: ${factory.x},${factory.y})`);
+                }
+            }
+        }
         
         sim.destroy();
     });
