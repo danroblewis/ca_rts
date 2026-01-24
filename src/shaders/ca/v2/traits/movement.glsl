@@ -22,6 +22,7 @@
 
 const int VISION_RANGE = 5;
 const float STATIONARY_THRESHOLD = 8.0;
+const float MAX_WANDER_DISTANCE = 60.0;  // Max distance from factory before returning
 
 // ============================================================================
 // Movement Result - what happened in the local region
@@ -156,6 +157,11 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     
     // Homesick with home = go to factory (wandered too long without finding anything)
     if (homesick) {
+        return dirToward(pos, factoryPos, time + pos.x * 0.1);
+    }
+    
+    // Too far from home = return to factory (don't wander off the map!)
+    if (hasHome && distance(pos, factoryPos) > MAX_WANDER_DISTANCE) {
         return dirToward(pos, factoryPos, time + pos.x * 0.1);
     }
     
