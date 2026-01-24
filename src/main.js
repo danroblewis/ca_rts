@@ -177,47 +177,123 @@ console.log(`  ${totalWalls} walls placed`);
 console.log(`  Click to place a mining factory!`);
 
 // ============================================================================
-// Click to Place Factory
+// Click to Place Factory / Shift+Click to Delete
 // ============================================================================
 
 let factoriesPlaced = 0;
-const FIRST_FACTORY_RESOURCES = 30;  // Only first factory gets resources
+const FIRST_FACTORY_RESOURCES = 50;  // Only first factory gets resources
+const DELETE_RADIUS = 5;  // Radius in grid cells for delete operation
 
-canvas.addEventListener('click', (event) => {
-    // Convert screen coordinates to grid coordinates
+// Cursor overlay for delete mode
+const cursorOverlay = document.getElementById('cursor-overlay');
+let mouseX = 0;
+let mouseY = 0;
+let shiftHeld = false;
+
+// Convert screen coords to grid coords
+function screenToGrid(screenX, screenY) {
     const rect = canvas.getBoundingClientRect();
-    const screenX = event.clientX - rect.left;
-    const screenY = event.clientY - rect.top;
-    
-    // Canvas might be stretched - normalize to 0-1, then to grid
-    const normalizedX = screenX / rect.width;
-    const normalizedY = screenY / rect.height;
-    
-    // Grid Y is inverted (0 at bottom in WebGL, 0 at top in screen)
+    const normalizedX = (screenX - rect.left) / rect.width;
+    const normalizedY = (screenY - rect.top) / rect.height;
     const gridX = Math.floor(normalizedX * GRID_SIZE);
     const gridY = Math.floor((1 - normalizedY) * GRID_SIZE);
-    
-    // Clamp to grid bounds
-    const x = Math.max(0, Math.min(GRID_SIZE - 1, gridX));
-    const y = Math.max(0, Math.min(GRID_SIZE - 1, gridY));
-    
-    // Read current grid state, modify, and upload
+    return {
+        x: Math.max(0, Math.min(GRID_SIZE - 1, gridX)),
+        y: Math.max(0, Math.min(GRID_SIZE - 1, gridY))
+    };
+}
+
+// Update cursor overlay position and visibility
+function updateCursorOverlay() {
+    if (shiftHeld) {
+        const rect = canvas.getBoundingClientRect();
+        // Calculate the size of the delete area in screen pixels
+        const cellSizeX = rect.width / GRID_SIZE;
+        const cellSizeY = rect.height / GRID_SIZE;
+        const sizeX = DELETE_RADIUS * 2 * cellSizeX;
+        const sizeY = DELETE_RADIUS * 2 * cellSizeY;
+        
+        cursorOverlay.style.display = 'block';
+        cursorOverlay.style.left = `${mouseX - sizeX / 2}px`;
+        cursorOverlay.style.top = `${mouseY - sizeY / 2}px`;
+        cursorOverlay.style.width = `${sizeX}px`;
+        cursorOverlay.style.height = `${sizeY}px`;
+    } else {
+        cursorOverlay.style.display = 'none';
+    }
+}
+
+// Track mouse movement
+canvas.addEventListener('mousemove', (event) => {
+    mouseX = event.clientX;
+    mouseY = event.clientY;
+    updateCursorOverlay();
+});
+
+// Track shift key
+window.addEventListener('keydown', (event) => {
+    if (event.key === 'Shift') {
+        shiftHeld = true;
+        updateCursorOverlay();
+    }
+});
+
+window.addEventListener('keyup', (event) => {
+    if (event.key === 'Shift') {
+        shiftHeld = false;
+        updateCursorOverlay();
+    }
+});
+
+canvas.addEventListener('click', (event) => {
+    const gridPos = screenToGrid(event.clientX, event.clientY);
     const currentData = grid.download();
-    const idx = (y * GRID_SIZE + x) * 4;
     
-    // Only the first factory gets starting resources
-    const resourceCount = (factoriesPlaced === 0) ? FIRST_FACTORY_RESOURCES : 0;
-    
-    // Place factory: type=3, resourceCount, selfX, selfY
-    currentData[idx + 0] = CELL_MINING_FACTORY;
-    currentData[idx + 1] = resourceCount;
-    currentData[idx + 2] = x;  // selfX
-    currentData[idx + 3] = y;  // selfY
-    
-    grid.upload(currentData);
-    factoriesPlaced++;
-    
-    console.log(`Placed factory #${factoriesPlaced} at (${x}, ${y}) with ${resourceCount} resources`);
+    if (event.shiftKey) {
+        // SHIFT+CLICK: Delete factories in rectangle
+        let deletedCount = 0;
+        
+        for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
+            for (let dx = -DELETE_RADIUS; dx <= DELETE_RADIUS; dx++) {
+                const x = gridPos.x + dx;
+                const y = gridPos.y + dy;
+                
+                if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) continue;
+                
+                const idx = (y * GRID_SIZE + x) * 4;
+                if (currentData[idx] === CELL_MINING_FACTORY) {
+                    // Clear the cell (set to empty)
+                    currentData[idx + 0] = CELL_EMPTY;
+                    currentData[idx + 1] = 0;
+                    currentData[idx + 2] = 0;
+                    currentData[idx + 3] = 0;
+                    deletedCount++;
+                }
+            }
+        }
+        
+        grid.upload(currentData);
+        if (deletedCount > 0) {
+            console.log(`Deleted ${deletedCount} factory(ies) around (${gridPos.x}, ${gridPos.y})`);
+        }
+    } else {
+        // NORMAL CLICK: Place factory
+        const idx = (gridPos.y * GRID_SIZE + gridPos.x) * 4;
+        
+        // Only the first factory gets starting resources
+        const resourceCount = (factoriesPlaced === 0) ? FIRST_FACTORY_RESOURCES : 0;
+        
+        // Place factory: type=3, resourceCount, selfX, selfY
+        currentData[idx + 0] = CELL_MINING_FACTORY;
+        currentData[idx + 1] = resourceCount;
+        currentData[idx + 2] = gridPos.x;  // selfX
+        currentData[idx + 3] = gridPos.y;  // selfY
+        
+        grid.upload(currentData);
+        factoriesPlaced++;
+        
+        console.log(`Placed factory #${factoriesPlaced} at (${gridPos.x}, ${gridPos.y}) with ${resourceCount} resources`);
+    }
 });
 
 // ============================================================================

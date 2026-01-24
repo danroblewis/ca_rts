@@ -21,10 +21,20 @@
             width: 100%;
             height: 100%;
         }
+        #cursor-overlay {
+            position: fixed;
+            pointer-events: none;
+            border: 2px solid rgba(255, 80, 80, 0.8);
+            background: rgba(255, 50, 50, 0.15);
+            box-shadow: 0 0 10px rgba(255, 80, 80, 0.5);
+            display: none;
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
+    <div id="cursor-overlay"></div>
     
     <script type="module" src="src/main.js"></script>
 </body>
