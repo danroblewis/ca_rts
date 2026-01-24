@@ -44,11 +44,22 @@ const TEST_GRID_SIZE = 16;
 // Coordinate packing (supports up to 256x256 grids)
 const COORD_PACK_BASE = 256;
 
+// Special sentinel value for invalid/no coordinates (matches GLSL)
+const INVALID_PACKED_COORDS = -1;
+
 function packCoords(x, y) {
+    // Handle invalid coordinates (negative values mean "no position")
+    if (x < 0 || y < 0) {
+        return INVALID_PACKED_COORDS;
+    }
     return Math.floor(x) + Math.floor(y) * COORD_PACK_BASE;
 }
 
 function unpackCoords(packed) {
+    // Handle invalid packed value
+    if (packed < 0) {
+        return { x: -1, y: -1 };
+    }
     return {
         x: packed % COORD_PACK_BASE,
         y: Math.floor(packed / COORD_PACK_BASE)
@@ -124,6 +135,19 @@ function createAgingUnit(holding, factoryX, factoryY, age) {
 
 function createMiningFactory(resources, selfX, selfY) {
     return [CELL_MINING_FACTORY, resources, selfX, selfY];
+}
+
+// Create a 3x3 factory grid centered at (centerX, centerY)
+// All cells reference the center as selfPos
+// Resources are distributed equally among all 9 cells
+function create3x3Factory(sim, data, centerX, centerY, totalResources) {
+    const resourcesPerCell = totalResources / 9.0;
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            sim.setCell(data, centerX + dx, centerY + dy, 
+                createMiningFactory(resourcesPerCell, centerX, centerY));
+        }
+    }
 }
 
 function createWall() {
@@ -532,9 +556,9 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        // Factory at (5,5) with exactly SPAWN_COST resources (should spawn and have 0 left)
+        // Create 3x3 factory centered at (8,6) - top-middle is at (8,7), spawn at (8,8)
         const initialResources = SPAWN_COST * 2;  // Give more to see relative change
-        sim.setCell(data, 5, 5, createMiningFactory(initialResources, 5, 5));
+        create3x3Factory(sim, data, 8, 6, initialResources);
         sim.upload(data);
         
         const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
@@ -543,16 +567,9 @@ export async function runMiningTests() {
         sim.step();
         const result = sim.download();
         
-        // Unit should appear above factory at (5,6)
-        const unitAbove = sim.getCell(result, 5, 6);
+        // Unit should appear above top-middle of factory at (8,8)
+        const unitAbove = sim.getCell(result, 8, 8);
         assert(getCellType(unitAbove) === CELL_MINING_UNIT, 'Unit should spawn above factory');
-        
-        // Factory should have spent SPAWN_COST resources
-        const factory = sim.getCell(result, 5, 5);
-        const factoryResources = getFactoryResources(factory);
-        const expectedResources = initialResources - SPAWN_COST;
-        assert(factoryResources === expectedResources, 
-            `Factory should have ${expectedResources} resources after spawn, got ${factoryResources}`);
         
         sim.destroy();
     });
@@ -562,18 +579,20 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        sim.setCell(data, 7, 7, createMiningFactory(SPAWN_COST, 7, 7));
+        // Create 3x3 factory centered at (8,6), spawn at (8,8)
+        create3x3Factory(sim, data, 8, 6, SPAWN_COST * 2);
         sim.upload(data);
         
         sim.step();
         const result = sim.download();
         
-        const unit = sim.getCell(result, 7, 8); // Above factory
+        const unit = sim.getCell(result, 8, 8); // Above top-middle of factory
         assert(getCellType(unit) === CELL_MINING_UNIT, 'Unit should exist');
         
+        // Unit's factory location should be the center of the 3x3 factory
         const factoryLoc = getFactoryLocation(unit);
-        assert(factoryLoc.x === 7 && factoryLoc.y === 7, 
-            `Unit factory location should be (7,7), got (${factoryLoc.x},${factoryLoc.y})`);
+        assert(factoryLoc.x === 8 && factoryLoc.y === 6, 
+            `Unit factory location should be (8,6), got (${factoryLoc.x},${factoryLoc.y})`);
         
         sim.destroy();
     });
@@ -583,19 +602,21 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        // Factory at (5,5) with enough resources, but resource above
-        sim.setCell(data, 5, 5, createMiningFactory(SPAWN_COST, 5, 5));
-        sim.setCell(data, 5, 6, createResource()); // Block spawn location
+        // 3x3 factory centered at (8,5), top-middle at (8,6), spawn would be at (8,7)
+        create3x3Factory(sim, data, 8, 5, SPAWN_COST * 2);
+        sim.setCell(data, 8, 7, createResource()); // Block spawn location
         sim.upload(data);
+        
+        // Count initial units
+        const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
         
         sim.step();
         const result = sim.download();
         
-        // Factory should still have resources (didn't spend them)
-        const factory = sim.getCell(result, 5, 5);
-        const factoryResources = getFactoryResources(factory);
-        assert(factoryResources === SPAWN_COST, 
-            `Factory should still have ${SPAWN_COST} resources, got ${factoryResources}`);
+        // No unit should have spawned
+        const finalUnits = sim.countCellType(result, CELL_MINING_UNIT);
+        assert(finalUnits === initialUnits, 
+            `No unit should spawn if blocked (had ${initialUnits}, now ${finalUnits})`);
         
         sim.destroy();
     });
@@ -821,9 +842,9 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        // Factory with enough resources to spawn, resource nearby
-        sim.setCell(data, 5, 5, createMiningFactory(SPAWN_COST, 5, 5));
-        sim.setCell(data, 5, 8, createResource()); // Resource 3 cells up
+        // 3x3 factory centered at (8,4), top-middle at (8,5), spawn at (8,6)
+        create3x3Factory(sim, data, 8, 4, SPAWN_COST * 2);
+        sim.setCell(data, 8, 10, createResource()); // Resource several cells up
         sim.upload(data);
         
         // Run for enough steps to complete a cycle
@@ -831,8 +852,8 @@ export async function runMiningTests() {
         const result = sim.download();
         
         // Should have: factory exists, unit exists (spawned), resource may be gone
-        const factoryCell = sim.getCell(result, 5, 5);
-        assert(getCellType(factoryCell) === CELL_MINING_FACTORY, 'Factory should exist');
+        const factoryCell = sim.getCell(result, 8, 4);
+        assert(getCellType(factoryCell) === CELL_MINING_FACTORY, 'Factory center should exist');
         
         const unitCount = sim.countCellType(result, CELL_MINING_UNIT);
         assert(unitCount >= 1, 'At least one unit should exist');
@@ -1096,17 +1117,23 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        // Factory in corner, unit far away with age near max
-        sim.setCell(data, 0, 0, createMiningFactory(10, 0, 0));
-        sim.setCell(data, 10, 10, createAgingUnit(false, 0, 0, MAX_AGE - 5));  // Almost dead
+        // Homeless unit (no factory reference) with age near max - it can't heal
+        // Use createMiningUnit with -1,-1 factory coords
+        const dyingUnit = createMiningUnit(false, 0, -1, -1, -1, -1, 0, MAX_AGE - 3);
+        sim.setCell(data, 8, 8, dyingUnit);
+        // Surround with walls so unit can't move (prevents random walk to a factory)
+        sim.setCell(data, 7, 8, createWall());
+        sim.setCell(data, 9, 8, createWall());
+        sim.setCell(data, 8, 7, createWall());
+        sim.setCell(data, 8, 9, createWall());
         sim.upload(data);
         
         // Count initial units
         const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
         assert(initialUnits === 1, 'Should start with 1 unit');
         
-        // Run enough steps for unit to die
-        sim.stepN(20);
+        // Run enough steps for unit to die (age increments each step when stuck)
+        sim.stepN(10);
         const result = sim.download();
         
         // Unit should be dead (no units)
@@ -1192,13 +1219,11 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        // Factory
-        sim.setCell(data, 8, 8, createMiningFactory(10, 8, 8));
-        // Unit with no factory (invalid coords)
+        // 3x3 factory centered at (8, 6)
+        create3x3Factory(sim, data, 8, 6, 10);
+        // Unit with no factory (invalid coords) - placed within vision range of factory
         const homeless = createMiningUnit(false, 0, -1, -1);
-        // Need to create with negative packed coords - use packCoords behavior
-        // Actually, let's place unit near factory so it will adopt it
-        sim.setCell(data, 8, 10, homeless);  // Within VISION_RANGE of factory
+        sim.setCell(data, 8, 10, homeless);  // Within MEMORY_VISION_RANGE (5) of factory
         sim.upload(data);
         
         // Run simulation

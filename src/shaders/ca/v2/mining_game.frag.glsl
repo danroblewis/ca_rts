@@ -62,7 +62,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         
         // Am I the destination? (I receive the arriving cell)
         if (distance(movement.toPos, myPos) < 0.5) {
-            return transformArrival(movement.arrivingCell, myRaw, myPos);
+            return transformArrival(movement.arrivingCell, myRaw, myPos, u_state, u_resolution);
         }
     }
     

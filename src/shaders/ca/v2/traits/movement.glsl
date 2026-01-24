@@ -332,7 +332,7 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
 // Uses Memory trait for memory state management
 // ============================================================================
 
-vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
+vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sampler2D state, vec2 resolution) {
     int arrivingType = getType(arrivingCell);
     int destType = getType(destinationCell);
     
@@ -343,11 +343,19 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
             // Mine the resource! Create fresh memory of this location
             // Also resets homesick timer (createFreshMemory sets it to 0)
             MemoryState mem = createFreshMemory(destPos);
+            
+            // Check for factory adoption (homeless units can adopt visible factories)
+            vec2 factoryPos = getUnitFactory(arrivingCell);
+            vec2 visibleFactory = findVisibleFactory(destPos, state, resolution);
+            if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
+                factoryPos = visibleFactory;
+            }
+            
             return encodeUnit(
                 true,  // now holding
                 0,     // reset counter
                 0.0,   // reset age (just mined successfully!)
-                getUnitFactory(arrivingCell),
+                factoryPos,
                 mem
             );
         }
@@ -367,6 +375,12 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
         float homesickTimer = getUnitHomesickTimer(arrivingCell);
         float age = getUnitAge(arrivingCell);
         vec2 factoryPos = getUnitFactory(arrivingCell);
+        
+        // Check for factory adoption - homeless or different visible factory
+        vec2 visibleFactory = findVisibleFactory(destPos, state, resolution);
+        if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
+            factoryPos = visibleFactory;
+        }
         
         // Age handling:
         // - If holding, don't age
@@ -411,7 +425,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos) {
             holding,
             newCounter,
             newAge,
-            getUnitFactory(arrivingCell),
+            factoryPos,
             mem
         );
     }
