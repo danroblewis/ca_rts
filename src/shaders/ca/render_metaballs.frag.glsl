@@ -32,14 +32,15 @@ float calcDensity(vec2 uv, float targetType) {
     return density;
 }
 
-// Calculate unit density with holding info
+// Calculate unit density with holding info - larger radius for more blobby units
 vec2 calcUnitDensity(vec2 uv) {
     vec2 texelSize = 1.0 / u_resolution;
     float emptyDensity = 0.0;
     float holdingDensity = 0.0;
     
-    for (int dy = -2; dy <= 2; dy++) {
-        for (int dx = -2; dx <= 2; dx++) {
+    // Larger 9x9 sampling area for units (they're often several pixels apart)
+    for (int dy = -4; dy <= 4; dy++) {
+        for (int dx = -4; dx <= 4; dx++) {
             vec2 offset = vec2(float(dx), float(dy));
             vec4 cellSample = texture(u_state, uv + offset * texelSize);
             
