@@ -83,7 +83,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             // Also count any deposits happening this frame
             int deposits = countDeposits(myPos, getFactoryPos(myRaw), spawning.player, u_state, u_resolution);
             newResources += float(deposits);
-            return encodeFactory(max(0.0, newResources), getFactoryPos(myRaw));
+            return encodeFactory(max(0.0, newResources), getFactoryPos(myRaw), spawning.player);
         }
     }
     
@@ -120,7 +120,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
                 newResources -= SPAWN_COST;
             }
             
-            return encodeFactory(newResources, getFactoryPos(myRaw));
+            return encodeFactory(newResources, getFactoryPos(myRaw), factoryPlayer);
         }
     }
     
@@ -151,11 +151,12 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             int builds = countBuilds(myPos, u_state, u_resolution);
             float newBuildProgress = min(getFactoryBuildProgress(myRaw) + float(builds), MAX_BUILD_PER_CELL);
             vec2 center = getFactoryPos(myRaw);
+            int factoryPlayer = getPlayer(myType);
             
             // Update this cell's build progress
             // Note: The factory remains TYPE_FACTORY, just with updated G value
             // The "built" status is determined by summing all cells' G values
-            return encodeUnbuiltFactory(newBuildProgress, center);
+            return encodeUnbuiltFactory(newBuildProgress, center, factoryPlayer);
         }
     }
     
@@ -281,7 +282,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         int myPlayer = getPlayer(myType);
         int deposits = countDeposits(myPos, getFactoryPos(myRaw), myPlayer, u_state, u_resolution);
         float newResources = getFactoryResources(myRaw) + float(deposits);
-        return encodeFactory(newResources, getFactoryPos(myRaw));
+        return encodeFactory(newResources, getFactoryPos(myRaw), myPlayer);
     }
     
     // Note: Factories (both built and unbuilt) are handled above in the FACTORY case

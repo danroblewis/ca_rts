@@ -159,11 +159,150 @@ vec3 calcUnitDensityWithAge(vec2 uv) {
     return vec3(p1.x + p2.x, p1.y + p2.y, max(p1.z, p2.z));
 }
 
-// Smooth noise for texture
+// ============================================
+// PROCEDURAL NOISE FUNCTIONS FOR ROCK TEXTURE
+// ============================================
+
+// Fast hash functions
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 hash2(vec2 p) {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453);
+}
+
+// Gradient noise (Perlin-like)
+float gradientNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    
+    // Quintic interpolation for smoother derivatives
+    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Fractional Brownian Motion - layered noise for rock texture detail
+float fbm(vec2 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    float totalAmplitude = 0.0;
+    
+    for (int i = 0; i < 6; i++) {
+        if (i >= octaves) break;
+        value += amplitude * gradientNoise(p * frequency);
+        totalAmplitude += amplitude;
+        frequency *= 2.0;
+        amplitude *= 0.5;
+    }
+    
+    return value / totalAmplitude;
+}
+
+// Voronoi noise - creates cell-like patterns for rock cracks and grain
+vec3 voronoi(vec2 p) {
+    vec2 n = floor(p);
+    vec2 f = fract(p);
+    
+    float minDist = 1.0;
+    float secondMinDist = 1.0;
+    vec2 minPoint = vec2(0.0);
+    
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 neighbor = vec2(float(i), float(j));
+            vec2 point = hash2(n + neighbor);
+            vec2 diff = neighbor + point - f;
+            float dist = length(diff);
+            
+            if (dist < minDist) {
+                secondMinDist = minDist;
+                minDist = dist;
+                minPoint = point;
+            } else if (dist < secondMinDist) {
+                secondMinDist = dist;
+            }
+        }
+    }
+    
+    // Return: minDist, edge distance (for cracks), cell id
+    float edgeDist = secondMinDist - minDist;
+    return vec3(minDist, edgeDist, hash(minPoint * 100.0));
+}
+
+// Domain warping - distorts coordinates for organic look
+vec2 warpDomain(vec2 p, float strength) {
+    float n1 = fbm(p, 3);
+    float n2 = fbm(p + vec2(5.2, 1.3), 3);
+    return p + vec2(n1, n2) * strength;
+}
+
+// ============================================
+// ROCK TEXTURE GENERATOR
+// ============================================
+// Combines multiple techniques:
+// - Voronoi for crack patterns and granularity
+// - FBM for surface variation
+// - Domain warping for organic irregularity
+// - Edge distortion for rough rock outlines
+
+struct RockTexture {
+    float brightness;    // Overall brightness/value
+    float roughness;     // Surface roughness (for edge treatment)
+    float cracks;        // Crack intensity
+    float grain;         // Fine grain detail
+};
+
+RockTexture calcRockTexture(vec2 uv, float scale) {
+    RockTexture rock;
+    
+    // Warp the domain for organic shape
+    vec2 warpedUV = warpDomain(uv * scale, 0.3);
+    
+    // Large-scale Voronoi for major rock structure
+    vec3 vor1 = voronoi(warpedUV * 2.0);
+    
+    // Medium-scale Voronoi for grain
+    vec3 vor2 = voronoi(warpedUV * 6.0);
+    
+    // Fine FBM for surface detail
+    float detail = fbm(warpedUV * 8.0, 4);
+    
+    // Combine for brightness - darker in cracks, lighter on faces
+    rock.brightness = 0.5 + 0.3 * vor1.x + 0.15 * vor2.x + 0.1 * detail;
+    
+    // Cracks are where voronoi edges meet (low edge distance)
+    rock.cracks = 1.0 - smoothstep(0.0, 0.15, vor1.y);
+    
+    // Roughness from FBM
+    rock.roughness = fbm(warpedUV * 4.0, 3);
+    
+    // Grain from smaller voronoi
+    rock.grain = vor2.z;
+    
+    return rock;
+}
+
+// Calculate rock edge - distorted metaball boundary for natural rock shape
+float calcRockEdge(vec2 uv, float baseDensity, float threshold, float scale) {
+    // Use noise to distort the threshold, creating irregular edges
+    vec2 warpedUV = warpDomain(uv * scale, 0.2);
+    float edgeNoise = fbm(warpedUV * 3.0, 3);
+    
+    // Vary the threshold based on noise - this creates jagged rock edges
+    float adjustedThreshold = threshold * (0.85 + edgeNoise * 0.3);
+    
+    return smoothstep(adjustedThreshold, adjustedThreshold + 1.5, baseDensity);
 }
 
 void main() {
@@ -221,21 +360,47 @@ void main() {
     float unitThreshold = 0.3;  // Low threshold so single units show as blobs
     float factoryThreshold = 1.0;
     
-    // Resources - golden blobs
-    if (resourceDensity > resourceThreshold) {
-        float blobStrength = smoothstep(resourceThreshold, resourceThreshold + 2.0, resourceDensity);
+    // Resources - ROCK TEXTURE with procedural detail
+    // Use irregular rock edge instead of smooth metaball
+    float rockEdge = calcRockEdge(v_uv, resourceDensity, resourceThreshold, 8.0);
+    
+    if (rockEdge > 0.01) {
+        // Calculate rock texture at this pixel
+        RockTexture rock = calcRockTexture(v_uv, 12.0);
         
-        // Rich gold color with subtle variation
-        float n = hash(floor(pixelPos * 0.3));
-        vec3 goldDark = vec3(0.65, 0.45, 0.08);
-        vec3 goldBright = vec3(1.0, 0.8, 0.25);
-        vec3 resourceColor = mix(goldDark, goldBright, blobStrength * 0.6 + n * 0.2);
+        // Base rock colors - gold/amber ore with stone undertones
+        vec3 stoneBase = vec3(0.35, 0.30, 0.22);     // Gray-brown stone
+        vec3 oreDark = vec3(0.55, 0.38, 0.12);       // Dark amber
+        vec3 oreMid = vec3(0.75, 0.55, 0.18);        // Medium gold
+        vec3 oreBright = vec3(0.95, 0.78, 0.28);     // Bright gold highlight
         
-        // Inner glow
-        float innerGlow = smoothstep(resourceThreshold, resourceThreshold + 4.0, resourceDensity);
-        resourceColor += vec3(0.2, 0.15, 0.0) * innerGlow;
+        // Mix stone and ore based on grain pattern
+        vec3 baseColor = mix(stoneBase, oreDark, rock.grain);
         
-        color = mix(color, resourceColor, blobStrength);
+        // Add brightness variation from rock texture
+        baseColor = mix(baseColor, oreMid, rock.brightness * 0.7);
+        
+        // Highlights on high points
+        float highlight = smoothstep(0.7, 0.9, rock.brightness);
+        baseColor = mix(baseColor, oreBright, highlight * 0.5);
+        
+        // Darken cracks significantly
+        baseColor *= 1.0 - rock.cracks * 0.6;
+        
+        // Add subtle color variation in the cracks (darker, more saturated)
+        vec3 crackColor = vec3(0.25, 0.15, 0.05);
+        baseColor = mix(baseColor, crackColor, rock.cracks * 0.4);
+        
+        // Depth shading - darker at edges using the rock edge value
+        float depthShade = smoothstep(0.0, 0.5, rockEdge);
+        baseColor *= 0.7 + depthShade * 0.3;
+        
+        // Very subtle inner glow for valuable ore look
+        float innerGlow = smoothstep(0.3, 0.8, rockEdge);
+        baseColor += vec3(0.08, 0.05, 0.0) * innerGlow;
+        
+        // Apply with rock edge as alpha (irregular boundary)
+        color = mix(color, baseColor, rockEdge);
     }
     
     // Mining units - different colors per player, with age-based fading
@@ -320,21 +485,37 @@ void main() {
         }
     }
     
-    // Walls - solid gray blocks
+    // Walls - ROCK TEXTURE stone blocks
     float wallDensity = calcDensity(v_uv, CELL_WALL);
-    if (wallDensity > 0.5) {
-        float blobStrength = smoothstep(0.5, 2.0, wallDensity);
+    float wallEdge = calcRockEdge(v_uv, wallDensity, 0.5, 6.0);
+    
+    if (wallEdge > 0.01) {
+        // Calculate rock texture for walls (different scale than ore)
+        RockTexture rock = calcRockTexture(v_uv, 8.0);
         
-        // Dark gray stone-like color
-        vec3 grayDark = vec3(0.25, 0.25, 0.28);
-        vec3 grayLight = vec3(0.45, 0.45, 0.5);
-        vec3 wallColor = mix(grayDark, grayLight, blobStrength * 0.5);
+        // Gray stone colors
+        vec3 stoneDark = vec3(0.18, 0.18, 0.20);
+        vec3 stoneMid = vec3(0.32, 0.32, 0.35);
+        vec3 stoneLight = vec3(0.48, 0.48, 0.52);
         
-        // Subtle variation using position
-        float n = fract(sin(dot(floor(v_uv * u_resolution), vec2(12.9898, 78.233))) * 43758.5453);
-        wallColor += vec3(0.05) * n - vec3(0.025);
+        // Base color from grain
+        vec3 wallColor = mix(stoneDark, stoneMid, rock.grain);
         
-        color = mix(color, wallColor, blobStrength * 0.95);
+        // Add brightness variation
+        wallColor = mix(wallColor, stoneLight, rock.brightness * 0.5);
+        
+        // Darken cracks
+        wallColor *= 1.0 - rock.cracks * 0.5;
+        
+        // Crack color (darker gray)
+        vec3 crackColor = vec3(0.08, 0.08, 0.10);
+        wallColor = mix(wallColor, crackColor, rock.cracks * 0.3);
+        
+        // Edge darkening
+        float depthShade = smoothstep(0.0, 0.4, wallEdge);
+        wallColor *= 0.75 + depthShade * 0.25;
+        
+        color = mix(color, wallColor, wallEdge * 0.95);
     }
     
     // Player 1 Built Factory - purple/magenta blob with energy glow

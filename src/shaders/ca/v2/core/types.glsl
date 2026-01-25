@@ -203,13 +203,15 @@ bool isFactoryBuilt(vec2 centerPos, sampler2D state, vec2 resolution) {
     return sumFactoryBuildProgress(centerPos, state, resolution) >= BUILD_THRESHOLD;
 }
 
-vec4 encodeFactory(float resources, vec2 selfPos) {
-    return vec4(float(TYPE_FACTORY), resources, selfPos.x, selfPos.y);
+vec4 encodeFactory(float resources, vec2 selfPos, int player) {
+    int factoryType = getFactoryTypeForPlayer(player);
+    return vec4(float(factoryType), resources, selfPos.x, selfPos.y);
 }
 
 // Encode an unbuilt factory cell (same encoding, just clearer intent)
-vec4 encodeUnbuiltFactory(float buildProgress, vec2 centerPos) {
-    return vec4(float(TYPE_FACTORY), min(buildProgress, MAX_BUILD_PER_CELL), centerPos.x, centerPos.y);
+vec4 encodeUnbuiltFactory(float buildProgress, vec2 centerPos, int player) {
+    int factoryType = getFactoryTypeForPlayer(player);
+    return vec4(float(factoryType), min(buildProgress, MAX_BUILD_PER_CELL), centerPos.x, centerPos.y);
 }
 
 // ============================================================================

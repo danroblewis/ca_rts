@@ -116,17 +116,14 @@ let renderShader = currentShaderMode === 'debug' ? debugRenderShader : metaballR
 // ============================================================================
 
 const shaderToggle = document.getElementById('shader-toggle');
-const labelMetaball = document.getElementById('label-metaball');
-const labelDebug = document.getElementById('label-debug');
+const labelPretty = document.getElementById('label-pretty');
 
 function updateToggleLabels() {
     if (currentShaderMode === 'debug') {
-        labelMetaball.classList.remove('active');
-        labelDebug.classList.add('active');
+        labelPretty.classList.remove('active');
         shaderToggle.checked = true;
     } else {
-        labelMetaball.classList.add('active');
-        labelDebug.classList.remove('active');
+        labelPretty.classList.add('active');
         shaderToggle.checked = false;
     }
 }
@@ -151,41 +148,10 @@ window.switchShader = switchShader;
 console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or switchShader('metaball') to change)`);
 
 // ============================================================================
-// Metaball Scale Slider Setup
+// Metaball Scale (fixed value)
 // ============================================================================
 
-let metaballScale = 1.0;
-
-const metaballScaleSlider = document.getElementById('metaball-scale');
-const metaballScaleValue = document.getElementById('metaball-scale-value');
-const metaballScaleContainer = document.getElementById('metaball-scale-container');
-
-function updateMetaballScaleDisplay() {
-    if (metaballScaleValue) {
-        metaballScaleValue.textContent = metaballScale.toFixed(1);
-    }
-    // Hide slider when in debug mode (it doesn't apply there)
-    if (metaballScaleContainer) {
-        metaballScaleContainer.style.display = currentShaderMode === 'debug' ? 'none' : 'flex';
-    }
-}
-
-if (metaballScaleSlider) {
-    metaballScaleSlider.addEventListener('input', (e) => {
-        metaballScale = parseFloat(e.target.value);
-        updateMetaballScaleDisplay();
-    });
-}
-
-// Update slider visibility when shader changes
-const originalSwitchShader = switchShader;
-switchShader = function(mode) {
-    originalSwitchShader(mode);
-    updateMetaballScaleDisplay();
-};
-
-// Initialize
-updateMetaballScaleDisplay();
+const metaballScale = 1.0;
 
 // ============================================================================
 // Initialize World
@@ -463,6 +429,29 @@ canvas.addEventListener('click', (event) => {
             return;
         }
         
+        // Check that all 8 cells (excluding center) are empty before placing
+        let canPlace = true;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;  // Skip center
+                const x = centerX + dx;
+                const y = centerY + dy;
+                const idx = (y * GRID_SIZE + x) * 4;
+                const cellType = currentData[idx];
+                // Only allow placement on empty cells (not resources, walls, units, or factories)
+                if (cellType !== CELL_EMPTY) {
+                    canPlace = false;
+                    break;
+                }
+            }
+            if (!canPlace) break;
+        }
+        
+        if (!canPlace) {
+            console.log('Cannot place factory - some cells are not empty');
+            return;
+        }
+        
         // First factory is built (has resources), subsequent are unbuilt (need construction)
         const isUnbuilt = factoriesPlaced > 0;
         const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
@@ -473,27 +462,20 @@ canvas.addEventListener('click', (event) => {
         // Place 3x3 grid of factory cells (center cell stays empty)
         // All cells store the center position
         // G channel = resources for built, or build progress (0) for unbuilt
-        let placed = 0;
+        // Place 8 factory cells (we already verified all are empty)
         for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
-                // Skip the center cell - it stays empty
-                if (dx === 0 && dy === 0) continue;
+                if (dx === 0 && dy === 0) continue;  // Skip center
                 
                 const x = centerX + dx;
                 const y = centerY + dy;
                 const idx = (y * GRID_SIZE + x) * 4;
                 
-                // Only place if cell is empty or resource (don't overwrite walls)
-                if (currentData[idx] === CELL_EMPTY || currentData[idx] === CELL_RESOURCE) {
-                    // Use factory type for current player
-                    // G = resources (built) or build progress (unbuilt)
-                    const factoryType = currentPlayer === PLAYER_2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
-                    currentData[idx + 0] = factoryType;
-                    currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;  // 0 = unbuilt, needs construction
-                    currentData[idx + 2] = centerX;
-                    currentData[idx + 3] = centerY;
-                    placed++;
-                }
+                const factoryType = currentPlayer === PLAYER_2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
+                currentData[idx + 0] = factoryType;
+                currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;
+                currentData[idx + 2] = centerX;
+                currentData[idx + 3] = centerY;
             }
         }
         
@@ -501,9 +483,9 @@ canvas.addEventListener('click', (event) => {
         factoriesPlaced++;
         
         if (isUnbuilt) {
-            console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) - needs 8 build points to activate (${placed} cells, center empty)`);
+            console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) - needs 8 build points to activate`);
         } else {
-            console.log(`Placed 3x3 factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) with ${totalResources} total resources (${placed} cells, center empty)`);
+            console.log(`Placed 3x3 factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) with ${totalResources} total resources`);
         }
         
         // Sync with network
@@ -677,6 +659,20 @@ function updateNetworkIndicator() {
         indicator.style.color = 'white';
         indicator.style.border = '2px solid rgba(120, 120, 120, 0.8)';
     }
+    
+    // Hide Super Speed toggle when in multiplayer (speed must be synced)
+    const speedToggleContainer = document.getElementById('speed-toggle-container');
+    if (speedToggleContainer) {
+        speedToggleContainer.style.display = isMultiplayer ? 'none' : 'flex';
+        
+        // Also force sync mode when in multiplayer
+        if (isMultiplayer && !SYNC_SIM_WITH_RENDER) {
+            SYNC_SIM_WITH_RENDER = true;
+            const toggle = document.getElementById('speed-toggle');
+            if (toggle) toggle.checked = false;
+            updateSpeedToggleDisplay();
+        }
+    }
 }
 
 async function toggleMultiplayer() {
@@ -726,18 +722,52 @@ let simTime = 0;
 const LOG_INTERVAL = 1000;
 const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
 
-// Toggle: true = sync with render (debug), false = fast as possible
+// Toggle: true = sync with render (normal speed), false = fast as possible (super speed)
 // Force sync mode when not on localhost (to avoid overloading remote servers)
-let SYNC_SIM_WITH_RENDER = !window.location.hostname.includes('localhost') || true;
+const isOnLocalhost = window.location.hostname.includes('localhost');
+let SYNC_SIM_WITH_RENDER = !isOnLocalhost || true;
 
-// Expose toggle to console for easy switching
-window.toggleSimSync = () => {
-    SYNC_SIM_WITH_RENDER = !SYNC_SIM_WITH_RENDER;
-    console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'}`);
-    if (!SYNC_SIM_WITH_RENDER) {
+// Super Speed Toggle UI
+const speedToggle = document.getElementById('speed-toggle');
+const speedLabel = document.getElementById('speed-label');
+const speedToggleContainer = document.getElementById('speed-toggle-container');
+
+function updateSpeedToggleUI() {
+    const superSpeedOn = !SYNC_SIM_WITH_RENDER;
+    if (speedToggle) speedToggle.checked = superSpeedOn;
+    if (speedLabel) {
+        speedLabel.classList.toggle('active', superSpeedOn);
+    }
+}
+
+function setSuperSpeed(enabled) {
+    const wasFast = !SYNC_SIM_WITH_RENDER;
+    SYNC_SIM_WITH_RENDER = !enabled;
+    updateSpeedToggleUI();
+    console.log(`Super Speed: ${enabled ? 'ON (fast as possible)' : 'OFF (synced with render)'}`);
+    if (!SYNC_SIM_WITH_RENDER && !wasFast) {
         // Start the fast loop when switching to fast mode
         fastSimulationLoop();
     }
+}
+
+if (speedToggle) {
+    speedToggle.addEventListener('change', (e) => {
+        setSuperSpeed(e.target.checked);
+    });
+}
+
+// Hide speed toggle on non-localhost (forced sync mode)
+if (!isOnLocalhost && speedToggleContainer) {
+    speedToggleContainer.style.display = 'none';
+}
+
+// Initialize UI state
+updateSpeedToggleUI();
+
+// Expose toggle to console for easy switching
+window.toggleSimSync = () => {
+    setSuperSpeed(SYNC_SIM_WITH_RENDER); // If currently synced, enable super speed (and vice versa)
 };
 console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
 
