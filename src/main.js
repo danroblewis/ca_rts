@@ -3,6 +3,8 @@ import { ComputeShader } from './gpu/ComputeShader.js';
 import { loadShader } from './shaders/load.js';
 import { CAGrid } from './ca/CAGrid.js';
 import { getNetworkSync } from './network/NetworkSync.js';
+import { AudioReductionPipeline } from './audio/AudioReductionPipeline.js';
+import { AudioEngine } from './audio/AudioEngine.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -189,6 +191,50 @@ console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or swi
 // Initialize World
 // ============================================================================
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
+
+// ============================================================================
+// Initialize Audio System
+// ============================================================================
+const audioReductionPipeline = new AudioReductionPipeline(GRID_SIZE, 4);
+const audioEngine = new AudioEngine();
+let audioInitialized = false;
+
+// Audio needs to be initialized after a user gesture
+async function initAudio() {
+    if (audioInitialized) return;
+    
+    try {
+        await audioReductionPipeline.init();
+        await audioEngine.init();
+        await audioEngine.resume();
+        audioInitialized = true;
+        console.log('[Audio] System initialized');
+        updateAudioButton();
+    } catch (e) {
+        console.error('[Audio] Failed to initialize:', e);
+    }
+}
+
+// Expose audio controls
+window.initAudio = initAudio;
+window.toggleMute = () => {
+    const muted = audioEngine.toggleMute();
+    updateAudioButton();
+    return muted;
+};
+
+function updateAudioButton() {
+    const btn = document.getElementById('audioToggle');
+    if (btn) {
+        if (!audioInitialized) {
+            btn.textContent = '🔇 Click for Sound';
+        } else if (audioEngine.muted) {
+            btn.textContent = '🔇 Muted';
+        } else {
+            btn.textContent = '🔊 Sound On';
+        }
+    }
+}
 
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 
@@ -783,6 +829,19 @@ if (!isOnLocalhost && speedToggleContainer) {
 // Initialize UI state
 updateSpeedToggleUI();
 
+// Audio toggle button
+const audioToggleBtn = document.getElementById('audioToggle');
+if (audioToggleBtn) {
+    audioToggleBtn.addEventListener('click', async () => {
+        if (!audioInitialized) {
+            await initAudio();
+        } else {
+            audioEngine.toggleMute();
+            updateAudioButton();
+        }
+    });
+}
+
 // Expose toggle to console for easy switching
 window.toggleSimSync = () => {
     setSuperSpeed(SYNC_SIM_WITH_RENDER); // If currently synced, enable super speed (and vice versa)
@@ -842,6 +901,17 @@ function renderLoop() {
             simulationStep();
         }
         logStats();
+    }
+    
+    // ========================================================================
+    // Audio: Run reduction pipeline and update audio engine
+    // ========================================================================
+    if (audioInitialized) {
+        // Run reduction pipeline on current game state
+        const soundParams = audioReductionPipeline.run(grid.getReadTexture());
+        
+        // Update audio engine with sound parameters
+        audioEngine.update(audioReductionPipeline.getSoundParams());
     }
     
     // Render
