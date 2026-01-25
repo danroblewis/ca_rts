@@ -77,11 +77,11 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         }
         
         // Am I part of the 3x3 factory that's spawning? (subtract 1/9 of cost from each cell)
-        if (myType == TYPE_FACTORY && distance(getFactoryPos(myRaw), spawning.factoryCenter) < 0.5) {
+        if (isFactory(myType) && distance(getFactoryPos(myRaw), spawning.factoryCenter) < 0.5) {
             float costPerCell = SPAWN_COST / 9.0;
             float newResources = getFactoryResources(myRaw) - costPerCell;
             // Also count any deposits happening this frame
-            int deposits = countDeposits(myPos, getFactoryPos(myRaw), u_state, u_resolution);
+            int deposits = countDeposits(myPos, getFactoryPos(myRaw), spawning.player, u_state, u_resolution);
             newResources += float(deposits);
             return encodeFactory(max(0.0, newResources), getFactoryPos(myRaw));
         }
@@ -111,7 +111,8 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         
         // Am I the receiving factory? (I gain resources)
         if (distance(deposit.factoryPos, myPos) < 0.5) {
-            int deposits = countDeposits(myPos, getFactoryPos(myRaw), u_state, u_resolution);
+            int factoryPlayer = getPlayer(myType);
+            int deposits = countDeposits(myPos, getFactoryPos(myRaw), factoryPlayer, u_state, u_resolution);
             float newResources = getFactoryResources(myRaw) + float(deposits);
             
             // Check if we're also spawning (resource gets spent)
@@ -190,7 +191,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     // No trait affected me - handle staying in place
     // ========================================================================
     
-    if (myType == TYPE_UNIT) {
+    if (isUnit(myType)) {
         // Unit staying in place - might be blocked, update counter
         int counter = getUnitCounter(myRaw);
         bool walking = float(counter) >= STATIONARY_THRESHOLD;
@@ -275,9 +276,10 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         );
     }
     
-    if (myType == TYPE_FACTORY) {
+    if (isFactory(myType)) {
         // Factory not spawning - just count deposits
-        int deposits = countDeposits(myPos, getFactoryPos(myRaw), u_state, u_resolution);
+        int myPlayer = getPlayer(myType);
+        int deposits = countDeposits(myPos, getFactoryPos(myRaw), myPlayer, u_state, u_resolution);
         float newResources = getFactoryResources(myRaw) + float(deposits);
         return encodeFactory(newResources, getFactoryPos(myRaw));
     }

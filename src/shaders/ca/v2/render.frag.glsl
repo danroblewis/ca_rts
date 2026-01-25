@@ -22,15 +22,26 @@ void main() {
     else if (cellType == TYPE_RESOURCE) {
         color = vec3(0.9, 0.7, 0.2);
     }
-    else if (cellType == TYPE_UNIT) {
+    else if (isUnit(cellType)) {
         float age = getUnitAge(raw);
         float ageRatio = age / MAX_AGE;  // 0 = fresh, 1 = about to die
+        int player = getPlayer(cellType);
         
         vec3 baseColor;
-        if (getUnitHolding(raw)) {
-            baseColor = vec3(0.3, 0.9, 0.4);  // Green = carrying
+        if (player == PLAYER_1) {
+            // Player 1: Cyan (empty) / Green (holding)
+            if (getUnitHolding(raw)) {
+                baseColor = vec3(0.3, 0.9, 0.4);  // Green = carrying
+            } else {
+                baseColor = vec3(0.2, 0.7, 0.9);  // Cyan = searching
+            }
         } else {
-            baseColor = vec3(0.2, 0.7, 0.9);  // Cyan = searching
+            // Player 2: Orange (empty) / Red (holding)
+            if (getUnitHolding(raw)) {
+                baseColor = vec3(0.95, 0.3, 0.3);  // Red = carrying
+            } else {
+                baseColor = vec3(1.0, 0.6, 0.2);  // Orange = searching
+            }
         }
         
         // Age effect: fade to darker as unit gets older
@@ -58,22 +69,27 @@ void main() {
             }
         }
     }
-    else if (cellType == TYPE_FACTORY) {
+    else if (isFactory(cellType)) {
         // Check if factory is built or unbuilt
         vec2 factoryCenter = getFactoryPos(raw);
         float totalBuildProgress = sumFactoryBuildProgress(factoryCenter, u_state, u_resolution);
         bool isBuilt = totalBuildProgress >= BUILD_THRESHOLD;
+        int player = getPlayer(cellType);
+        
+        // Player 1 = purple, Player 2 = green
+        vec3 builtColor = (player == PLAYER_1) ? vec3(0.7, 0.2, 0.8) : vec3(0.2, 0.8, 0.4);
+        vec3 unbuiltColor = (player == PLAYER_1) ? vec3(0.5, 0.2, 0.7) : vec3(0.2, 0.6, 0.3);
         
         if (isBuilt) {
-            // Built factory - bright purple
+            // Built factory - bright color
             float brightness = 0.5 + min(getFactoryResources(raw) / 10.0, 0.5);
-            color = vec3(0.7, 0.2, 0.8) * brightness;
+            color = builtColor * brightness;
         } else {
             // Unbuilt factory - dimmer, show build progress
             float buildProgress = getFactoryBuildProgress(raw);
             float progress = buildProgress / MAX_BUILD_PER_CELL;  // 0-1 for this cell
             
-            // Dimmer purple that gets brighter as it's built
+            // Dimmer color that gets brighter as it's built
             float baseBrightness = 0.2;
             float maxBrightness = 0.6;
             float brightness = baseBrightness + progress * (maxBrightness - baseBrightness);
@@ -81,7 +97,7 @@ void main() {
             // Pulsing effect to show it's unbuilt
             float pulse = 0.8 + 0.2 * sin(factoryCenter.x * 0.5 + factoryCenter.y * 0.5);
             
-            color = vec3(0.5, 0.2, 0.7) * brightness * pulse;  // Purple-ish, dimmer
+            color = unbuiltColor * brightness * pulse;
         }
     }
     else if (cellType == TYPE_WALL) {

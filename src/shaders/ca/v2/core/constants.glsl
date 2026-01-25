@@ -14,11 +14,19 @@
 
 const int TYPE_EMPTY = 0;
 const int TYPE_RESOURCE = 1;
-const int TYPE_UNIT = 2;
-const int TYPE_FACTORY = 3;  // Built or unbuilt (check isFactoryBuilt())
+const int TYPE_UNIT = 2;        // Player 1 unit
+const int TYPE_FACTORY = 3;     // Player 1 factory (built or unbuilt)
 const int TYPE_WALL = 4;
-// TYPE 5 is unused (was TYPE_FACTORY_BLUEPRINT, now unified into TYPE_FACTORY)
-const int TYPE_DEMOLISH = 6;  // Marked for destruction by units
+const int TYPE_UNIT_P2 = 5;     // Player 2 unit
+const int TYPE_DEMOLISH = 6;    // Marked for destruction by units
+const int TYPE_FACTORY_P2 = 7;  // Player 2 factory (built or unbuilt)
+
+// ============================================================================
+// PLAYER CONSTANTS
+// ============================================================================
+
+const int PLAYER_1 = 1;
+const int PLAYER_2 = 2;
 
 // ============================================================================
 // TRAIT FLAGS (bitmask)

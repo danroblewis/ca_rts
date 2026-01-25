@@ -20,6 +20,37 @@ int getType(vec4 raw) {
 }
 
 // ============================================================================
+// Player-Aware Type Helpers
+// ============================================================================
+
+// Check if a cell is any type of unit (player 1 or 2)
+bool isUnit(int cellType) {
+    return cellType == TYPE_UNIT || cellType == TYPE_UNIT_P2;
+}
+
+// Check if a cell is any type of factory (player 1 or 2)
+bool isFactory(int cellType) {
+    return cellType == TYPE_FACTORY || cellType == TYPE_FACTORY_P2;
+}
+
+// Get player ID from a unit or factory type (returns 0 for non-owned types)
+int getPlayer(int cellType) {
+    if (cellType == TYPE_UNIT || cellType == TYPE_FACTORY) return PLAYER_1;
+    if (cellType == TYPE_UNIT_P2 || cellType == TYPE_FACTORY_P2) return PLAYER_2;
+    return 0;
+}
+
+// Get the unit type for a specific player
+int getUnitTypeForPlayer(int player) {
+    return player == PLAYER_2 ? TYPE_UNIT_P2 : TYPE_UNIT;
+}
+
+// Get the factory type for a specific player
+int getFactoryTypeForPlayer(int player) {
+    return player == PLAYER_2 ? TYPE_FACTORY_P2 : TYPE_FACTORY;
+}
+
+// ============================================================================
 // Coordinate Packing (for 128x128 grids)
 // ============================================================================
 

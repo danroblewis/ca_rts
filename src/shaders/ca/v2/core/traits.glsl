@@ -19,8 +19,10 @@
 // ============================================================================
 
 int getTraits(int cellType) {
-    if (cellType == TYPE_UNIT) return TRAIT_MOBILE;
-    if (cellType == TYPE_FACTORY) return TRAIT_SPAWNER;
+    // Both player 1 and player 2 units are mobile
+    if (isUnit(cellType)) return TRAIT_MOBILE;
+    // Both player 1 and player 2 factories are spawners
+    if (isFactory(cellType)) return TRAIT_SPAWNER;
     if (cellType == TYPE_RESOURCE) return TRAIT_MINABLE;
     // TYPE_WALL and TYPE_EMPTY have no traits
     return 0;
@@ -29,8 +31,8 @@ int getTraits(int cellType) {
 // Check if a cell type blocks movement (cannot be entered)
 bool blocksMovement(int cellType) {
     // Can move into: empty, resources (to mine), units (collision handled separately)
-    // Cannot move into: walls, factories (built or unbuilt), demolish markers
-    return cellType == TYPE_WALL || cellType == TYPE_FACTORY || cellType == TYPE_DEMOLISH;
+    // Cannot move into: walls, factories (both players, built or unbuilt), demolish markers
+    return cellType == TYPE_WALL || isFactory(cellType) || cellType == TYPE_DEMOLISH;
 }
 
 bool hasTrait(int cellType, int trait) {

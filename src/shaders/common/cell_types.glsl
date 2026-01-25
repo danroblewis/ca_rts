@@ -11,11 +11,16 @@
 // Cell type constants
 const float CELL_EMPTY = 0.0;
 const float CELL_RESOURCE = 1.0;
-const float CELL_MINING_UNIT = 2.0;
-const float CELL_MINING_FACTORY = 3.0;  // Used for both built and unbuilt factories
+const float CELL_MINING_UNIT = 2.0;       // Player 1 unit
+const float CELL_MINING_FACTORY = 3.0;    // Player 1 factory (built or unbuilt)
 const float CELL_WALL = 4.0;
-// Type 5 is unused (was CELL_FACTORY_BLUEPRINT, now unified into CELL_MINING_FACTORY)
+const float CELL_MINING_UNIT_P2 = 5.0;    // Player 2 unit
 const float CELL_DEMOLISH = 6.0;
+const float CELL_MINING_FACTORY_P2 = 7.0; // Player 2 factory (built or unbuilt)
+
+// Player constants
+const float PLAYER_1 = 1.0;
+const float PLAYER_2 = 2.0;
 
 // Factory building constants
 const float MAX_BUILD_PER_CELL = 1.0;
@@ -59,11 +64,33 @@ bool isResource(vec4 cell) {
 }
 
 bool isMiningUnit(vec4 cell) {
-    return getCellType(cell) == CELL_MINING_UNIT;
+    float t = getCellType(cell);
+    return t == CELL_MINING_UNIT || t == CELL_MINING_UNIT_P2;
 }
 
 bool isMiningFactory(vec4 cell) {
-    return getCellType(cell) == CELL_MINING_FACTORY;
+    float t = getCellType(cell);
+    return t == CELL_MINING_FACTORY || t == CELL_MINING_FACTORY_P2;
+}
+
+// Get player ID from cell (1 or 2, 0 for non-owned)
+float getPlayerFromCell(vec4 cell) {
+    float t = getCellType(cell);
+    if (t == CELL_MINING_UNIT || t == CELL_MINING_FACTORY) return PLAYER_1;
+    if (t == CELL_MINING_UNIT_P2 || t == CELL_MINING_FACTORY_P2) return PLAYER_2;
+    return 0.0;
+}
+
+// Check if cell belongs to player 1
+bool isPlayer1(vec4 cell) {
+    float t = getCellType(cell);
+    return t == CELL_MINING_UNIT || t == CELL_MINING_FACTORY;
+}
+
+// Check if cell belongs to player 2
+bool isPlayer2(vec4 cell) {
+    float t = getCellType(cell);
+    return t == CELL_MINING_UNIT_P2 || t == CELL_MINING_FACTORY_P2;
 }
 
 bool isWall(vec4 cell) {

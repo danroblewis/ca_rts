@@ -43,7 +43,8 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
 int getMobileDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resolution) {
     int cellType = getType(raw);
     
-    if (cellType == TYPE_UNIT) {
+    // Both player 1 and player 2 units use the same movement logic
+    if (isUnit(cellType)) {
         return getUnitDirection(pos, raw, time, state, resolution);
     }
     
@@ -92,7 +93,7 @@ bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolu
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
         
-        if (getType(cell) == TYPE_FACTORY) {
+        if (isFactory(getType(cell))) {
             vec2 fPos = getFactoryPos(cell);
             if (distance(fPos, factoryPos) < 0.5) {
                 return true;
@@ -109,17 +110,17 @@ bool isAdjacentToBuildableFactory(vec2 pos, sampler2D state, vec2 resolution) {
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
         
-        if (getType(cell) == TYPE_FACTORY) {
+        if (isFactory(getType(cell))) {
             vec2 center = getFactoryPos(cell);
             // Check if factory is NOT built yet
-            float totalBuild = 0.0;
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    vec2 cellPos = center + vec2(float(dx), float(dy));
-                    vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
-                    if (getType(cellRaw) == TYPE_FACTORY) {
-                        totalBuild += getFactoryBuildProgress(cellRaw);
-                    }
+                float totalBuild = 0.0;
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        vec2 cellPos = center + vec2(float(dx), float(dy));
+                        vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
+                        if (isFactory(getType(cellRaw))) {
+                            totalBuild += getFactoryBuildProgress(cellRaw);
+                        }
                 }
             }
             if (totalBuild < BUILD_THRESHOLD) {
@@ -148,17 +149,17 @@ vec2 findVisibleUnbuiltFactory(vec2 pos, sampler2D state, vec2 resolution) {
             vec2 uv = (checkPos + 0.5) / resolution;
             vec4 cell = texture(state, uv);
             
-            if (getType(cell) == TYPE_FACTORY) {
+            if (isFactory(getType(cell))) {
                 vec2 center = getFactoryPos(cell);
                 // Check if factory is NOT built yet
-                float totalBuild = 0.0;
-                for (int cdy = -1; cdy <= 1; cdy++) {
-                    for (int cdx = -1; cdx <= 1; cdx++) {
-                        vec2 cellPos = center + vec2(float(cdx), float(cdy));
-                        vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
-                        if (getType(cellRaw) == TYPE_FACTORY) {
-                            totalBuild += getFactoryBuildProgress(cellRaw);
-                        }
+                    float totalBuild = 0.0;
+                    for (int cdy = -1; cdy <= 1; cdy++) {
+                        for (int cdx = -1; cdx <= 1; cdx++) {
+                            vec2 cellPos = center + vec2(float(cdx), float(cdy));
+                            vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
+                            if (isFactory(getType(cellRaw))) {
+                                totalBuild += getFactoryBuildProgress(cellRaw);
+                            }
                     }
                 }
                 if (totalBuild < BUILD_THRESHOLD) {
@@ -305,7 +306,7 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
             // - Units can always move to empty cells
             // - Only NON-holding units can mine (move into minable cells)
             bool canMoveToTarget = (targetType == TYPE_EMPTY);
-            if (myType == TYPE_UNIT && !getUnitHolding(myRaw) && isMinable(targetType)) {
+            if (isUnit(myType) && !getUnitHolding(myRaw) && isMinable(targetType)) {
                 canMoveToTarget = true;  // Empty-handed unit can mine
             }
             
@@ -360,7 +361,7 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
             
             // If I'm a minable resource, only empty-handed units can mine me
             if (isMinable(myType)) {
-                if (neighborType != TYPE_UNIT || getUnitHolding(neighborRaw)) {
+                if (!isUnit(neighborType) || getUnitHolding(neighborRaw)) {
                     continue;  // Holding units can't mine
                 }
             }
@@ -416,7 +417,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
     int destType = getType(destinationCell);
     
     // Unit arriving at resource = mine it
-    if (arrivingType == TYPE_UNIT && destType == TYPE_RESOURCE) {
+    if (isUnit(arrivingType) && destType == TYPE_RESOURCE) {
         bool wasHolding = getUnitHolding(arrivingCell);
         if (!wasHolding) {
             // Mine the resource! Create fresh memory of this location
@@ -441,7 +442,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
     }
     
     // Unit arriving at empty = just move, update counter
-    if (arrivingType == TYPE_UNIT && destType == TYPE_EMPTY) {
+    if (isUnit(arrivingType) && destType == TYPE_EMPTY) {
         int counter = getUnitCounter(arrivingCell);
         int newCounter;
         if (float(counter) >= STATIONARY_THRESHOLD) {

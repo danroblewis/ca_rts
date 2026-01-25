@@ -24,6 +24,7 @@ struct SpawnResult {
     vec2 spawnPos;        // Where the unit appears
     vec4 spawnedCell;
     vec2 factoryCenter;   // Center of the 3x3 factory (for resource subtraction)
+    int player;           // Player who owns the factory/unit
 };
 
 // ============================================================================
@@ -34,9 +35,11 @@ struct SpawnResult {
 
 bool isTopMiddleFactory(vec2 pos, sampler2D state, vec2 resolution) {
     vec4 myRaw = texture(state, (pos + 0.5) / resolution);
-    if (getType(myRaw) != TYPE_FACTORY) return false;
+    int myType = getType(myRaw);
+    if (!isFactory(myType)) return false;
     
     vec2 myCenter = getFactoryPos(myRaw);
+    int myPlayer = getPlayer(myType);
     
     vec4 leftRaw = texture(state, (pos + vec2(-1.0, 0.0) + 0.5) / resolution);
     vec4 rightRaw = texture(state, (pos + vec2(1.0, 0.0) + 0.5) / resolution);
@@ -46,14 +49,14 @@ bool isTopMiddleFactory(vec2 pos, sampler2D state, vec2 resolution) {
     vec4 bottomRightRaw = texture(state, (pos + vec2(1.0, -1.0) + 0.5) / resolution);
     
     // Top-middle has:
-    // - Left and right are factories with same center
+    // - Left and right are factories with same center and player
     // - Above is NOT factory (spawn location)
-    // - Bottom-left and bottom-right are factories with same center
-    bool leftOK = getType(leftRaw) == TYPE_FACTORY && distance(getFactoryPos(leftRaw), myCenter) < 0.5;
-    bool rightOK = getType(rightRaw) == TYPE_FACTORY && distance(getFactoryPos(rightRaw), myCenter) < 0.5;
-    bool aboveOK = getType(aboveRaw) != TYPE_FACTORY;
-    bool bottomLeftOK = getType(bottomLeftRaw) == TYPE_FACTORY && distance(getFactoryPos(bottomLeftRaw), myCenter) < 0.5;
-    bool bottomRightOK = getType(bottomRightRaw) == TYPE_FACTORY && distance(getFactoryPos(bottomRightRaw), myCenter) < 0.5;
+    // - Bottom-left and bottom-right are factories with same center and player
+    bool leftOK = isFactory(getType(leftRaw)) && distance(getFactoryPos(leftRaw), myCenter) < 0.5 && getPlayer(getType(leftRaw)) == myPlayer;
+    bool rightOK = isFactory(getType(rightRaw)) && distance(getFactoryPos(rightRaw), myCenter) < 0.5 && getPlayer(getType(rightRaw)) == myPlayer;
+    bool aboveOK = !isFactory(getType(aboveRaw));
+    bool bottomLeftOK = isFactory(getType(bottomLeftRaw)) && distance(getFactoryPos(bottomLeftRaw), myCenter) < 0.5 && getPlayer(getType(bottomLeftRaw)) == myPlayer;
+    bool bottomRightOK = isFactory(getType(bottomRightRaw)) && distance(getFactoryPos(bottomRightRaw), myCenter) < 0.5 && getPlayer(getType(bottomRightRaw)) == myPlayer;
     
     return leftOK && rightOK && aboveOK && bottomLeftOK && bottomRightOK;
 }
@@ -68,7 +71,7 @@ float sumFactoryResources(vec2 centerPos, sampler2D state, vec2 resolution) {
         for (int dx = -1; dx <= 1; dx++) {
             vec2 cellPos = centerPos + vec2(float(dx), float(dy));
             vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
-            if (getType(cellRaw) == TYPE_FACTORY) {
+            if (isFactory(getType(cellRaw))) {
                 total += getFactoryResources(cellRaw);
             }
         }
@@ -82,30 +85,17 @@ float sumFactoryResources(vec2 centerPos, sampler2D state, vec2 resolution) {
 // ============================================================================
 
 vec2 getSpawningTopMiddle(vec2 myPos, sampler2D state, vec2 resolution) {
-    // Check all 9 possible top-middle positions that could include me
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            vec2 candidateTopMiddle = myPos + vec2(float(dx), float(-dy));  // Note: -dy because top-middle is above center
-            // Actually, let me think about this...
-            // If I'm at myPos, the top-middle could be:
-            // - myPos itself (if I'm the top-middle)
-            // - myPos + (0, 1) if I'm the center
-            // - myPos + (0, 2) if I'm the bottom-center
-            // etc.
-        }
-    }
-    
     // Simpler approach: if I'm a factory, get my center from selfPos,
     // then the top-middle is center + (0, 1)
     vec4 myRaw = texture(state, (myPos + 0.5) / resolution);
-    if (getType(myRaw) != TYPE_FACTORY) return vec2(-1.0);
+    if (!isFactory(getType(myRaw))) return vec2(-1.0);
     
     vec2 center = getFactoryPos(myRaw);
     vec2 topMiddle = center + vec2(0.0, 1.0);
     
-    // Check if top-middle can spawn
+    // Check if top-middle can spawn (must be same type of factory)
     vec4 topMiddleRaw = texture(state, (topMiddle + 0.5) / resolution);
-    if (getType(topMiddleRaw) != TYPE_FACTORY) return vec2(-1.0);
+    if (!isFactory(getType(topMiddleRaw))) return vec2(-1.0);
     
     // Check if space above top-middle is empty
     vec2 spawnPos = topMiddle + vec2(0.0, 1.0);
@@ -135,6 +125,7 @@ SpawnResult evaluateSpawning(vec2 myPos, sampler2D state, vec2 resolution) {
     result.spawnPos = vec2(-1.0);
     result.spawnedCell = vec4(0.0);
     result.factoryCenter = vec2(-1.0);
+    result.player = 0;
     
     vec4 myRaw = texture(state, (myPos + 0.5) / resolution);
     int myType = getType(myRaw);
@@ -145,19 +136,26 @@ SpawnResult evaluateSpawning(vec2 myPos, sampler2D state, vec2 resolution) {
     if (myType == TYPE_EMPTY) {
         vec2 belowPos = myPos + vec2(0.0, -1.0);
         vec4 belowRaw = texture(state, (belowPos + 0.5) / resolution);
+        int belowType = getType(belowRaw);
         
-        if (getType(belowRaw) == TYPE_FACTORY) {
+        if (isFactory(belowType)) {
             // Check if the factory below is the top-middle of a 3x3 factory
             if (isTopMiddleFactory(belowPos, state, resolution)) {
                 vec2 center = getFactoryPos(belowRaw);
                 float totalResources = sumFactoryResources(center, state, resolution);
                 
                 if (totalResources >= SPAWN_COST) {
+                    int player = getPlayer(belowType);
                     result.happened = true;
                     result.spawnerPos = belowPos;
                     result.spawnPos = myPos;
-                    result.spawnedCell = encodeUnitSimple(false, 0, center);
+                    // Spawn unit with the correct player type
+                    // Use proper unit encoding - factory pos goes in channel B (packed)
+                    vec4 unitCell = encodeUnitSimple(false, 0, center);
+                    unitCell.r = float(getUnitTypeForPlayer(player));  // Override type for player 2
+                    result.spawnedCell = unitCell;
                     result.factoryCenter = center;
+                    result.player = player;
                     return result;
                 }
             }
@@ -167,17 +165,23 @@ SpawnResult evaluateSpawning(vec2 myPos, sampler2D state, vec2 resolution) {
     // ========================================
     // CASE 2: I'm a factory - is my factory spawning?
     // ========================================
-    if (myType == TYPE_FACTORY) {
+    if (isFactory(myType)) {
         vec2 topMiddle = getSpawningTopMiddle(myPos, state, resolution);
         if (topMiddle.x >= 0.0) {
             vec2 center = getFactoryPos(myRaw);
             vec2 spawnPos = topMiddle + vec2(0.0, 1.0);
+            int player = getPlayer(myType);
             
             result.happened = true;
             result.spawnerPos = topMiddle;
             result.spawnPos = spawnPos;
-            result.spawnedCell = encodeUnitSimple(false, 0, center);
+            // Spawn unit with the correct player type
+            // Use proper unit encoding - factory pos goes in channel B (packed)
+            vec4 unitCell = encodeUnitSimple(false, 0, center);
+            unitCell.r = float(getUnitTypeForPlayer(player));  // Override type for player 2
+            result.spawnedCell = unitCell;
             result.factoryCenter = center;
+            result.player = player;
             return result;
         }
     }

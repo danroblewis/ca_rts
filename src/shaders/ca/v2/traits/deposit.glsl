@@ -65,15 +65,17 @@ DepositResult evaluateDeposit(vec2 myPos, sampler2D state, vec2 resolution) {
     // ========================================
     // CASE 1: I'm a holding unit - am I depositing?
     // ========================================
-    if (myType == TYPE_UNIT && getUnitHolding(myRaw)) {
+    if (isUnit(myType) && getUnitHolding(myRaw)) {
         vec2 myFactory = getUnitFactory(myRaw);
+        int myPlayer = getPlayer(myType);
         
-        // Check neighbors for my factory (must be BUILT)
+        // Check neighbors for my factory (must be BUILT and same player)
         for (int d = 1; d <= 4; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+            int neighborType = getType(neighborRaw);
             
-            if (getType(neighborRaw) == TYPE_FACTORY) {
+            if (isFactory(neighborType) && getPlayer(neighborType) == myPlayer) {
                 vec2 fPos = getFactoryPos(neighborRaw);
                 // Must be our factory AND must be built
                 if (distance(fPos, myFactory) < 0.5 && isFactoryBuilt(fPos, state, resolution)) {
@@ -87,10 +89,11 @@ DepositResult evaluateDeposit(vec2 myPos, sampler2D state, vec2 resolution) {
     }
     
     // ========================================
-    // CASE 2: I'm a BUILT factory - is a unit depositing to me?
+    // CASE 2: I'm a BUILT factory - is a unit of my player depositing to me?
     // ========================================
-    if (myType == TYPE_FACTORY) {
+    if (isFactory(myType)) {
         vec2 mySelfPos = getFactoryPos(myRaw);
+        int myPlayer = getPlayer(myType);
         
         // Only accept deposits if we're built
         if (!isFactoryBuilt(mySelfPos, state, resolution)) {
@@ -100,8 +103,9 @@ DepositResult evaluateDeposit(vec2 myPos, sampler2D state, vec2 resolution) {
         for (int d = 1; d <= 4; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+            int neighborType = getType(neighborRaw);
             
-            if (getType(neighborRaw) == TYPE_UNIT && getUnitHolding(neighborRaw)) {
+            if (isUnit(neighborType) && getPlayer(neighborType) == myPlayer && getUnitHolding(neighborRaw)) {
                 vec2 theirFactory = getUnitFactory(neighborRaw);
                 if (distance(theirFactory, mySelfPos) < 0.5) {
                     result.happened = true;
@@ -116,15 +120,16 @@ DepositResult evaluateDeposit(vec2 myPos, sampler2D state, vec2 resolution) {
     return result;
 }
 
-// Count all deposits happening to a factory
-int countDeposits(vec2 factoryPos, vec2 factorySelfPos, sampler2D state, vec2 resolution) {
+// Count all deposits happening to a factory (from units of the same player)
+int countDeposits(vec2 factoryPos, vec2 factorySelfPos, int factoryPlayer, sampler2D state, vec2 resolution) {
     int count = 0;
     
     for (int d = 1; d <= 4; d++) {
         vec2 neighborPos = factoryPos + dirToOffset(d);
         vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+        int neighborType = getType(neighborRaw);
         
-        if (getType(neighborRaw) == TYPE_UNIT && getUnitHolding(neighborRaw)) {
+        if (isUnit(neighborType) && getPlayer(neighborType) == factoryPlayer && getUnitHolding(neighborRaw)) {
             vec2 theirFactory = getUnitFactory(neighborRaw);
             if (distance(theirFactory, factorySelfPos) < 0.5) {
                 count++;
@@ -154,15 +159,17 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
     // ========================================
     // CASE 1: I'm a holding unit - am I building an unbuilt factory?
     // ========================================
-    if (myType == TYPE_UNIT && getUnitHolding(myRaw)) {
+    if (isUnit(myType) && getUnitHolding(myRaw)) {
         vec2 myFactory = getUnitFactory(myRaw);
+        int myPlayer = getPlayer(myType);
         
         // First check if I would deposit to my own BUILT factory (that takes priority)
         for (int d = 1; d <= 4; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+            int neighborType = getType(neighborRaw);
             
-            if (getType(neighborRaw) == TYPE_FACTORY) {
+            if (isFactory(neighborType) && getPlayer(neighborType) == myPlayer) {
                 vec2 fPos = getFactoryPos(neighborRaw);
                 // Only deposit takes priority if factory is BUILT
                 if (distance(fPos, myFactory) < 0.5 && isFactoryBuilt(fPos, state, resolution)) {
@@ -172,12 +179,14 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
             }
         }
         
-        // Check neighbors for unbuilt factory cells that aren't at max build
+        // Check neighbors for ANY unbuilt factory cells that aren't at max build
+        // Units can build ANY player's unbuilt factory
         for (int d = 1; d <= 4; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+            int neighborType = getType(neighborRaw);
             
-            if (getType(neighborRaw) == TYPE_FACTORY) {
+            if (isFactory(neighborType)) {
                 vec2 fPos = getFactoryPos(neighborRaw);
                 // Only build if factory is NOT built yet
                 if (!isFactoryBuilt(fPos, state, resolution)) {
@@ -196,7 +205,7 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
     // ========================================
     // CASE 2: I'm an unbuilt factory cell - is a unit building me?
     // ========================================
-    if (myType == TYPE_FACTORY) {
+    if (isFactory(myType)) {
         vec2 myCenter = getFactoryPos(myRaw);
         
         // Only accept builds if we're NOT built yet
@@ -212,16 +221,19 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
         for (int d = 1; d <= 4; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+            int neighborType = getType(neighborRaw);
             
-            if (getType(neighborRaw) == TYPE_UNIT && getUnitHolding(neighborRaw)) {
+            if (isUnit(neighborType) && getUnitHolding(neighborRaw)) {
                 vec2 theirFactory = getUnitFactory(neighborRaw);
+                int theirPlayer = getPlayer(neighborType);
                 
                 // Check if they would deposit to their BUILT factory instead
                 bool wouldDeposit = false;
                 for (int d2 = 1; d2 <= 4; d2++) {
                     vec2 checkPos = neighborPos + dirToOffset(d2);
                     vec4 checkRaw = texture(state, (checkPos + 0.5) / resolution);
-                    if (getType(checkRaw) == TYPE_FACTORY) {
+                    int checkType = getType(checkRaw);
+                    if (isFactory(checkType) && getPlayer(checkType) == theirPlayer) {
                         vec2 fPos = getFactoryPos(checkRaw);
                         // Only blocks if it's their factory AND it's built
                         if (distance(fPos, theirFactory) < 0.5 && isFactoryBuilt(fPos, state, resolution)) {
@@ -248,8 +260,9 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
 int countBuilds(vec2 factoryCellPos, sampler2D state, vec2 resolution) {
     int count = 0;
     vec4 cellRaw = texture(state, (factoryCellPos + 0.5) / resolution);
+    int cellType = getType(cellRaw);
     
-    if (getType(cellRaw) != TYPE_FACTORY) {
+    if (!isFactory(cellType)) {
         return 0;
     }
     
@@ -270,16 +283,19 @@ int countBuilds(vec2 factoryCellPos, sampler2D state, vec2 resolution) {
     for (int d = 1; d <= 4; d++) {
         vec2 neighborPos = factoryCellPos + dirToOffset(d);
         vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
+        int neighborType = getType(neighborRaw);
         
-        if (getType(neighborRaw) == TYPE_UNIT && getUnitHolding(neighborRaw)) {
+        if (isUnit(neighborType) && getUnitHolding(neighborRaw)) {
             vec2 theirFactory = getUnitFactory(neighborRaw);
+            int theirPlayer = getPlayer(neighborType);
             
             // Check if they would deposit to their BUILT factory instead
             bool wouldDeposit = false;
             for (int d2 = 1; d2 <= 4; d2++) {
                 vec2 checkPos = neighborPos + dirToOffset(d2);
                 vec4 checkRaw = texture(state, (checkPos + 0.5) / resolution);
-                if (getType(checkRaw) == TYPE_FACTORY) {
+                int checkType = getType(checkRaw);
+                if (isFactory(checkType) && getPlayer(checkType) == theirPlayer) {
                     vec2 fPos = getFactoryPos(checkRaw);
                     // Only blocks if it's their factory AND it's built
                     if (distance(fPos, theirFactory) < 0.5 && isFactoryBuilt(fPos, state, resolution)) {

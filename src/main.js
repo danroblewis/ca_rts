@@ -2,15 +2,56 @@ import { GPU } from './gpu/GPU.js';
 import { ComputeShader } from './gpu/ComputeShader.js';
 import { loadShader } from './shaders/load.js';
 import { CAGrid } from './ca/CAGrid.js';
+import { getNetworkSync } from './network/NetworkSync.js';
 
 // Cell type constants (must match GLSL)
 const CELL_EMPTY = 0;
 const CELL_RESOURCE = 1;
-const CELL_MINING_UNIT = 2;
-const CELL_MINING_FACTORY = 3;  // Used for both built and unbuilt factories
+const CELL_MINING_UNIT = 2;       // Player 1 unit
+const CELL_MINING_FACTORY = 3;   // Player 1 factory (built or unbuilt)
 const CELL_WALL = 4;
-// Type 5 is unused (was CELL_FACTORY_BLUEPRINT, now unified into CELL_MINING_FACTORY)
+const CELL_MINING_UNIT_P2 = 5;   // Player 2 unit
 const CELL_DEMOLISH = 6;
+const CELL_MINING_FACTORY_P2 = 7; // Player 2 factory (built or unbuilt)
+
+// Player constants
+const PLAYER_1 = 1;
+const PLAYER_2 = 2;
+
+// Current player (for multiplayer - default to player 1)
+let currentPlayer = PLAYER_1;
+
+// ============================================================================
+// Seeded PRNG for Deterministic Map Generation
+// ============================================================================
+
+// Simple mulberry32 PRNG - deterministic given the same seed
+function mulberry32(seed) {
+    return function() {
+        seed |= 0;
+        seed = seed + 0x6D2B79F5 | 0;
+        let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+
+// Map seed - can be shared between players for deterministic map generation
+let mapSeed = 12345;
+const urlParams = new URLSearchParams(window.location.search);
+
+// Hide multiplayer UI on GitHub Pages (no WebSocket server there)
+const isOnGitHub = window.location.hostname.includes('github');
+
+const seedParam = urlParams.get('seed');
+if (seedParam) {
+    mapSeed = parseInt(seedParam) || 12345;
+}
+
+// Create seeded random function
+let seededRandom = mulberry32(mapSeed);
+
+console.log(`Map seed: ${mapSeed}`);
 
 // ============================================================================
 // URL Parameter Handling for Shader Selection
@@ -177,11 +218,11 @@ let totalResources = 0;
 
 for (let b = 0; b < NUM_BLOBS; b++) {
     // Pick blob center randomly
-    const centerX = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
-    const centerY = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
+    const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
+    const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
     
     // Random radius for this blob
-    const radius = BLOB_MIN_RADIUS + Math.random() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
+    const radius = BLOB_MIN_RADIUS + seededRandom() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
     
     // Fill the blob with resources
     for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
@@ -194,11 +235,11 @@ for (let b = 0; b < NUM_BLOBS; b++) {
             
             // Check if within blob radius (with some noise for organic shape)
             const dist = Math.sqrt(dx * dx + dy * dy);
-            const noiseRadius = radius * (0.7 + Math.random() * 0.6); // Irregular edges
+            const noiseRadius = radius * (0.7 + seededRandom() * 0.6); // Irregular edges
             if (dist > noiseRadius) continue;
             
             // Density check
-            if (Math.random() > BLOB_DENSITY) continue;
+            if (seededRandom() > BLOB_DENSITY) continue;
             
             setCell(x, y, CELL_RESOURCE, 1.0);
             totalResources++;
@@ -228,12 +269,12 @@ function isEmpty(x, y) {
 
 // Generate wall lines (horizontal or vertical)
 for (let i = 0; i < NUM_WALL_LINES; i++) {
-    const horizontal = Math.random() > 0.5;
-    const length = Math.floor(WALL_MIN_LENGTH + Math.random() * (WALL_MAX_LENGTH - WALL_MIN_LENGTH));
+    const horizontal = seededRandom() > 0.5;
+    const length = Math.floor(WALL_MIN_LENGTH + seededRandom() * (WALL_MAX_LENGTH - WALL_MIN_LENGTH));
     
     // Pick starting position (leave margin from edges)
-    const startX = Math.floor(Math.random() * (GRID_SIZE - length - 10)) + 5;
-    const startY = Math.floor(Math.random() * (GRID_SIZE - length - 10)) + 5;
+    const startX = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
+    const startY = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
     
     for (let j = 0; j < length; j++) {
         const x = horizontal ? startX + j : startX;
@@ -249,8 +290,8 @@ for (let i = 0; i < NUM_WALL_LINES; i++) {
 
 // Generate small wall clusters
 for (let b = 0; b < NUM_WALL_BLOBS; b++) {
-    const centerX = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
-    const centerY = Math.floor(Math.random() * (GRID_SIZE - 20)) + 10;
+    const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
+    const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
     
     for (let dy = -WALL_BLOB_RADIUS; dy <= WALL_BLOB_RADIUS; dy++) {
         for (let dx = -WALL_BLOB_RADIUS; dx <= WALL_BLOB_RADIUS; dx++) {
@@ -263,7 +304,7 @@ for (let b = 0; b < NUM_WALL_BLOBS; b++) {
             if (dist > WALL_BLOB_RADIUS * 0.8) continue;
             
             // 70% density
-            if (Math.random() > 0.7) continue;
+            if (seededRandom() > 0.7) continue;
             
             if (isEmpty(x, y)) {
                 setCell(x, y, CELL_WALL);
@@ -370,7 +411,7 @@ canvas.addEventListener('click', (event) => {
                 const cellType = currentData[idx];
                 const buildCount = currentData[idx + 1];
                 
-                if (cellType === CELL_MINING_FACTORY) {
+                if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
                     // Check if this factory cell has any build progress or resources
                     // buildCount here represents either resources (built) or build progress (unbuilt)
                     if (buildCount > 0) {
@@ -400,6 +441,15 @@ canvas.addEventListener('click', (event) => {
             if (deletedCount > 0) parts.push(`deleted ${deletedCount} unbuilt`);
             if (markedCount > 0) parts.push(`marked ${markedCount} for demolition`);
             console.log(`${parts.join(', ')} around (${gridPos.x}, ${gridPos.y})`);
+            
+            // Sync with network
+            syncAction({
+                type: 'demolish',
+                x: gridPos.x,
+                y: gridPos.y,
+                deleted: deletedCount,
+                marked: markedCount
+            });
         }
     } else {
         // NORMAL CLICK: Place 3x3 factory or blueprint
@@ -433,9 +483,10 @@ canvas.addEventListener('click', (event) => {
                 
                 // Only place if cell is empty or resource (don't overwrite walls)
                 if (currentData[idx] === CELL_EMPTY || currentData[idx] === CELL_RESOURCE) {
-                    // All factories use CELL_MINING_FACTORY
+                    // Use factory type for current player
                     // G = resources (built) or build progress (unbuilt)
-                    currentData[idx + 0] = CELL_MINING_FACTORY;
+                    const factoryType = currentPlayer === PLAYER_2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
+                    currentData[idx + 0] = factoryType;
                     currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;  // 0 = unbuilt, needs construction
                     currentData[idx + 2] = centerX;
                     currentData[idx + 3] = centerY;
@@ -452,8 +503,211 @@ canvas.addEventListener('click', (event) => {
         } else {
             console.log(`Placed 3x3 factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) with ${totalResources} total resources (${placed} cells, center empty)`);
         }
+        
+        // Sync with network
+        syncAction({
+            type: 'place_factory',
+            x: centerX,
+            y: centerY,
+            player: currentPlayer,
+            isUnbuilt: isUnbuilt,
+            factoryNumber: factoriesPlaced
+        });
     }
 });
+
+// ============================================================================
+// Player Toggle (for testing multiplayer locally)
+// ============================================================================
+
+window.switchPlayer = (player) => {
+    if (player === 1 || player === PLAYER_1) {
+        currentPlayer = PLAYER_1;
+    } else if (player === 2 || player === PLAYER_2) {
+        currentPlayer = PLAYER_2;
+    } else {
+        // Toggle
+        currentPlayer = currentPlayer === PLAYER_1 ? PLAYER_2 : PLAYER_1;
+    }
+    console.log(`Switched to Player ${currentPlayer}`);
+    updatePlayerIndicator();
+};
+
+function updatePlayerIndicator() {
+    // Don't show player indicator on GitHub Pages
+    if (isOnGitHub) return;
+    
+    let indicator = document.getElementById('player-indicator');
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'player-indicator';
+        indicator.style.cssText = `
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 200;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-family: 'SF Mono', monospace;
+            font-size: 14px;
+            font-weight: bold;
+            backdrop-filter: blur(8px);
+            cursor: pointer;
+        `;
+        indicator.onclick = () => window.switchPlayer();
+        document.body.appendChild(indicator);
+    }
+    if (currentPlayer === PLAYER_1) {
+        indicator.textContent = 'Player 1 (Purple)';
+        indicator.style.background = 'rgba(112, 51, 204, 0.8)';
+        indicator.style.color = 'white';
+        indicator.style.border = '2px solid rgba(160, 100, 255, 0.8)';
+    } else {
+        indicator.textContent = 'Player 2 (Green)';
+        indicator.style.background = 'rgba(51, 179, 102, 0.8)';
+        indicator.style.color = 'white';
+        indicator.style.border = '2px solid rgba(100, 220, 150, 0.8)';
+    }
+}
+
+// Initialize player indicator
+updatePlayerIndicator();
+
+// Listen for 1/2 keys to switch players
+document.addEventListener('keydown', (e) => {
+    if (e.key === '1') {
+        window.switchPlayer(1);
+    } else if (e.key === '2') {
+        window.switchPlayer(2);
+    }
+});
+
+console.log('Press 1 or 2 to switch players, or click the player indicator');
+
+// ============================================================================
+// Multiplayer Network Sync
+// ============================================================================
+
+const networkSync = getNetworkSync(GRID_SIZE);
+let isMultiplayer = false;
+
+// Get room from URL or generate one
+const roomParam = urlParams.get('room');
+const roomId = roomParam || `game-${mapSeed}`;
+
+// Network event handlers
+networkSync.onConnectionChange = (connected) => {
+    isMultiplayer = connected;
+    updateNetworkIndicator();
+};
+
+networkSync.onPlayerJoined = (playerId, isHost) => {
+    console.log(`[Multiplayer] ${isHost ? 'You are the host' : 'Player joined'}: ${playerId}`);
+    
+    // Only assign our player number when WE join, not when others join
+    // networkSync.playerId is set before this callback, so we can check if this is our own join
+    if (playerId === networkSync.playerId) {
+        if (playerId === 1) {
+            currentPlayer = PLAYER_1;
+        } else {
+            currentPlayer = PLAYER_2;
+        }
+        updatePlayerIndicator();
+    }
+    updateNetworkIndicator();
+};
+
+networkSync.onPlayerLeft = (playerId) => {
+    console.log(`[Multiplayer] Player ${playerId} left`);
+    updateNetworkIndicator();
+};
+
+networkSync.onStateReceived = (syncData) => {
+    // Received state from another player - apply it
+    console.log(`[Multiplayer] Applying state from Player ${syncData.playerId} at tick ${syncData.simTime}`);
+    
+    // Update local grid with received state
+    grid.upload(syncData.gridState);
+    
+    // Sync simulation time
+    simTime = syncData.simTime;
+    
+    console.log(`[Multiplayer] State applied. Action: ${syncData.action?.type || 'unknown'}`);
+};
+
+// Network indicator UI
+function updateNetworkIndicator() {
+    // Don't show network indicator on GitHub Pages
+    if (isOnGitHub) return;
+    
+    let indicator = document.getElementById('network-indicator');
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'network-indicator';
+        indicator.style.cssText = `
+            position: fixed;
+            top: 16px;
+            left: 200px;
+            z-index: 200;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-family: 'SF Mono', monospace;
+            font-size: 12px;
+            backdrop-filter: blur(8px);
+            cursor: pointer;
+        `;
+        indicator.onclick = toggleMultiplayer;
+        document.body.appendChild(indicator);
+    }
+    
+    if (isMultiplayer) {
+        indicator.textContent = `🟢 Room: ${roomId}`;
+        indicator.style.background = 'rgba(51, 179, 51, 0.8)';
+        indicator.style.color = 'white';
+        indicator.style.border = '2px solid rgba(100, 220, 100, 0.8)';
+    } else {
+        indicator.textContent = '⚪ Click to Connect';
+        indicator.style.background = 'rgba(80, 80, 80, 0.8)';
+        indicator.style.color = 'white';
+        indicator.style.border = '2px solid rgba(120, 120, 120, 0.8)';
+    }
+}
+
+async function toggleMultiplayer() {
+    if (isMultiplayer) {
+        networkSync.disconnect();
+    } else {
+        try {
+            const wsUrl = `ws://${window.location.host}/ws`;
+            await networkSync.connect(wsUrl, roomId);
+            
+            // Update URL with room
+            const url = new URL(window.location);
+            url.searchParams.set('room', roomId);
+            window.history.replaceState({}, '', url);
+            
+            console.log(`[Multiplayer] Connected to room: ${roomId}`);
+        } catch (error) {
+            console.error('[Multiplayer] Connection failed:', error);
+        }
+    }
+}
+
+// Sync state after an action
+function syncAction(action) {
+    if (isMultiplayer) {
+        const gridData = grid.download();
+        networkSync.syncState(gridData, action, simTime);
+    }
+}
+
+// Initialize network indicator
+updateNetworkIndicator();
+
+// Expose to console
+window.toggleMultiplayer = toggleMultiplayer;
+window.networkSync = networkSync;
+console.log(`Room ID: ${roomId} - Click network indicator or call toggleMultiplayer() to connect`);
 
 // ============================================================================
 // Simulation Loop

@@ -51,9 +51,9 @@ float calcDensity(vec2 uv, float targetType) {
     return calcDensityHQ(uv, targetType);
 }
 
-// Calculate factory density with build status info
+// Calculate factory density with build status info for a specific player
 // Returns vec3(builtDensity, unbuiltDensity, averageBuildProgress)
-vec3 calcFactoryDensityWithStatus(vec2 uv) {
+vec3 calcFactoryDensityForPlayer(vec2 uv, float targetPlayer) {
     vec2 texelSize = 1.0 / u_resolution;
     float builtDensity = 0.0;
     float unbuiltDensity = 0.0;
@@ -72,7 +72,7 @@ vec3 calcFactoryDensityWithStatus(vec2 uv) {
             vec2 offset = vec2(float(dx), float(dy));
             vec4 cellSample = texture(u_state, uv + offset * texelSize);
             
-            if (isMiningFactory(cellSample)) {
+            if (isMiningFactory(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
                 vec2 cellCenter = offset + vec2(0.5) - cellFrac;
                 float dist = length(cellCenter) / scale;
                 if (dist < minDist) dist = minDist;
@@ -98,9 +98,16 @@ vec3 calcFactoryDensityWithStatus(vec2 uv) {
     return vec3(builtDensity, unbuiltDensity, avgProgress);
 }
 
-// Calculate unit density with holding info and age - larger radius for more blobby units
+// Legacy function for backward compatibility - calculates combined density for both players
+vec3 calcFactoryDensityWithStatus(vec2 uv) {
+    vec3 p1 = calcFactoryDensityForPlayer(uv, PLAYER_1);
+    vec3 p2 = calcFactoryDensityForPlayer(uv, PLAYER_2);
+    return vec3(p1.x + p2.x, p1.y + p2.y, max(p1.z, p2.z));
+}
+
+// Calculate unit density with holding info and age for a specific player
 // Returns vec3(emptyDensity, holdingDensity, weightedAge)
-vec3 calcUnitDensityWithAge(vec2 uv) {
+vec3 calcUnitDensityForPlayer(vec2 uv, float targetPlayer) {
     vec2 texelSize = 1.0 / u_resolution;
     float emptyDensity = 0.0;
     float holdingDensity = 0.0;
@@ -120,7 +127,7 @@ vec3 calcUnitDensityWithAge(vec2 uv) {
             vec2 offset = vec2(float(dx), float(dy));
             vec4 cellSample = texture(u_state, uv + offset * texelSize);
             
-            if (isMiningUnit(cellSample)) {
+            if (isMiningUnit(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
                 // Use sub-cell position for smoother distance
                 vec2 cellCenter = offset + vec2(0.5) - cellFrac;
                 float dist = length(cellCenter) / scale;
@@ -145,6 +152,13 @@ vec3 calcUnitDensityWithAge(vec2 uv) {
     return vec3(emptyDensity, holdingDensity, avgAge);
 }
 
+// Legacy function for backward compatibility
+vec3 calcUnitDensityWithAge(vec2 uv) {
+    vec3 p1 = calcUnitDensityForPlayer(uv, PLAYER_1);
+    vec3 p2 = calcUnitDensityForPlayer(uv, PLAYER_2);
+    return vec3(p1.x + p2.x, p1.y + p2.y, max(p1.z, p2.z));
+}
+
 // Smooth noise for texture
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -164,16 +178,42 @@ void main() {
     
     vec3 color = bgColor;
     
-    // Calculate densities for each type
+    // Calculate densities for each type - separated by player
     float resourceDensity = calcDensity(v_uv, CELL_RESOURCE);
-    vec3 factoryInfo = calcFactoryDensityWithStatus(v_uv);
-    float builtFactoryDensity = factoryInfo.x;
-    float unbuiltFactoryDensity = factoryInfo.y;
-    float buildProgress = factoryInfo.z;  // 0-1 for unbuilt factories
-    vec3 unitInfo = calcUnitDensityWithAge(v_uv);
-    float emptyUnitDensity = unitInfo.x;
-    float holdingUnitDensity = unitInfo.y;
-    float avgAge = unitInfo.z;
+    
+    // Player 1 factories (purple)
+    vec3 p1FactoryInfo = calcFactoryDensityForPlayer(v_uv, PLAYER_1);
+    float p1BuiltFactoryDensity = p1FactoryInfo.x;
+    float p1UnbuiltFactoryDensity = p1FactoryInfo.y;
+    float p1BuildProgress = p1FactoryInfo.z;
+    
+    // Player 2 factories (green)
+    vec3 p2FactoryInfo = calcFactoryDensityForPlayer(v_uv, PLAYER_2);
+    float p2BuiltFactoryDensity = p2FactoryInfo.x;
+    float p2UnbuiltFactoryDensity = p2FactoryInfo.y;
+    float p2BuildProgress = p2FactoryInfo.z;
+    
+    // Combined factory densities for compatibility
+    float builtFactoryDensity = p1BuiltFactoryDensity + p2BuiltFactoryDensity;
+    float unbuiltFactoryDensity = p1UnbuiltFactoryDensity + p2UnbuiltFactoryDensity;
+    float buildProgress = max(p1BuildProgress, p2BuildProgress);
+    
+    // Player 1 units (cyan/green)
+    vec3 p1UnitInfo = calcUnitDensityForPlayer(v_uv, PLAYER_1);
+    float p1EmptyUnitDensity = p1UnitInfo.x;
+    float p1HoldingUnitDensity = p1UnitInfo.y;
+    float p1AvgAge = p1UnitInfo.z;
+    
+    // Player 2 units (orange/red)
+    vec3 p2UnitInfo = calcUnitDensityForPlayer(v_uv, PLAYER_2);
+    float p2EmptyUnitDensity = p2UnitInfo.x;
+    float p2HoldingUnitDensity = p2UnitInfo.y;
+    float p2AvgAge = p2UnitInfo.z;
+    
+    // Combined for compatibility
+    float emptyUnitDensity = p1EmptyUnitDensity + p2EmptyUnitDensity;
+    float holdingUnitDensity = p1HoldingUnitDensity + p2HoldingUnitDensity;
+    float avgAge = max(p1AvgAge, p2AvgAge);
     float ageRatio = avgAge / MAX_AGE;  // 0 = fresh, 1 = about to die
     
     // Thresholds for blob effect (lower = more blobby/connected)
@@ -198,59 +238,86 @@ void main() {
         color = mix(color, resourceColor, blobStrength);
     }
     
-    // Mining units - cyan (empty) or green (holding) blobs, with age-based fading
-    float totalUnitDensity = emptyUnitDensity + holdingUnitDensity;
-    
-    // Age-based color modifiers
+    // Mining units - different colors per player, with age-based fading
     float fadeStart = 0.3;  // Start fading at 30% age
     float deathFlashStart = 0.9;  // Flash starts at 90% age
-    float ageBrightness = 1.0;
-    vec3 ageColorMod = vec3(1.0);
     
-    if (ageRatio >= fadeStart && ageRatio < deathFlashStart) {
-        // Aging - gradually darken
-        float fadeFactor = (ageRatio - fadeStart) / (deathFlashStart - fadeStart);
-        ageBrightness = 1.0 - fadeFactor * 0.7;  // Fade to 30% brightness
-    } else if (ageRatio >= deathFlashStart) {
-        // Death flash - bright white burst then rapid fade
-        float deathProgress = (ageRatio - deathFlashStart) / (1.0 - deathFlashStart);
-        if (deathProgress < 0.3) {
-            // White flash
-            float flashIntensity = deathProgress / 0.3;
-            ageColorMod = mix(vec3(0.3), vec3(3.0), flashIntensity);  // Oversaturate for flash
-        } else {
-            // Rapid fade out
-            float fadeOut = (deathProgress - 0.3) / 0.7;
-            ageBrightness = mix(1.5, 0.1, fadeOut);
-            ageColorMod = vec3(1.0);
+    // Player 1 units - cyan (empty) or green (holding)
+    float p1TotalUnitDensity = p1EmptyUnitDensity + p1HoldingUnitDensity;
+    if (p1TotalUnitDensity > unitThreshold * 0.3) {
+        float p1AgeRatio = p1AvgAge / MAX_AGE;
+        float ageBrightness = 1.0;
+        vec3 ageColorMod = vec3(1.0);
+        
+        if (p1AgeRatio >= fadeStart && p1AgeRatio < deathFlashStart) {
+            float fadeFactor = (p1AgeRatio - fadeStart) / (deathFlashStart - fadeStart);
+            ageBrightness = 1.0 - fadeFactor * 0.7;
+        } else if (p1AgeRatio >= deathFlashStart) {
+            float deathProgress = (p1AgeRatio - deathFlashStart) / (1.0 - deathFlashStart);
+            if (deathProgress < 0.3) {
+                float flashIntensity = deathProgress / 0.3;
+                ageColorMod = mix(vec3(0.3), vec3(3.0), flashIntensity);
+            } else {
+                float fadeOut = (deathProgress - 0.3) / 0.7;
+                ageBrightness = mix(1.5, 0.1, fadeOut);
+            }
         }
-    }
-    
-    // Outer glow first (shows even at low density)
-    if (totalUnitDensity > unitThreshold * 0.3) {
-        float holdingRatio = holdingUnitDensity / max(totalUnitDensity, 0.001);
-        float glowStrength = smoothstep(0.0, unitThreshold, totalUnitDensity);
+        
+        float holdingRatio = p1HoldingUnitDensity / max(p1TotalUnitDensity, 0.001);
+        float glowStrength = smoothstep(0.0, unitThreshold, p1TotalUnitDensity);
         vec3 glowColor = mix(vec3(0.05, 0.25, 0.4), vec3(0.1, 0.35, 0.1), holdingRatio);
         glowColor *= ageBrightness * ageColorMod;
         color = color + glowColor * glowStrength * 0.6;
+        
+        if (p1TotalUnitDensity > unitThreshold) {
+            float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, p1TotalUnitDensity);
+            vec3 cyanColor = vec3(0.3, 0.8, 1.0) * ageBrightness * ageColorMod;
+            vec3 greenColor = vec3(0.4, 0.95, 0.4) * ageBrightness * ageColorMod;
+            vec3 unitColor = mix(cyanColor, greenColor, holdingRatio);
+            float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, p1TotalUnitDensity);
+            unitColor += vec3(0.2) * coreGlow * ageBrightness;
+            color = mix(color, unitColor, blobStrength);
+        }
     }
     
-    // Main blob
-    if (totalUnitDensity > unitThreshold) {
-        float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, totalUnitDensity);
+    // Player 2 units - orange (empty) or red (holding)
+    float p2TotalUnitDensity = p2EmptyUnitDensity + p2HoldingUnitDensity;
+    if (p2TotalUnitDensity > unitThreshold * 0.3) {
+        float p2AgeRatio = p2AvgAge / MAX_AGE;
+        float ageBrightness = 1.0;
+        vec3 ageColorMod = vec3(1.0);
         
-        // Blend between cyan and green based on holding ratio
-        float holdingRatio = holdingUnitDensity / max(totalUnitDensity, 0.001);
+        if (p2AgeRatio >= fadeStart && p2AgeRatio < deathFlashStart) {
+            float fadeFactor = (p2AgeRatio - fadeStart) / (deathFlashStart - fadeStart);
+            ageBrightness = 1.0 - fadeFactor * 0.7;
+        } else if (p2AgeRatio >= deathFlashStart) {
+            float deathProgress = (p2AgeRatio - deathFlashStart) / (1.0 - deathFlashStart);
+            if (deathProgress < 0.3) {
+                float flashIntensity = deathProgress / 0.3;
+                ageColorMod = mix(vec3(0.3), vec3(3.0), flashIntensity);
+            } else {
+                float fadeOut = (deathProgress - 0.3) / 0.7;
+                ageBrightness = mix(1.5, 0.1, fadeOut);
+            }
+        }
         
-        vec3 cyanColor = vec3(0.3, 0.8, 1.0) * ageBrightness * ageColorMod;
-        vec3 greenColor = vec3(0.4, 0.95, 0.4) * ageBrightness * ageColorMod;
-        vec3 unitColor = mix(cyanColor, greenColor, holdingRatio);
+        float holdingRatio = p2HoldingUnitDensity / max(p2TotalUnitDensity, 0.001);
+        float glowStrength = smoothstep(0.0, unitThreshold, p2TotalUnitDensity);
+        // Orange/red glow for player 2
+        vec3 glowColor = mix(vec3(0.4, 0.2, 0.05), vec3(0.35, 0.1, 0.1), holdingRatio);
+        glowColor *= ageBrightness * ageColorMod;
+        color = color + glowColor * glowStrength * 0.6;
         
-        // Brighter core for dense groups
-        float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, totalUnitDensity);
-        unitColor += vec3(0.2) * coreGlow * ageBrightness;
-        
-        color = mix(color, unitColor, blobStrength);
+        if (p2TotalUnitDensity > unitThreshold) {
+            float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, p2TotalUnitDensity);
+            // Orange (empty) to red (holding) for player 2
+            vec3 orangeColor = vec3(1.0, 0.6, 0.2) * ageBrightness * ageColorMod;
+            vec3 redColor = vec3(0.95, 0.3, 0.3) * ageBrightness * ageColorMod;
+            vec3 unitColor = mix(orangeColor, redColor, holdingRatio);
+            float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, p2TotalUnitDensity);
+            unitColor += vec3(0.2) * coreGlow * ageBrightness;
+            color = mix(color, unitColor, blobStrength);
+        }
     }
     
     // Walls - solid gray blocks
@@ -270,57 +337,90 @@ void main() {
         color = mix(color, wallColor, blobStrength * 0.95);
     }
     
-    // Built Factory - purple/magenta blob with energy glow and pulsing core
-    if (builtFactoryDensity > factoryThreshold) {
-        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, builtFactoryDensity);
+    // Player 1 Built Factory - purple/magenta blob with energy glow
+    if (p1BuiltFactoryDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, p1BuiltFactoryDensity);
         
-        // Get resource count from center cell
         vec4 centerCell = texture(u_state, v_uv);
         float resources = 0.0;
-        if (isMiningFactory(centerCell)) {
+        if (isMiningFactory(centerCell) && isPlayer1(centerCell)) {
             resources = getFactoryResourceCount(centerCell);
         }
         float energyLevel = min(resources / 10.0, 1.0);
         
-        // Purple base with energy brightness
         vec3 purpleDark = vec3(0.4, 0.1, 0.5);
         vec3 purpleBright = vec3(0.8, 0.3, 1.0);
         vec3 factoryColor = mix(purpleDark, purpleBright, 0.3 + energyLevel * 0.7);
         
-        // Energy core glow
-        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, builtFactoryDensity);
+        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, p1BuiltFactoryDensity);
         factoryColor += vec3(0.2, 0.1, 0.3) * coreGlow * energyLevel;
         
-        // Pulsing aura for active factories (has resources ready to spawn)
         if (energyLevel > 0.3) {
             float pulse = sin(u_time * 4.0) * 0.5 + 0.5;
-            vec3 pulseColor = vec3(1.0, 0.5, 1.0) * pulse * energyLevel * 0.3;
-            factoryColor += pulseColor;
-            
-            // Particle-like sparkles for high energy
+            factoryColor += vec3(1.0, 0.5, 1.0) * pulse * energyLevel * 0.3;
             float sparkle = fract(sin(dot(pixelPos + u_time * 10.0, vec2(12.9898, 78.233))) * 43758.5453);
             if (sparkle > 0.95 && energyLevel > 0.5) {
                 factoryColor += vec3(0.5, 0.3, 0.6);
             }
         }
-        
         color = mix(color, factoryColor, blobStrength);
     }
     
-    // Unbuilt Factory - grayish/dim purple that brightens with build progress
-    if (unbuiltFactoryDensity > factoryThreshold) {
-        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, unbuiltFactoryDensity);
+    // Player 2 Built Factory - green/teal blob with energy glow
+    if (p2BuiltFactoryDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, p2BuiltFactoryDensity);
         
-        // Start gray, transition to purple as it gets built
-        vec3 grayColor = vec3(0.25, 0.22, 0.28);  // Slightly purplish gray
-        vec3 purpleColor = vec3(0.5, 0.2, 0.6);   // Muted purple
-        vec3 unbuiltColor = mix(grayColor, purpleColor, buildProgress);
+        vec4 centerCell = texture(u_state, v_uv);
+        float resources = 0.0;
+        if (isMiningFactory(centerCell) && isPlayer2(centerCell)) {
+            resources = getFactoryResourceCount(centerCell);
+        }
+        float energyLevel = min(resources / 10.0, 1.0);
         
-        // Pulsing "under construction" effect
+        vec3 greenDark = vec3(0.1, 0.4, 0.3);
+        vec3 greenBright = vec3(0.3, 0.9, 0.5);
+        vec3 factoryColor = mix(greenDark, greenBright, 0.3 + energyLevel * 0.7);
+        
+        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, p2BuiltFactoryDensity);
+        factoryColor += vec3(0.1, 0.3, 0.2) * coreGlow * energyLevel;
+        
+        if (energyLevel > 0.3) {
+            float pulse = sin(u_time * 4.0) * 0.5 + 0.5;
+            factoryColor += vec3(0.4, 1.0, 0.6) * pulse * energyLevel * 0.3;
+            float sparkle = fract(sin(dot(pixelPos + u_time * 10.0, vec2(12.9898, 78.233))) * 43758.5453);
+            if (sparkle > 0.95 && energyLevel > 0.5) {
+                factoryColor += vec3(0.3, 0.6, 0.4);
+            }
+        }
+        color = mix(color, factoryColor, blobStrength);
+    }
+    
+    // Player 1 Unbuilt Factory - grayish/dim purple
+    if (p1UnbuiltFactoryDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, p1UnbuiltFactoryDensity);
+        
+        vec3 grayColor = vec3(0.25, 0.22, 0.28);
+        vec3 purpleColor = vec3(0.5, 0.2, 0.6);
+        vec3 unbuiltColor = mix(grayColor, purpleColor, p1BuildProgress);
+        
         float constructPulse = sin(u_time * 2.0) * 0.5 + 0.5;
         unbuiltColor += vec3(0.05, 0.02, 0.08) * constructPulse;
+        float grid = step(0.5, fract(pixelPos.x * 0.5)) * step(0.5, fract(pixelPos.y * 0.5));
+        unbuiltColor *= 0.9 + grid * 0.1;
         
-        // Grid pattern overlay to show it's unfinished
+        color = mix(color, unbuiltColor, blobStrength);
+    }
+    
+    // Player 2 Unbuilt Factory - grayish/dim green
+    if (p2UnbuiltFactoryDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, p2UnbuiltFactoryDensity);
+        
+        vec3 grayColor = vec3(0.22, 0.25, 0.23);
+        vec3 greenColor = vec3(0.2, 0.5, 0.3);
+        vec3 unbuiltColor = mix(grayColor, greenColor, p2BuildProgress);
+        
+        float constructPulse = sin(u_time * 2.0) * 0.5 + 0.5;
+        unbuiltColor += vec3(0.02, 0.08, 0.04) * constructPulse;
         float grid = step(0.5, fract(pixelPos.x * 0.5)) * step(0.5, fract(pixelPos.y * 0.5));
         unbuiltColor *= 0.9 + grid * 0.1;
         
