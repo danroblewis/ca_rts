@@ -139,7 +139,7 @@ float getUnitHomesickTimer(vec4 raw) {
 // Forward declare MemoryState struct (defined in memory.glsl)
 // We use raw components here to avoid circular dependency
 // homesickTimer is only used when freshness <= 0
-vec4 encodeUnitRaw(bool holding, int counter, float age, vec2 factoryPos, vec2 memoryPos, float freshness, float homesickTimer) {
+vec4 encodeUnitRaw(int player, bool holding, int counter, float age, vec2 factoryPos, vec2 memoryPos, float freshness, float homesickTimer) {
     float g = (holding ? 1.0 : 0.0) + float(counter) * 2.0 + age * AGE_PACK_BASE;
     float b = packCoords(factoryPos);
     float a;
@@ -150,11 +150,11 @@ vec4 encodeUnitRaw(bool holding, int counter, float age, vec2 factoryPos, vec2 m
         // No memory - encode homesick timer as negative
         a = -(homesickTimer + 1.0);
     }
-    return vec4(float(TYPE_UNIT), g, b, a);
+    return vec4(float(getUnitTypeForPlayer(player)), g, b, a);
 }
 
-vec4 encodeUnitSimple(bool holding, int counter, vec2 factoryPos) {
-    return encodeUnitRaw(holding, counter, 0.0, factoryPos, vec2(-1.0), 0.0, 0.0);
+vec4 encodeUnitSimple(int player, bool holding, int counter, vec2 factoryPos) {
+    return encodeUnitRaw(player, holding, counter, 0.0, factoryPos, vec2(-1.0), 0.0, 0.0);
 }
 
 // ============================================================================
@@ -190,7 +190,7 @@ float sumFactoryBuildProgress(vec2 centerPos, sampler2D state, vec2 resolution) 
             if (dx == 0 && dy == 0) continue;  // Skip center
             vec2 cellPos = centerPos + vec2(float(dx), float(dy));
             vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
-            if (getType(cellRaw) == TYPE_FACTORY) {
+            if (isFactory(getType(cellRaw))) {  // Check for any player's factory
                 total += getFactoryBuildProgress(cellRaw);
             }
         }

@@ -28,6 +28,7 @@ precision highp float;
 #include "./traits/spawning.glsl"
 #include "./traits/deposit.glsl"
 #include "./traits/demolish.glsl"
+#include "./traits/attack.glsl"
 
 uniform sampler2D u_state;
 uniform vec2 u_resolution;
@@ -51,6 +52,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     DepositResult deposit = evaluateDeposit(myPos, u_state, u_resolution);
     BuildResult build = evaluateBuild(myPos, u_state, u_resolution);
     DemolishResult demolish = evaluateDemolish(myPos, u_state, u_resolution);
+    AttackResult attack = evaluateAttack(myPos, u_state, u_resolution);
     
     // ========================================================================
     // Extract my role from each trait result
@@ -101,6 +103,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             mem.newFactoryPos = vec2(-1.0);
             
             return encodeUnit(
+                getPlayer(myType),
                 false,  // no longer holding
                 0,      // reset counter
                 0.0,    // reset age (just deposited successfully)
@@ -138,6 +141,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             mem.newFactoryPos = vec2(-1.0);
             
             return encodeUnit(
+                getPlayer(myType),
                 false,  // no longer holding
                 0,      // reset counter
                 0.0,    // reset age (just built successfully)
@@ -174,6 +178,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             mem.newFactoryPos = vec2(-1.0);
             
             return encodeUnit(
+                getPlayer(myType),
                 true,   // now holding a resource
                 0,      // reset counter
                 0.0,    // reset age
@@ -188,6 +193,38 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         }
     }
     
+    // --- ATTACK (units destroying enemy factories) ---
+    if (attack.happened) {
+        // Am I the attacking unit? (I pick up a resource)
+        if (distance(attack.unitPos, myPos) < 0.5) {
+            // Unit picks up a resource from attacking enemy factory
+            MemoryState mem;
+            mem.position = vec2(-1.0);  // No memory of enemy factory location
+            mem.freshness = 0.0;
+            mem.hasMemory = false;
+            mem.homesickTimer = 0.0;
+            mem.factoryChanged = false;
+            mem.newFactoryPos = vec2(-1.0);
+            
+            return encodeUnit(
+                getPlayer(myType),
+                true,   // now holding a resource (plundered!)
+                0,      // reset counter
+                0.0,    // reset age
+                getUnitFactory(myRaw),
+                mem
+            );
+        }
+        
+        // Am I the factory cell being attacked?
+        if (distance(attack.factoryPos, myPos) < 0.5) {
+            // Count how many attackers are hitting me
+            int attacks = countAttacks(myPos, attack.defenderPlayer, u_state, u_resolution);
+            // Factory cell is destroyed by the attack
+            return encodeEmpty();
+        }
+    }
+    
     // ========================================================================
     // No trait affected me - handle staying in place
     // ========================================================================
@@ -198,6 +235,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         bool walking = float(counter) >= STATIONARY_THRESHOLD;
         bool holding = getUnitHolding(myRaw);
         float age = getUnitAge(myRaw);
+        int myPlayer = getPlayer(myType);
         
         int newCounter;
         if (walking) {
@@ -248,8 +286,8 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             factoryPos = vec2(-1.0);  // Factory was deleted, become homeless
         }
         
-        // Check for visible factories - units ALWAYS adopt visible factories
-        vec2 visibleFactory = findVisibleFactory(myPos, u_state, u_resolution);
+        // Check for visible factories OF SAME PLAYER - units adopt visible factories of their team
+        vec2 visibleFactory = findVisibleFactory(myPos, myPlayer, u_state, u_resolution);
         if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
             factoryPos = visibleFactory;  // Adopt the visible factory as new home
         }
@@ -261,7 +299,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             mem.hasMemory = mem.freshness > 0.0;
             mem.factoryChanged = false;
         } else {
-            mem = evaluateMemory(myPos, myRaw, u_state, u_resolution);
+            mem = evaluateMemory(myPos, myRaw, myPlayer, u_state, u_resolution);
             // If we learned from another unit, adopt their factory too!
             if (mem.factoryChanged) {
                 factoryPos = mem.newFactoryPos;
@@ -269,6 +307,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         }
         
         return encodeUnit(
+            myPlayer,
             holding,
             newCounter,
             newAge,

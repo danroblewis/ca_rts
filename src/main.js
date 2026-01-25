@@ -42,6 +42,7 @@ const urlParams = new URLSearchParams(window.location.search);
 
 // Hide multiplayer UI on GitHub Pages (no WebSocket server there)
 const isOnGitHub = window.location.hostname.includes('github');
+const isOnLocalhost = window.location.hostname.includes('localhost');
 
 const seedParam = urlParams.get('seed');
 if (seedParam) {
@@ -660,10 +661,13 @@ function updateNetworkIndicator() {
         indicator.style.border = '2px solid rgba(120, 120, 120, 0.8)';
     }
     
-    // Hide Super Speed toggle when in multiplayer (speed must be synced)
+    // Hide Super Speed toggle when in multiplayer (speed must be synced) - but allow on localhost
     const speedToggleContainer = document.getElementById('speed-toggle-container');
     if (speedToggleContainer) {
-        speedToggleContainer.style.display = isMultiplayer ? 'none' : 'flex';
+        // On localhost, always show the toggle (user can choose speed)
+        // On non-localhost, hide if in multiplayer or if not on localhost at all
+        const shouldHide = isMultiplayer && !isOnLocalhost;
+        speedToggleContainer.style.display = shouldHide ? 'none' : 'flex';
         
         // Also force sync mode when in multiplayer
         if (isMultiplayer && !SYNC_SIM_WITH_RENDER) {
@@ -723,9 +727,9 @@ const LOG_INTERVAL = 1000;
 const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
 
 // Toggle: true = sync with render (normal speed), false = fast as possible (super speed)
-// Force sync mode when not on localhost (to avoid overloading remote servers)
-const isOnLocalhost = window.location.hostname.includes('localhost');
-let SYNC_SIM_WITH_RENDER = !isOnLocalhost || true;
+// Default to normal speed, but allow toggle on localhost
+// Force sync mode (hide toggle) when not on localhost
+let SYNC_SIM_WITH_RENDER = true;
 
 // Super Speed Toggle UI
 const speedToggle = document.getElementById('speed-toggle');

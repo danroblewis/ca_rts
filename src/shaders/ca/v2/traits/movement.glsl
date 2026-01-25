@@ -86,14 +86,16 @@ vec2 findResource(vec2 pos, sampler2D state, vec2 resolution) {
 
 // Note: findNearbyMemory is now in memory.glsl
 
-// Check if adjacent to own factory
-bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolution) {
+// Check if adjacent to own factory (by position match and player)
+bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, int myPlayer, sampler2D state, vec2 resolution) {
     for (int d = 1; d <= 4; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
+        int cellType = getType(cell);
         
-        if (isFactory(getType(cell))) {
+        // Must be a factory of the same player
+        if (isFactory(cellType) && getPlayer(cellType) == myPlayer) {
             vec2 fPos = getFactoryPos(cell);
             if (distance(fPos, factoryPos) < 0.5) {
                 return true;
@@ -103,14 +105,16 @@ bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolu
     return false;
 }
 
-// Check if adjacent to a buildable (unbuilt) factory (for holding units to build instead of move)
-bool isAdjacentToBuildableFactory(vec2 pos, sampler2D state, vec2 resolution) {
+// Check if adjacent to a buildable (unbuilt) factory OF SAME PLAYER (for holding units to build instead of move)
+bool isAdjacentToBuildableFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
     for (int d = 1; d <= 4; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
+        int cellType = getType(cell);
         
-        if (isFactory(getType(cell))) {
+        // Only check factories of the same player
+        if (isFactory(cellType) && getPlayer(cellType) == myPlayer) {
             vec2 center = getFactoryPos(cell);
             // Check if factory is NOT built yet
                 float totalBuild = 0.0;
@@ -135,9 +139,9 @@ bool isAdjacentToBuildableFactory(vec2 pos, sampler2D state, vec2 resolution) {
     return false;
 }
 
-// Find nearest unbuilt factory that needs building within vision range
+// Find nearest unbuilt factory OF SAME PLAYER that needs building within vision range
 // Returns the position of the nearest buildable factory cell, or (-1, -1) if none found
-vec2 findVisibleUnbuiltFactory(vec2 pos, sampler2D state, vec2 resolution) {
+vec2 findVisibleUnbuiltFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
     vec2 nearest = vec2(-1.0);
     float nearestDist = 999.0;
     
@@ -148,8 +152,10 @@ vec2 findVisibleUnbuiltFactory(vec2 pos, sampler2D state, vec2 resolution) {
             vec2 checkPos = pos + vec2(float(dx), float(dy));
             vec2 uv = (checkPos + 0.5) / resolution;
             vec4 cell = texture(state, uv);
+            int cellType = getType(cell);
             
-            if (isFactory(getType(cell))) {
+            // Only check factories of the same player
+            if (isFactory(cellType) && getPlayer(cellType) == myPlayer) {
                 vec2 center = getFactoryPos(cell);
                 // Check if factory is NOT built yet
                     float totalBuild = 0.0;
@@ -179,6 +185,49 @@ vec2 findVisibleUnbuiltFactory(vec2 pos, sampler2D state, vec2 resolution) {
     return nearest;
 }
 
+// Find nearest ENEMY factory within vision range (for attacking)
+// Returns the position of the nearest enemy factory cell, or (-1, -1) if none found
+vec2 findVisibleEnemyFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
+    vec2 nearest = vec2(-1.0);
+    float nearestDist = 999.0;
+    
+    for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++) {
+        for (int dx = -VISION_RANGE; dx <= VISION_RANGE; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            vec2 checkPos = pos + vec2(float(dx), float(dy));
+            vec2 uv = (checkPos + 0.5) / resolution;
+            vec4 cell = texture(state, uv);
+            int cellType = getType(cell);
+            
+            // Check for enemy factories
+            if (isFactory(cellType) && getPlayer(cellType) != myPlayer) {
+                float dist = abs(float(dx)) + abs(float(dy));
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearest = checkPos;
+                }
+            }
+        }
+    }
+    return nearest;
+}
+
+// Check if adjacent to an enemy factory (for attacking)
+bool isAdjacentToEnemyFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
+    for (int d = 1; d <= 4; d++) {
+        vec2 checkPos = pos + dirToOffset(d);
+        vec2 uv = (checkPos + 0.5) / resolution;
+        vec4 cell = texture(state, uv);
+        int cellType = getType(cell);
+        
+        if (isFactory(cellType) && getPlayer(cellType) != myPlayer) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resolution) {
     bool holding = getUnitHolding(raw);
     int counter = getUnitCounter(raw);
@@ -186,6 +235,7 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     vec2 memoryPos = getUnitMemoryPos(raw);
     float freshness = getUnitMemoryFreshness(raw);
     float homesickTimer = getUnitHomesickTimer(raw);
+    int myPlayer = getPlayer(getType(raw));
     
     bool walking = float(counter) >= STATIONARY_THRESHOLD;
     bool hasMemory = (freshness > 0.0 && memoryPos.x >= 0.0);
@@ -194,18 +244,23 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     // Check if unit has a valid home factory
     bool hasHome = (factoryPos.x >= 0.0);
     
-    // If holding and adjacent to factory, don't move (deposit instead)
-    if (holding && hasHome && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
+    // If holding and adjacent to own factory, don't move (deposit instead)
+    if (holding && hasHome && isAdjacentToFactory(pos, factoryPos, myPlayer, state, resolution)) {
         return DIR_NONE;  // Will deposit, not move
     }
     
-    // If holding and adjacent to buildable (unbuilt) factory, don't move (build instead)
-    if (holding && isAdjacentToBuildableFactory(pos, state, resolution)) {
+    // If holding and adjacent to buildable (unbuilt) factory OF SAME PLAYER, don't move (build instead)
+    if (holding && isAdjacentToBuildableFactory(pos, myPlayer, state, resolution)) {
         return DIR_NONE;  // Will build, not move
     }
     
-    // If homesick and adjacent to factory, stop (will reset timer in memory eval)
-    if (homesick && hasHome && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
+    // If NOT holding and adjacent to enemy factory, don't move (attack instead)
+    if (!holding && isAdjacentToEnemyFactory(pos, myPlayer, state, resolution)) {
+        return DIR_NONE;  // Will attack, not move
+    }
+    
+    // If homesick and adjacent to own factory, stop (will reset timer in memory eval)
+    if (homesick && hasHome && isAdjacentToFactory(pos, factoryPos, myPlayer, state, resolution)) {
         return DIR_NONE;  // Reached home, timer will reset
     }
     
@@ -219,10 +274,10 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
         return randomDir(pos, time);  // Wander until we see a factory
     }
     
-    // Holding with home = check for visible unbuilt factory first, then go to home factory
+    // Holding with home = check for visible unbuilt factory OF SAME PLAYER first, then go to home factory
     if (holding) {
-        // Prioritize building unbuilt factories if we can see one
-        vec2 visibleUnbuilt = findVisibleUnbuiltFactory(pos, state, resolution);
+        // Prioritize building unbuilt factories of our own player if we can see one
+        vec2 visibleUnbuilt = findVisibleUnbuiltFactory(pos, myPlayer, state, resolution);
         if (visibleUnbuilt.x >= 0.0) {
             return dirToward(pos, visibleUnbuilt, time + pos.x * 0.1);
         }
@@ -245,10 +300,16 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
         return dirToward(pos, factoryPos, time + pos.x * 0.1);
     }
     
-    // Not holding = look for resources
+    // Not holding = look for resources first
     vec2 visibleResource = findResource(pos, state, resolution);
     if (visibleResource.x >= 0.0) {
         return dirToward(pos, visibleResource, time + pos.x * 0.1);
+    }
+    
+    // Not holding and no resources visible = look for enemy factories to attack
+    vec2 visibleEnemy = findVisibleEnemyFactory(pos, myPlayer, state, resolution);
+    if (visibleEnemy.x >= 0.0) {
+        return dirToward(pos, visibleEnemy, time + pos.x * 0.1);
     }
     
     // Go to remembered location
@@ -424,14 +485,16 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
             // Also resets homesick timer (createFreshMemory sets it to 0)
             MemoryState mem = createFreshMemory(destPos);
             
-            // Check for factory adoption (homeless units can adopt visible factories)
+            // Check for factory adoption (homeless units can adopt visible factories OF SAME PLAYER)
+            int myPlayer = getPlayer(arrivingType);
             vec2 factoryPos = getUnitFactory(arrivingCell);
-            vec2 visibleFactory = findVisibleFactory(destPos, state, resolution);
+            vec2 visibleFactory = findVisibleFactory(destPos, myPlayer, state, resolution);
             if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
                 factoryPos = visibleFactory;
             }
             
             return encodeUnit(
+                myPlayer,
                 true,  // now holding
                 0,     // reset counter
                 0.0,   // reset age (just mined successfully!)
@@ -455,9 +518,10 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
         float homesickTimer = getUnitHomesickTimer(arrivingCell);
         float age = getUnitAge(arrivingCell);
         vec2 factoryPos = getUnitFactory(arrivingCell);
+        int myPlayer = getPlayer(arrivingType);
         
-        // Check for factory adoption - homeless or different visible factory
-        vec2 visibleFactory = findVisibleFactory(destPos, state, resolution);
+        // Check for factory adoption - homeless or different visible factory OF SAME PLAYER
+        vec2 visibleFactory = findVisibleFactory(destPos, myPlayer, state, resolution);
         if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
             factoryPos = visibleFactory;
         }
@@ -502,6 +566,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
         }
         
         return encodeUnit(
+            myPlayer,
             holding,
             newCounter,
             newAge,

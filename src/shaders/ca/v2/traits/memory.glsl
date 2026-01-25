@@ -55,11 +55,11 @@ struct SharedKnowledge {
 };
 
 // ============================================================================
-// Helper: Find shared knowledge from nearby units
+// Helper: Find shared knowledge from nearby units OF THE SAME PLAYER
 // Returns resource memory AND factory location from the sharing unit
 // ============================================================================
 
-SharedKnowledge findNearbyKnowledge(vec2 pos, sampler2D state, vec2 resolution) {
+SharedKnowledge findNearbyKnowledge(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
     SharedKnowledge result;
     result.found = false;
     result.resourcePos = vec2(-1.0);
@@ -75,8 +75,10 @@ SharedKnowledge findNearbyKnowledge(vec2 pos, sampler2D state, vec2 resolution) 
             vec2 checkPos = pos + vec2(float(dx), float(dy));
             vec2 uv = (checkPos + 0.5) / resolution;
             vec4 cell = texture(state, uv);
+            int cellType = getType(cell);
             
-            if (getType(cell) == TYPE_UNIT) {
+            // Only learn from units of the same player
+            if (isUnit(cellType) && getPlayer(cellType) == myPlayer) {
                 float freshness = getUnitMemoryFreshness(cell);
                 if (freshness > 0.0) {
                     float dist = abs(float(dx)) + abs(float(dy));
@@ -95,11 +97,11 @@ SharedKnowledge findNearbyKnowledge(vec2 pos, sampler2D state, vec2 resolution) 
 }
 
 // ============================================================================
-// Helper: Find nearest visible factory
+// Helper: Find nearest visible factory OF THE SAME PLAYER
 // Returns factory position or (-1, -1) if none visible
 // ============================================================================
 
-vec2 findVisibleFactory(vec2 pos, sampler2D state, vec2 resolution) {
+vec2 findVisibleFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
     float nearestDist = 999.0;
     vec2 nearestFactory = vec2(-1.0);
     
@@ -110,8 +112,10 @@ vec2 findVisibleFactory(vec2 pos, sampler2D state, vec2 resolution) {
             vec2 checkPos = pos + vec2(float(dx), float(dy));
             vec2 uv = (checkPos + 0.5) / resolution;
             vec4 cell = texture(state, uv);
+            int cellType = getType(cell);
             
-            if (getType(cell) == TYPE_FACTORY) {
+            // Only find factories of the same player
+            if (isFactory(cellType) && getPlayer(cellType) == myPlayer) {
                 float dist = abs(float(dx)) + abs(float(dy));
                 if (dist < nearestDist) {
                     nearestDist = dist;
@@ -124,7 +128,7 @@ vec2 findVisibleFactory(vec2 pos, sampler2D state, vec2 resolution) {
 }
 
 // ============================================================================
-// Helper: Check if unit is adjacent to its factory
+// Helper: Check if unit is adjacent to its own factory (by position match)
 // ============================================================================
 
 bool isAdjacentToOwnFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolution) {
@@ -132,8 +136,10 @@ bool isAdjacentToOwnFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 res
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
+        int cellType = getType(cell);
         
-        if (getType(cell) == TYPE_FACTORY) {
+        // Check both player factory types
+        if (isFactory(cellType)) {
             vec2 fPos = getFactoryPos(cell);
             if (distance(fPos, factoryPos) < 0.5) {
                 return true;
@@ -144,7 +150,7 @@ bool isAdjacentToOwnFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 res
 }
 
 // ============================================================================
-// Helper: Check if factory exists at expected location
+// Helper: Check if factory exists at expected location (for any player)
 // Returns true if factory exists, false if it's gone (was deleted)
 // ============================================================================
 
@@ -155,8 +161,10 @@ bool factoryExistsAt(vec2 factoryPos, sampler2D state, vec2 resolution) {
     // Sample the factory location directly
     vec2 uv = (factoryPos + 0.5) / resolution;
     vec4 cell = texture(state, uv);
+    int cellType = getType(cell);
     
-    if (getType(cell) == TYPE_FACTORY) {
+    // Check both player factory types
+    if (isFactory(cellType)) {
         // Verify it's the same factory (position matches)
         vec2 fPos = getFactoryPos(cell);
         return distance(fPos, factoryPos) < 0.5;
@@ -180,7 +188,7 @@ bool isNearFactoryLocation(vec2 pos, vec2 factoryPos) {
 // Does NOT handle: acquiring memory from mining (that's in movement/transformArrival)
 // ============================================================================
 
-MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution) {
+MemoryState evaluateMemory(vec2 pos, vec4 raw, int myPlayer, sampler2D state, vec2 resolution) {
     MemoryState result;
     result.factoryChanged = false;
     result.newFactoryPos = vec2(-1.0);
@@ -216,10 +224,10 @@ MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution)
         result.newFactoryPos = vec2(-1.0);
     }
     
-    // 4. If no memory and not holding, try to acquire knowledge from nearby unit
+    // 4. If no memory and not holding, try to acquire knowledge from nearby unit OF SAME PLAYER
     //    This includes both resource location AND factory location!
     if (freshness <= 0.0 && !getUnitHolding(raw)) {
-        SharedKnowledge shared = findNearbyKnowledge(pos, state, resolution);
+        SharedKnowledge shared = findNearbyKnowledge(pos, myPlayer, state, resolution);
         if (shared.found && shared.freshness > 0.0) {
             memPos = shared.resourcePos;
             freshness = shared.freshness;
@@ -230,9 +238,9 @@ MemoryState evaluateMemory(vec2 pos, vec4 raw, sampler2D state, vec2 resolution)
         }
     }
     
-    // 4.5. If a factory is visible, adopt it as home (regardless of current state)
-    //      This allows units to change allegiance to nearby factories
-    vec2 visibleFactory = findVisibleFactory(pos, state, resolution);
+    // 4.5. If a factory OF SAME PLAYER is visible, adopt it as home (regardless of current state)
+    //      Units only adopt their own player's factories, not enemy factories
+    vec2 visibleFactory = findVisibleFactory(pos, myPlayer, state, resolution);
     if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
         // Found a visible factory that's different from current home
         result.factoryChanged = true;
@@ -313,8 +321,8 @@ bool isHomesick(MemoryState mem) {
 // Encode a unit with MemoryState object (cleaner API)
 // ============================================================================
 
-vec4 encodeUnit(bool holding, int counter, float age, vec2 factoryPos, MemoryState mem) {
-    return encodeUnitRaw(holding, counter, age, factoryPos, mem.position, mem.freshness, mem.homesickTimer);
+vec4 encodeUnit(int player, bool holding, int counter, float age, vec2 factoryPos, MemoryState mem) {
+    return encodeUnitRaw(player, holding, counter, age, factoryPos, mem.position, mem.freshness, mem.homesickTimer);
 }
 
 #endif

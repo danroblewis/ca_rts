@@ -151,9 +151,7 @@ SpawnResult evaluateSpawning(vec2 myPos, sampler2D state, vec2 resolution) {
                     result.spawnPos = myPos;
                     // Spawn unit with the correct player type
                     // Use proper unit encoding - factory pos goes in channel B (packed)
-                    vec4 unitCell = encodeUnitSimple(false, 0, center);
-                    unitCell.r = float(getUnitTypeForPlayer(player));  // Override type for player 2
-                    result.spawnedCell = unitCell;
+                    result.spawnedCell = encodeUnitSimple(player, false, 0, center);
                     result.factoryCenter = center;
                     result.player = player;
                     return result;
@@ -177,9 +175,7 @@ SpawnResult evaluateSpawning(vec2 myPos, sampler2D state, vec2 resolution) {
             result.spawnPos = spawnPos;
             // Spawn unit with the correct player type
             // Use proper unit encoding - factory pos goes in channel B (packed)
-            vec4 unitCell = encodeUnitSimple(false, 0, center);
-            unitCell.r = float(getUnitTypeForPlayer(player));  // Override type for player 2
-            result.spawnedCell = unitCell;
+            result.spawnedCell = encodeUnitSimple(player, false, 0, center);
             result.factoryCenter = center;
             result.player = player;
             return result;
