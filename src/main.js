@@ -21,7 +21,7 @@ const TEMPORAL_BLEND = 1.0;           // Temporal AA blend (0 = off, 1 = full). 
 // Simulation speed settings
 const LOG_INTERVAL = 1000;            // Stats logging interval in ms
 const SIM_BATCH_SIZE = 10;            // Simulation steps per batch in fast mode
-const SYNC_SIM_BATCH_SIZE = 1;        // Simulation steps per batch in synced (normal) mode
+const SYNC_SIM_BATCH_SIZE = 4;        // Simulation steps per batch in synced (normal) mode
 const DEFAULT_SYNC_MODE = true;       // true = sync with render (normal), false = fast as possible
 
 // Map generation - Resource blobs
