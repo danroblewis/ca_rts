@@ -14,8 +14,11 @@ precision highp float;
 
 // Kernel sizes for density sampling (radius, so 2 = 5x5, 3 = 7x7, 4 = 9x9)
 #define STATIC_KERNEL_RADIUS 2      // For resources, walls, factories (5x5)
-#define UNIT_KERNEL_RADIUS 4        // For units - current frame (9x9)
+#define UNIT_KERNEL_RADIUS 2        // For units - current frame (5x5)
 #define UNIT_TEMPORAL_KERNEL_RADIUS 2  // For units - older frames (5x5)
+
+// Temporal trail smoothing - higher = smoother/wider trails, lower = tighter
+#define TEMPORAL_BLUR_SIGMA 0.8
 
 // ============================================================================
 // UNIFORMS
