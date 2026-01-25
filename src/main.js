@@ -467,7 +467,8 @@ const LOG_INTERVAL = 1000;
 const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
 
 // Toggle: true = sync with render (debug), false = fast as possible
-let SYNC_SIM_WITH_RENDER = false;
+// Force sync mode when not on localhost (to avoid overloading remote servers)
+let SYNC_SIM_WITH_RENDER = !window.location.hostname.includes('localhost');
 
 // Expose toggle to console for easy switching
 window.toggleSimSync = () => {
@@ -478,7 +479,7 @@ window.toggleSimSync = () => {
         fastSimulationLoop();
     }
 };
-console.log('Call toggleSimSync() in console to switch between synced/fast simulation');
+console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
 
 function simulationStep() {
     grid.getWriteFramebuffer().bind();
