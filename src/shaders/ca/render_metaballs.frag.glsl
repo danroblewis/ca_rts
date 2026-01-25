@@ -3,42 +3,191 @@ precision highp float;
 
 #include "common/cell_types.glsl"
 
-uniform sampler2D u_state;
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+// Number of previous frames to sample for temporal anti-aliasing (1-8)
+// Higher = smoother motion blur but more GPU cost
+// Only affects moving units (static elements always use current frame only)
+#define TEMPORAL_FRAME_COUNT 4
+
+// Kernel sizes for density sampling (radius, so 2 = 5x5, 3 = 7x7, 4 = 9x9)
+#define STATIC_KERNEL_RADIUS 2      // For resources, walls, factories (5x5)
+#define UNIT_KERNEL_RADIUS 4        // For units - current frame (9x9)
+#define UNIT_TEMPORAL_KERNEL_RADIUS 2  // For units - older frames (5x5)
+
+// ============================================================================
+// UNIFORMS
+// ============================================================================
+
+// Ring buffer of 8 frame textures for temporal anti-aliasing
+// u_state0 = newest (current), u_state7 = oldest
+uniform sampler2D u_state0;
+uniform sampler2D u_state1;
+uniform sampler2D u_state2;
+uniform sampler2D u_state3;
+uniform sampler2D u_state4;
+uniform sampler2D u_state5;
+uniform sampler2D u_state6;
+uniform sampler2D u_state7;
+
+// Alias for compatibility - u_state points to current frame
+#define u_state u_state0
+
 uniform vec2 u_resolution;       // Grid resolution (e.g., 256x256)
 uniform vec2 u_canvasResolution; // Canvas resolution (e.g., 1920x1080)
 uniform float u_time;
 uniform float u_metaballScale;   // Scale factor for metaball effect (0.5 = tighter, 2.0 = blobbier)
+uniform int u_frameCount;        // Number of frames to blend (1-8, default 8)
+uniform float u_temporalBlend;   // Temporal blend strength (0 = no blend, 1 = full blend)
+
+// Sample from a specific frame by index
+vec4 sampleFrame(int frame, vec2 uv) {
+    if (frame == 0) return texture(u_state0, uv);
+    if (frame == 1) return texture(u_state1, uv);
+    if (frame == 2) return texture(u_state2, uv);
+    if (frame == 3) return texture(u_state3, uv);
+    if (frame == 4) return texture(u_state4, uv);
+    if (frame == 5) return texture(u_state5, uv);
+    if (frame == 6) return texture(u_state6, uv);
+    return texture(u_state7, uv);
+}
+
+// Temporal weight for a frame (exponential decay)
+// Frame 0 (newest) = 1.0, older frames decay
+float temporalWeight(int frame) {
+    return pow(0.7, float(frame));
+}
 
 in vec2 v_uv;
 out vec4 fragColor;
 
-// Higher quality sampling - uses fractional positions for smoother blending
-// u_metaballScale controls how blobby the effect is (1.0 = default, <1 = tighter, >1 = blobbier)
+// ============================================================================
+// UNIFIED DENSITY CALCULATION
+// ============================================================================
+// Instead of sampling the neighborhood multiple times (once per cell type),
+// we sample ONCE and accumulate all densities in a single pass.
+// This reduces texture samples from ~125 to ~25 for static elements.
+
+struct AllDensities {
+    // Static elements (current frame only)
+    float resourceDens;
+    float wallDens;
+    float demolishDens;
+    
+    // Player 1 factories
+    float p1FactoryBuilt;
+    float p1FactoryUnbuilt;
+    float p1BuildProgress;
+    float p1UnbuiltWeight;
+    
+    // Player 2 factories  
+    float p2FactoryBuilt;
+    float p2FactoryUnbuilt;
+    float p2BuildProgress;
+    float p2UnbuiltWeight;
+};
+
+// Calculate all static densities in a single pass (one texture sample per cell)
+AllDensities calcAllStaticDensities(vec2 uv) {
+    AllDensities d;
+    d.resourceDens = 0.0;
+    d.wallDens = 0.0;
+    d.demolishDens = 0.0;
+    d.p1FactoryBuilt = 0.0;
+    d.p1FactoryUnbuilt = 0.0;
+    d.p1BuildProgress = 0.0;
+    d.p1UnbuiltWeight = 0.0;
+    d.p2FactoryBuilt = 0.0;
+    d.p2FactoryUnbuilt = 0.0;
+    d.p2BuildProgress = 0.0;
+    d.p2UnbuiltWeight = 0.0;
+    
+    vec2 texelSize = 1.0 / u_resolution;
+    vec2 gridPos = uv * u_resolution;
+    vec2 cellFrac = fract(gridPos);
+    
+    float scale = max(0.1, u_metaballScale);
+    float minDist = 0.3 / scale;
+    
+    // Single pass over the neighborhood
+    for (int dy = -STATIC_KERNEL_RADIUS; dy <= STATIC_KERNEL_RADIUS; dy++) {
+        for (int dx = -STATIC_KERNEL_RADIUS; dx <= STATIC_KERNEL_RADIUS; dx++) {
+            vec2 offset = vec2(float(dx), float(dy));
+            vec2 sampleUV = uv + offset * texelSize;
+            vec4 cellSample = texture(u_state, sampleUV);
+            
+            // Calculate weight based on distance
+            vec2 cellCenter = offset + vec2(0.5) - cellFrac;
+            float dist = length(cellCenter) / scale;
+            if (dist < minDist) dist = minDist;
+            float weight = 1.0 / (dist * dist);
+            
+            // Accumulate densities based on cell type
+            float cellType = getCellType(cellSample);
+            
+            if (cellType == CELL_RESOURCE) {
+                d.resourceDens += weight;
+            }
+            else if (cellType == CELL_WALL) {
+                d.wallDens += weight;
+            }
+            else if (cellType == CELL_DEMOLISH) {
+                d.demolishDens += weight;
+            }
+            else if (isMiningFactory(cellSample)) {
+                float player = getPlayerFromCell(cellSample);
+                vec2 center = getFactoryPosition(cellSample);
+                float totalProgress = sumFactoryBuildProgress(center, u_state, u_resolution);
+                bool isBuilt = totalProgress >= BUILD_THRESHOLD;
+                
+                if (player == PLAYER_1) {
+                    if (isBuilt) {
+                        d.p1FactoryBuilt += weight;
+                    } else {
+                        d.p1FactoryUnbuilt += weight;
+                        d.p1BuildProgress += (totalProgress / BUILD_THRESHOLD) * weight;
+                        d.p1UnbuiltWeight += weight;
+                    }
+                } else {
+                    if (isBuilt) {
+                        d.p2FactoryBuilt += weight;
+                    } else {
+                        d.p2FactoryUnbuilt += weight;
+                        d.p2BuildProgress += (totalProgress / BUILD_THRESHOLD) * weight;
+                        d.p2UnbuiltWeight += weight;
+                    }
+                }
+            }
+        }
+    }
+    
+    return d;
+}
+
+// Legacy function for single cell type density (still used for some cases)
 float calcDensityHQ(vec2 uv, float targetType) {
     vec2 texelSize = 1.0 / u_resolution;
     float density = 0.0;
     
-    // Calculate position within grid cell (0-1)
     vec2 gridPos = uv * u_resolution;
     vec2 cellFrac = fract(gridPos);
     
-    // Scale affects the distance falloff - higher scale = more spread
     float scale = max(0.1, u_metaballScale);
-    float minDist = 0.3 / scale;  // Minimum distance clamp scales inversely
+    float minDist = 0.3 / scale;
     
-    // Sample in a 5x5 area with sub-cell distance weighting
-    for (int dy = -2; dy <= 2; dy++) {
-        for (int dx = -2; dx <= 2; dx++) {
+    for (int dy = -STATIC_KERNEL_RADIUS; dy <= STATIC_KERNEL_RADIUS; dy++) {
+        for (int dx = -STATIC_KERNEL_RADIUS; dx <= STATIC_KERNEL_RADIUS; dx++) {
             vec2 offset = vec2(float(dx), float(dy));
             vec2 sampleUV = uv + offset * texelSize;
             vec4 cellSample = texture(u_state, sampleUV);
             float sampleType = getCellType(cellSample);
             
             if (sampleType == targetType) {
-                // Use sub-cell position for smoother distance calculation
                 vec2 cellCenter = offset + vec2(0.5) - cellFrac;
-                float dist = length(cellCenter) / scale;  // Scale affects distance
-                if (dist < minDist) dist = minDist; // Stronger center
+                float dist = length(cellCenter) / scale;
+                if (dist < minDist) dist = minDist;
                 density += 1.0 / (dist * dist);
             }
         }
@@ -53,6 +202,7 @@ float calcDensity(vec2 uv, float targetType) {
 
 // Calculate factory density with build status info for a specific player
 // Returns vec3(builtDensity, unbuiltDensity, averageBuildProgress)
+// NO temporal blending - factories are static
 vec3 calcFactoryDensityForPlayer(vec2 uv, float targetPlayer) {
     vec2 texelSize = 1.0 / u_resolution;
     float builtDensity = 0.0;
@@ -107,12 +257,14 @@ vec3 calcFactoryDensityWithStatus(vec2 uv) {
 
 // Calculate unit density with holding info and age for a specific player
 // Returns vec3(emptyDensity, holdingDensity, weightedAge)
+// Uses temporal anti-aliasing for smoother unit motion (units are the only moving entities)
 vec3 calcUnitDensityForPlayer(vec2 uv, float targetPlayer) {
     vec2 texelSize = 1.0 / u_resolution;
     float emptyDensity = 0.0;
     float holdingDensity = 0.0;
     float totalWeight = 0.0;
     float weightedAge = 0.0;
+    float totalTemporalWeight = 0.0;
     
     // Sub-cell position for smoother distance
     vec2 gridPos = uv * u_resolution;
@@ -121,35 +273,53 @@ vec3 calcUnitDensityForPlayer(vec2 uv, float targetPlayer) {
     float scale = max(0.1, u_metaballScale);
     float minDist = 0.3 / scale;
     
-    // Larger 9x9 sampling area for units (they're often several pixels apart)
-    for (int dy = -4; dy <= 4; dy++) {
-        for (int dx = -4; dx <= 4; dx++) {
-            vec2 offset = vec2(float(dx), float(dy));
-            vec4 cellSample = texture(u_state, uv + offset * texelSize);
-            
-            if (isMiningUnit(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
-                // Use sub-cell position for smoother distance
-                vec2 cellCenter = offset + vec2(0.5) - cellFrac;
-                float dist = length(cellCenter) / scale;
-                if (dist < minDist) dist = minDist;
-                float weight = 1.0 / (dist * dist);
+    // Temporal sampling - use TEMPORAL_FRAME_COUNT frames
+    // Frame 0 gets larger kernel, older frames get smaller kernel for speed
+    int numFrames = min(clamp(u_frameCount, 1, 8), TEMPORAL_FRAME_COUNT);
+    float blendStrength = clamp(u_temporalBlend, 0.0, 1.0);
+    
+    for (int frame = 0; frame < TEMPORAL_FRAME_COUNT; frame++) {
+        if (frame >= numFrames) break;
+        
+        float frameWeight = (frame == 0) ? 1.0 : temporalWeight(frame) * blendStrength;
+        totalTemporalWeight += frameWeight;
+        
+        // Use configurable kernel sizes
+        int kernelSize = (frame == 0) ? UNIT_KERNEL_RADIUS : UNIT_TEMPORAL_KERNEL_RADIUS;
+        
+        for (int dy = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
+            if (abs(dy) > kernelSize) continue;
+            for (int dx = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
+                if (abs(dx) > kernelSize) continue;
                 
-                float age = getUnitAge(cellSample);
-                weightedAge += age * weight;
-                totalWeight += weight;
+                vec2 offset = vec2(float(dx), float(dy));
+                vec4 cellSample = sampleFrame(frame, uv + offset * texelSize);
                 
-                if (isHoldingResource(cellSample)) {
-                    holdingDensity += weight;
-                } else {
-                    emptyDensity += weight;
+                if (isMiningUnit(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
+                    // Use sub-cell position for smoother distance
+                    vec2 cellCenter = offset + vec2(0.5) - cellFrac;
+                    float dist = length(cellCenter) / scale;
+                    if (dist < minDist) dist = minDist;
+                    float weight = (1.0 / (dist * dist)) * frameWeight;
+                    
+                    float age = getUnitAge(cellSample);
+                    weightedAge += age * weight;
+                    totalWeight += weight;
+                    
+                    if (isHoldingResource(cellSample)) {
+                        holdingDensity += weight;
+                    } else {
+                        emptyDensity += weight;
+                    }
                 }
             }
         }
     }
     
-    // Normalize age by total weight
+    // Normalize by temporal weights
+    float norm = max(totalTemporalWeight, 1.0);
     float avgAge = totalWeight > 0.0 ? weightedAge / totalWeight : 0.0;
-    return vec3(emptyDensity, holdingDensity, avgAge);
+    return vec3(emptyDensity / norm, holdingDensity / norm, avgAge);
 }
 
 // Legacy function for backward compatibility
@@ -317,20 +487,21 @@ void main() {
     
     vec3 color = bgColor;
     
-    // Calculate densities for each type - separated by player
-    float resourceDensity = calcDensity(v_uv, CELL_RESOURCE);
+    // Calculate ALL static densities in a single pass (massive perf improvement)
+    AllDensities d = calcAllStaticDensities(v_uv);
+    
+    // Extract values from unified calculation
+    float resourceDensity = d.resourceDens;
     
     // Player 1 factories (purple)
-    vec3 p1FactoryInfo = calcFactoryDensityForPlayer(v_uv, PLAYER_1);
-    float p1BuiltFactoryDensity = p1FactoryInfo.x;
-    float p1UnbuiltFactoryDensity = p1FactoryInfo.y;
-    float p1BuildProgress = p1FactoryInfo.z;
+    float p1BuiltFactoryDensity = d.p1FactoryBuilt;
+    float p1UnbuiltFactoryDensity = d.p1FactoryUnbuilt;
+    float p1BuildProgress = d.p1UnbuiltWeight > 0.0 ? d.p1BuildProgress / d.p1UnbuiltWeight : 0.0;
     
     // Player 2 factories (green)
-    vec3 p2FactoryInfo = calcFactoryDensityForPlayer(v_uv, PLAYER_2);
-    float p2BuiltFactoryDensity = p2FactoryInfo.x;
-    float p2UnbuiltFactoryDensity = p2FactoryInfo.y;
-    float p2BuildProgress = p2FactoryInfo.z;
+    float p2BuiltFactoryDensity = d.p2FactoryBuilt;
+    float p2UnbuiltFactoryDensity = d.p2FactoryUnbuilt;
+    float p2BuildProgress = d.p2UnbuiltWeight > 0.0 ? d.p2BuildProgress / d.p2UnbuiltWeight : 0.0;
     
     // Combined factory densities for compatibility
     float builtFactoryDensity = p1BuiltFactoryDensity + p2BuiltFactoryDensity;
@@ -485,8 +656,8 @@ void main() {
         }
     }
     
-    // Walls - ROCK TEXTURE stone blocks
-    float wallDensity = calcDensity(v_uv, CELL_WALL);
+    // Walls - ROCK TEXTURE stone blocks (using unified density)
+    float wallDensity = d.wallDens;
     float wallEdge = calcRockEdge(v_uv, wallDensity, 0.5, 6.0);
     
     if (wallEdge > 0.01) {
@@ -608,8 +779,8 @@ void main() {
         color = mix(color, unbuiltColor, blobStrength);
     }
     
-    // Demolish cells - red/orange warning color with flashing
-    float demolishDensity = calcDensity(v_uv, CELL_DEMOLISH);
+    // Demolish cells - red/orange warning color with flashing (using unified density)
+    float demolishDensity = d.demolishDens;
     if (demolishDensity > factoryThreshold) {
         float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, demolishDensity);
         

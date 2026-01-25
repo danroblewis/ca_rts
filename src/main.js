@@ -4,6 +4,44 @@ import { loadShader } from './shaders/load.js';
 import { CAGrid } from './ca/CAGrid.js';
 import { getNetworkSync } from './network/NetworkSync.js';
 
+// ============================================================================
+// CONFIGURATION - Edit these values to customize the game
+// ============================================================================
+
+// Grid size (width and height in cells)
+const GRID_SIZE = 256;
+
+// Default map seed (can be overridden via ?seed=12345 URL param)
+const DEFAULT_MAP_SEED = 12345;
+
+// Rendering settings
+const METABALL_SCALE = 1.0;           // Metaball blob scale (0.5 = tighter, 2.0 = blobbier)
+const TEMPORAL_BLEND = 1.0;           // Temporal AA blend (0 = off, 1 = full). Only affects moving units.
+
+// Simulation speed settings
+const LOG_INTERVAL = 1000;            // Stats logging interval in ms
+const SIM_BATCH_SIZE = 10;            // Simulation steps per batch in fast mode
+const SYNC_SIM_BATCH_SIZE = 1;        // Simulation steps per batch in synced (normal) mode
+const DEFAULT_SYNC_MODE = true;       // true = sync with render (normal), false = fast as possible
+
+// Map generation - Resource blobs
+const NUM_BLOBS = 150;                // Number of resource clusters
+const BLOB_MIN_RADIUS = 3;            // Minimum blob radius
+const BLOB_MAX_RADIUS = 8;            // Maximum blob radius
+const BLOB_DENSITY = 0.6;             // % of cells in blob that have resources
+
+// Map generation - Walls
+const NUM_WALL_LINES = 44;            // Number of wall lines
+const WALL_MIN_LENGTH = 5;            // Minimum wall line length
+const WALL_MAX_LENGTH = 20;           // Maximum wall line length
+const NUM_WALL_BLOBS = 5;             // Number of small wall clusters
+const WALL_BLOB_RADIUS = 3;           // Radius of wall clusters
+
+// Gameplay settings
+const FIRST_FACTORY_RESOURCES = 50;   // Resources given to first factory only
+const DELETE_RADIUS = 5;              // Radius in grid cells for delete operation
+
+// ============================================================================
 // Cell type constants (must match GLSL)
 const CELL_EMPTY = 0;
 const CELL_RESOURCE = 1;
@@ -37,7 +75,7 @@ function mulberry32(seed) {
 }
 
 // Map seed - can be shared between players for deterministic map generation
-let mapSeed = 12345;
+let mapSeed = DEFAULT_MAP_SEED;
 const urlParams = new URLSearchParams(window.location.search);
 
 // Hide multiplayer UI on GitHub Pages (no WebSocket server there)
@@ -46,7 +84,7 @@ const isOnLocalhost = window.location.hostname.includes('localhost');
 
 const seedParam = urlParams.get('seed');
 if (seedParam) {
-    mapSeed = parseInt(seedParam) || 12345;
+    mapSeed = parseInt(seedParam) || DEFAULT_MAP_SEED;
 }
 
 // Create seeded random function
@@ -61,7 +99,6 @@ console.log(`Map seed: ${mapSeed}`);
 function getShaderModeFromURL() {
     const params = new URLSearchParams(window.location.search);
     const mode = params.get('shader');
-    // 'debug' = debug shader, anything else = metaball (default)
     return mode === 'debug' ? 'debug' : 'metaball';
 }
 
@@ -70,7 +107,7 @@ function updateURLShaderMode(mode) {
     if (mode === 'debug') {
         url.searchParams.set('shader', 'debug');
     } else {
-        url.searchParams.delete('shader');  // metaball is default, no param needed
+        url.searchParams.delete('shader');
     }
     window.history.replaceState({}, '', url);
 }
@@ -101,8 +138,8 @@ console.log('GPU compute framework initialized');
 
 const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise.all([
     loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
-    loadShader('./src/shaders/ca/render_metaballs.frag.glsl'),  // Pretty metaball renderer
-    loadShader('./src/shaders/ca/v2/render.frag.glsl')          // Debug renderer
+    loadShader('./src/shaders/ca/render_metaballs.frag.glsl'),
+    loadShader('./src/shaders/ca/v2/render.frag.glsl')
 ]);
 
 const simShader = new ComputeShader(simShaderSource);
@@ -149,16 +186,8 @@ window.switchShader = switchShader;
 console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or switchShader('metaball') to change)`);
 
 // ============================================================================
-// Metaball Scale (fixed value)
-// ============================================================================
-
-const metaballScale = 1.0;
-
-// ============================================================================
 // Initialize World
 // ============================================================================
-
-const GRID_SIZE = 256;
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
 
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
@@ -176,11 +205,6 @@ function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
 data.fill(0);
 
 // Place resources in blobs/clusters (more realistic RTS style)
-const NUM_BLOBS = 150;
-const BLOB_MIN_RADIUS = 3;
-const BLOB_MAX_RADIUS = 8;
-const BLOB_DENSITY = 0.6; // % of cells in blob that have resources
-
 let totalResources = 0;
 
 for (let b = 0; b < NUM_BLOBS; b++) {
@@ -219,12 +243,6 @@ const NUM_RESOURCES = totalResources;
 // ============================================================================
 // Generate Walls - random barriers and obstacles
 // ============================================================================
-
-const NUM_WALL_LINES = 44;      // Number of wall lines
-const WALL_MIN_LENGTH = 5;
-const WALL_MAX_LENGTH = 20;
-const NUM_WALL_BLOBS = 5;      // Small wall clusters
-const WALL_BLOB_RADIUS = 3;
 
 let totalWalls = 0;
 
@@ -294,8 +312,6 @@ console.log(`  Click to place a mining factory!`);
 // ============================================================================
 
 let factoriesPlaced = 0;
-const FIRST_FACTORY_RESOURCES = 50;  // Only first factory gets resources
-const DELETE_RADIUS = 5;  // Radius in grid cells for delete operation
 
 // Cursor overlay for delete mode
 const cursorOverlay = document.getElementById('cursor-overlay');
@@ -723,13 +739,11 @@ let simStepCount = 0;
 let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
-const LOG_INTERVAL = 1000;
-const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
 
 // Toggle: true = sync with render (normal speed), false = fast as possible (super speed)
 // Default to normal speed, but allow toggle on localhost
 // Force sync mode (hide toggle) when not on localhost
-let SYNC_SIM_WITH_RENDER = true;
+let SYNC_SIM_WITH_RENDER = DEFAULT_SYNC_MODE;
 
 // Super Speed Toggle UI
 const speedToggle = document.getElementById('speed-toggle');
@@ -824,7 +838,9 @@ function fastSimulationLoop() {
 function renderLoop() {
     // Run simulation step if synced mode
     if (SYNC_SIM_WITH_RENDER) {
-        simulationStep();
+        for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
+            simulationStep();
+        }
         logStats();
     }
     
@@ -833,11 +849,19 @@ function renderLoop() {
     gl.viewport(0, 0, canvas.width, canvas.height);
 
     renderShader.use();
-    renderShader.setTexture('u_state', grid.getReadTexture(), 0);
+    
+    // Bind all 8 frame textures for temporal anti-aliasing
+    const frameCount = grid.getFrameCount();
+    for (let i = 0; i < frameCount; i++) {
+        renderShader.setTexture('u_state' + i, grid.getTextureByAge(i), i);
+    }
+    
     renderShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
     renderShader.setVec2('u_canvasResolution', canvas.width, canvas.height);
     renderShader.setFloat('u_time', simTime);  // For pulsing/animation effects
-    renderShader.setFloat('u_metaballScale', metaballScale);  // Metaball blob scale
+    renderShader.setFloat('u_metaballScale', METABALL_SCALE);  // Metaball blob scale
+    renderShader.setInt('u_frameCount', frameCount);  // Number of frames to blend
+    renderShader.setFloat('u_temporalBlend', TEMPORAL_BLEND);  // Temporal blend strength
     renderShader.dispatch();
 
     renderFrameCount++;

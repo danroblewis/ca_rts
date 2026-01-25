@@ -3,8 +3,26 @@ precision highp float;
 
 #include "./core/types.glsl"
 
-uniform sampler2D u_state;
+// Ring buffer of 8 frame textures for temporal anti-aliasing
+// Debug shader only uses u_state0 (current frame), but all are declared
+// for compatibility with the render loop
+uniform sampler2D u_state0;
+uniform sampler2D u_state1;
+uniform sampler2D u_state2;
+uniform sampler2D u_state3;
+uniform sampler2D u_state4;
+uniform sampler2D u_state5;
+uniform sampler2D u_state6;
+uniform sampler2D u_state7;
+
+// Alias for compatibility
+#define u_state u_state0
+
 uniform vec2 u_resolution;
+uniform vec2 u_canvasResolution;  // Not used but declared for compatibility
+uniform float u_metaballScale;    // Not used but declared for compatibility
+uniform int u_frameCount;         // Not used but declared for compatibility
+uniform float u_temporalBlend;    // Not used but declared for compatibility
 
 in vec2 v_uv;
 out vec4 fragColor;
