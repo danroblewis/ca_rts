@@ -9,22 +9,7 @@
 #ifndef TYPES_GLSL
 #define TYPES_GLSL
 
-// ============================================================================
-// Type Constants
-// ============================================================================
-
-const int TYPE_EMPTY = 0;
-const int TYPE_RESOURCE = 1;
-const int TYPE_UNIT = 2;
-const int TYPE_FACTORY = 3;
-const int TYPE_WALL = 4;
-
-// ============================================================================
-// Encoding Constants (supports up to 256x256 grids)
-// ============================================================================
-
-const float COORD_PACK_BASE = 256.0;
-const float MEMORY_PACK_BASE = 65536.0;  // 256 * 256
+#include "./constants.glsl"
 
 // ============================================================================
 // Raw Access
@@ -37,9 +22,6 @@ int getType(vec4 raw) {
 // ============================================================================
 // Coordinate Packing (for 128x128 grids)
 // ============================================================================
-
-// Special sentinel value for invalid/no coordinates
-const float INVALID_PACKED_COORDS = -1.0;
 
 float packCoords(vec2 pos) {
     // Handle invalid coordinates (negative values mean "no position")
@@ -89,10 +71,6 @@ vec4 encodeResource(float amount) {
 //     A >= 0: has memory (packCoords + freshness * MEMORY_PACK_BASE)
 //     A < 0: no memory, homesick timer = -A - 1  (so -1 = timer 0, -2 = timer 1, etc)
 // ============================================================================
-
-const float AGE_PACK_BASE = 32.0;  // counter uses bits 1-4, age starts at bit 5
-const float MAX_AGE = 500.0;       // Steps before unit dies from starvation
-const float FACTORY_SAFE_ZONE = 10.0;  // Units within this distance of factory don't starve
 
 bool getUnitHolding(vec4 raw) {
     return mod(floor(raw.g), 2.0) > 0.5;
@@ -149,13 +127,22 @@ vec4 encodeUnitSimple(bool holding, int counter, vec2 factoryPos) {
 }
 
 // ============================================================================
-// FACTORY
-// G = resource count
-// B = self X
-// A = self Y
+// FACTORY (unified: built or unbuilt)
+// G = resource count (or build progress for unbuilt factories)
+//     For unbuilt: each cell stores its individual build progress (0-MAX_BUILD_PER_CELL)
+//     For built: each cell stores resources
+// B = center X (center of 3x3 factory)
+// A = center Y
+// 
+// A factory is "built" when the sum of G across all 8 outer cells >= BUILD_THRESHOLD
 // ============================================================================
 
 float getFactoryResources(vec4 raw) {
+    return raw.g;
+}
+
+// For unbuilt factories, G represents build progress per cell
+float getFactoryBuildProgress(vec4 raw) {
     return raw.g;
 }
 
@@ -163,8 +150,35 @@ vec2 getFactoryPos(vec4 raw) {
     return vec2(raw.b, raw.a);
 }
 
+// Sum build progress across all 8 outer cells of a 3x3 factory
+// (center cell is empty, so we skip it)
+float sumFactoryBuildProgress(vec2 centerPos, sampler2D state, vec2 resolution) {
+    float total = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;  // Skip center
+            vec2 cellPos = centerPos + vec2(float(dx), float(dy));
+            vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
+            if (getType(cellRaw) == TYPE_FACTORY) {
+                total += getFactoryBuildProgress(cellRaw);
+            }
+        }
+    }
+    return total;
+}
+
+// Check if a factory at centerPos is fully built
+bool isFactoryBuilt(vec2 centerPos, sampler2D state, vec2 resolution) {
+    return sumFactoryBuildProgress(centerPos, state, resolution) >= BUILD_THRESHOLD;
+}
+
 vec4 encodeFactory(float resources, vec2 selfPos) {
     return vec4(float(TYPE_FACTORY), resources, selfPos.x, selfPos.y);
+}
+
+// Encode an unbuilt factory cell (same encoding, just clearer intent)
+vec4 encodeUnbuiltFactory(float buildProgress, vec2 centerPos) {
+    return vec4(float(TYPE_FACTORY), min(buildProgress, MAX_BUILD_PER_CELL), centerPos.x, centerPos.y);
 }
 
 // ============================================================================
@@ -174,6 +188,24 @@ vec4 encodeFactory(float resources, vec2 selfPos) {
 
 vec4 encodeWall() {
     return vec4(float(TYPE_WALL), 0.0, 0.0, 0.0);
+}
+
+
+// ============================================================================
+// DEMOLISH (marked for destruction)
+// G = unused
+// B = centerX (center of 3x3 structure)
+// A = centerY
+// 
+// When a non-holding unit is adjacent, it destroys this cell and picks up a resource
+// ============================================================================
+
+vec2 getDemolishCenter(vec4 raw) {
+    return vec2(raw.b, raw.a);
+}
+
+vec4 encodeDemolish(vec2 centerPos) {
+    return vec4(float(TYPE_DEMOLISH), 0.0, centerPos.x, centerPos.y);
 }
 
 #endif

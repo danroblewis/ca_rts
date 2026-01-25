@@ -15,17 +15,6 @@
 #include "../core/traits.glsl"
 
 // ============================================================================
-// Memory Constants
-// ============================================================================
-
-const float MEMORY_MAX_FRESHNESS = 200.0;
-const float MEMORY_SHARE_PENALTY = 5.0;
-const int MEMORY_VISION_RANGE = 5;
-
-// Homesick: if a unit wanders too long without finding resources, it returns home
-const float HOMESICK_THRESHOLD = 500.0;  // Steps before returning to factory
-
-// ============================================================================
 // Memory Result - the updated memory state for a unit
 // ============================================================================
 

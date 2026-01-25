@@ -7,8 +7,33 @@ import { CAGrid } from './ca/CAGrid.js';
 const CELL_EMPTY = 0;
 const CELL_RESOURCE = 1;
 const CELL_MINING_UNIT = 2;
-const CELL_MINING_FACTORY = 3;
+const CELL_MINING_FACTORY = 3;  // Used for both built and unbuilt factories
 const CELL_WALL = 4;
+// Type 5 is unused (was CELL_FACTORY_BLUEPRINT, now unified into CELL_MINING_FACTORY)
+const CELL_DEMOLISH = 6;
+
+// ============================================================================
+// URL Parameter Handling for Shader Selection
+// ============================================================================
+
+function getShaderModeFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get('shader');
+    // 'debug' = debug shader, anything else = metaball (default)
+    return mode === 'debug' ? 'debug' : 'metaball';
+}
+
+function updateURLShaderMode(mode) {
+    const url = new URL(window.location);
+    if (mode === 'debug') {
+        url.searchParams.set('shader', 'debug');
+    } else {
+        url.searchParams.delete('shader');  // metaball is default, no param needed
+    }
+    window.history.replaceState({}, '', url);
+}
+
+let currentShaderMode = getShaderModeFromURL();
 
 // ============================================================================
 // Initialize GPU
@@ -29,17 +54,97 @@ resize();
 console.log('GPU compute framework initialized');
 
 // ============================================================================
-// Load Shaders (v2 architecture)
+// Load Shaders (v2 architecture) - Load both render shaders
 // ============================================================================
 
-const [simShaderSource, renderShaderSource] = await Promise.all([
+const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise.all([
     loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
-    loadShader('./src/shaders/ca/render_metaballs.frag.glsl')  // Pretty metaball renderer
-    // loadShader('./src/shaders/ca/v2/render.frag.glsl')
+    loadShader('./src/shaders/ca/render_metaballs.frag.glsl'),  // Pretty metaball renderer
+    loadShader('./src/shaders/ca/v2/render.frag.glsl')          // Debug renderer
 ]);
 
 const simShader = new ComputeShader(simShaderSource);
-const renderShader = new ComputeShader(renderShaderSource);
+const metaballRenderShader = new ComputeShader(metaballShaderSource);
+const debugRenderShader = new ComputeShader(debugShaderSource);
+
+// Active render shader (switchable)
+let renderShader = currentShaderMode === 'debug' ? debugRenderShader : metaballRenderShader;
+
+// ============================================================================
+// Shader Toggle UI Setup
+// ============================================================================
+
+const shaderToggle = document.getElementById('shader-toggle');
+const labelMetaball = document.getElementById('label-metaball');
+const labelDebug = document.getElementById('label-debug');
+
+function updateToggleLabels() {
+    if (currentShaderMode === 'debug') {
+        labelMetaball.classList.remove('active');
+        labelDebug.classList.add('active');
+        shaderToggle.checked = true;
+    } else {
+        labelMetaball.classList.add('active');
+        labelDebug.classList.remove('active');
+        shaderToggle.checked = false;
+    }
+}
+
+function switchShader(mode) {
+    currentShaderMode = mode;
+    renderShader = mode === 'debug' ? debugRenderShader : metaballRenderShader;
+    updateURLShaderMode(mode);
+    updateToggleLabels();
+    console.log(`Switched to ${mode === 'debug' ? 'Debug' : 'Metaball'} shader`);
+}
+
+shaderToggle.addEventListener('change', (e) => {
+    switchShader(e.target.checked ? 'debug' : 'metaball');
+});
+
+// Initialize toggle state from URL
+updateToggleLabels();
+
+// Expose to console for easy switching
+window.switchShader = switchShader;
+console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or switchShader('metaball') to change)`);
+
+// ============================================================================
+// Metaball Scale Slider Setup
+// ============================================================================
+
+let metaballScale = 1.0;
+
+const metaballScaleSlider = document.getElementById('metaball-scale');
+const metaballScaleValue = document.getElementById('metaball-scale-value');
+const metaballScaleContainer = document.getElementById('metaball-scale-container');
+
+function updateMetaballScaleDisplay() {
+    if (metaballScaleValue) {
+        metaballScaleValue.textContent = metaballScale.toFixed(1);
+    }
+    // Hide slider when in debug mode (it doesn't apply there)
+    if (metaballScaleContainer) {
+        metaballScaleContainer.style.display = currentShaderMode === 'debug' ? 'none' : 'flex';
+    }
+}
+
+if (metaballScaleSlider) {
+    metaballScaleSlider.addEventListener('input', (e) => {
+        metaballScale = parseFloat(e.target.value);
+        updateMetaballScaleDisplay();
+    });
+}
+
+// Update slider visibility when shader changes
+const originalSwitchShader = switchShader;
+switchShader = function(mode) {
+    originalSwitchShader(mode);
+    updateMetaballScaleDisplay();
+};
+
+// Initialize
+updateMetaballScaleDisplay();
 
 // ============================================================================
 // Initialize World
@@ -250,7 +355,8 @@ canvas.addEventListener('click', (event) => {
     const currentData = grid.download();
     
     if (event.shiftKey) {
-        // SHIFT+CLICK: Delete factories in rectangle
+        // SHIFT+CLICK: Delete or mark for demolition
+        let markedCount = 0;
         let deletedCount = 0;
         
         for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
@@ -261,51 +367,77 @@ canvas.addEventListener('click', (event) => {
                 if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) continue;
                 
                 const idx = (y * GRID_SIZE + x) * 4;
-                if (currentData[idx] === CELL_MINING_FACTORY) {
-                    // Clear the cell (set to empty)
-                    currentData[idx + 0] = CELL_EMPTY;
-                    currentData[idx + 1] = 0;
-                    currentData[idx + 2] = 0;
-                    currentData[idx + 3] = 0;
-                    deletedCount++;
+                const cellType = currentData[idx];
+                const buildCount = currentData[idx + 1];
+                
+                if (cellType === CELL_MINING_FACTORY) {
+                    // Check if this factory cell has any build progress or resources
+                    // buildCount here represents either resources (built) or build progress (unbuilt)
+                    if (buildCount > 0) {
+                        // Has resources or build progress: mark for demolition (units salvage)
+                        const centerX = currentData[idx + 2];
+                        const centerY = currentData[idx + 3];
+                        currentData[idx + 0] = CELL_DEMOLISH;
+                        currentData[idx + 1] = 0;
+                        currentData[idx + 2] = centerX;
+                        currentData[idx + 3] = centerY;
+                        markedCount++;
+                    } else {
+                        // Unbuilt factory cell with 0 progress: delete immediately
+                        currentData[idx + 0] = CELL_EMPTY;
+                        currentData[idx + 1] = 0;
+                        currentData[idx + 2] = 0;
+                        currentData[idx + 3] = 0;
+                        deletedCount++;
+                    }
                 }
             }
         }
         
         grid.upload(currentData);
-        if (deletedCount > 0) {
-            console.log(`Deleted ${deletedCount} factory(ies) around (${gridPos.x}, ${gridPos.y})`);
+        if (markedCount > 0 || deletedCount > 0) {
+            const parts = [];
+            if (deletedCount > 0) parts.push(`deleted ${deletedCount} unbuilt`);
+            if (markedCount > 0) parts.push(`marked ${markedCount} for demolition`);
+            console.log(`${parts.join(', ')} around (${gridPos.x}, ${gridPos.y})`);
         }
     } else {
-        // NORMAL CLICK: Place 3x3 factory grid
-        // The click position becomes the CENTER of the factory
+        // NORMAL CLICK: Place 3x3 factory or blueprint
+        // The click position becomes the CENTER of the structure
         const centerX = gridPos.x;
         const centerY = gridPos.y;
         
         // Check bounds for 3x3
         if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
-            console.log('Too close to edge for 3x3 factory');
+            console.log('Too close to edge for 3x3 structure');
             return;
         }
         
-        // Only the first factory gets starting resources (distributed among 9 cells)
-        const totalResources = (factoriesPlaced === 0) ? FIRST_FACTORY_RESOURCES : 0;
-        const resourcesPerCell = totalResources / 9.0;
+        // First factory is built (has resources), subsequent are unbuilt (need construction)
+        const isUnbuilt = factoriesPlaced > 0;
+        const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
+        const resourcesPerCell = totalResources / 8.0;  // 8 cells (center is empty)
         
-        // Place 3x3 grid of factory cells
-        // All cells store the center position as "selfPos"
+        // Place 3x3 grid of factory cells (center cell stays empty)
+        // All cells store the center position
+        // G channel = resources for built, or build progress (0) for unbuilt
         let placed = 0;
         for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
+                // Skip the center cell - it stays empty
+                if (dx === 0 && dy === 0) continue;
+                
                 const x = centerX + dx;
                 const y = centerY + dy;
                 const idx = (y * GRID_SIZE + x) * 4;
                 
                 // Only place if cell is empty or resource (don't overwrite walls)
                 if (currentData[idx] === CELL_EMPTY || currentData[idx] === CELL_RESOURCE) {
+                    // All factories use CELL_MINING_FACTORY
+                    // G = resources (built) or build progress (unbuilt)
                     currentData[idx + 0] = CELL_MINING_FACTORY;
-                    currentData[idx + 1] = resourcesPerCell;
-                    currentData[idx + 2] = centerX;  // All cells reference the center
+                    currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;  // 0 = unbuilt, needs construction
+                    currentData[idx + 2] = centerX;
                     currentData[idx + 3] = centerY;
                     placed++;
                 }
@@ -315,7 +447,11 @@ canvas.addEventListener('click', (event) => {
         grid.upload(currentData);
         factoriesPlaced++;
         
-        console.log(`Placed 3x3 factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) with ${totalResources} total resources (${placed} cells)`);
+        if (isUnbuilt) {
+            console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) - needs 8 build points to activate (${placed} cells, center empty)`);
+        } else {
+            console.log(`Placed 3x3 factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) with ${totalResources} total resources (${placed} cells, center empty)`);
+        }
     }
 });
 
@@ -404,6 +540,9 @@ function renderLoop() {
     renderShader.use();
     renderShader.setTexture('u_state', grid.getReadTexture(), 0);
     renderShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
+    renderShader.setVec2('u_canvasResolution', canvas.width, canvas.height);
+    renderShader.setFloat('u_time', simTime);  // For pulsing/animation effects
+    renderShader.setFloat('u_metaballScale', metaballScale);  // Metaball blob scale
     renderShader.dispatch();
 
     renderFrameCount++;

@@ -4,32 +4,98 @@ precision highp float;
 #include "common/cell_types.glsl"
 
 uniform sampler2D u_state;
-uniform vec2 u_resolution;
+uniform vec2 u_resolution;       // Grid resolution (e.g., 256x256)
+uniform vec2 u_canvasResolution; // Canvas resolution (e.g., 1920x1080)
+uniform float u_time;
+uniform float u_metaballScale;   // Scale factor for metaball effect (0.5 = tighter, 2.0 = blobbier)
 
 in vec2 v_uv;
 out vec4 fragColor;
 
-// Calculate "density" of a cell type in a radius - creates metaball effect
-float calcDensity(vec2 uv, float targetType) {
+// Higher quality sampling - uses fractional positions for smoother blending
+// u_metaballScale controls how blobby the effect is (1.0 = default, <1 = tighter, >1 = blobbier)
+float calcDensityHQ(vec2 uv, float targetType) {
     vec2 texelSize = 1.0 / u_resolution;
     float density = 0.0;
     
-    // Sample in a 5x5 area with distance falloff
+    // Calculate position within grid cell (0-1)
+    vec2 gridPos = uv * u_resolution;
+    vec2 cellFrac = fract(gridPos);
+    
+    // Scale affects the distance falloff - higher scale = more spread
+    float scale = max(0.1, u_metaballScale);
+    float minDist = 0.3 / scale;  // Minimum distance clamp scales inversely
+    
+    // Sample in a 5x5 area with sub-cell distance weighting
     for (int dy = -2; dy <= 2; dy++) {
         for (int dx = -2; dx <= 2; dx++) {
             vec2 offset = vec2(float(dx), float(dy));
-            vec4 cellSample = texture(u_state, uv + offset * texelSize);
+            vec2 sampleUV = uv + offset * texelSize;
+            vec4 cellSample = texture(u_state, sampleUV);
             float sampleType = getCellType(cellSample);
             
             if (sampleType == targetType) {
-                // Inverse distance weighting for smooth blending
-                float dist = length(offset);
-                if (dist < 0.5) dist = 0.5; // Center cell gets max weight
+                // Use sub-cell position for smoother distance calculation
+                vec2 cellCenter = offset + vec2(0.5) - cellFrac;
+                float dist = length(cellCenter) / scale;  // Scale affects distance
+                if (dist < minDist) dist = minDist; // Stronger center
                 density += 1.0 / (dist * dist);
             }
         }
     }
     return density;
+}
+
+// Calculate "density" of a cell type in a radius - creates metaball effect
+float calcDensity(vec2 uv, float targetType) {
+    return calcDensityHQ(uv, targetType);
+}
+
+// Calculate factory density with build status info
+// Returns vec3(builtDensity, unbuiltDensity, averageBuildProgress)
+vec3 calcFactoryDensityWithStatus(vec2 uv) {
+    vec2 texelSize = 1.0 / u_resolution;
+    float builtDensity = 0.0;
+    float unbuiltDensity = 0.0;
+    float totalBuildProgress = 0.0;
+    float totalUnbuiltWeight = 0.0;
+    
+    // Sub-cell position for smoother distance
+    vec2 gridPos = uv * u_resolution;
+    vec2 cellFrac = fract(gridPos);
+    
+    float scale = max(0.1, u_metaballScale);
+    float minDist = 0.3 / scale;
+    
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            vec2 offset = vec2(float(dx), float(dy));
+            vec4 cellSample = texture(u_state, uv + offset * texelSize);
+            
+            if (isMiningFactory(cellSample)) {
+                vec2 cellCenter = offset + vec2(0.5) - cellFrac;
+                float dist = length(cellCenter) / scale;
+                if (dist < minDist) dist = minDist;
+                float weight = 1.0 / (dist * dist);
+                
+                // Check if this factory is built or unbuilt
+                vec2 center = getFactoryPosition(cellSample);
+                float totalProgress = sumFactoryBuildProgress(center, u_state, u_resolution);
+                
+                if (totalProgress >= BUILD_THRESHOLD) {
+                    builtDensity += weight;
+                } else {
+                    unbuiltDensity += weight;
+                    float progress = totalProgress / BUILD_THRESHOLD;
+                    totalBuildProgress += progress * weight;
+                    totalUnbuiltWeight += weight;
+                }
+            }
+        }
+    }
+    
+    float avgProgress = totalUnbuiltWeight > 0.0 ? totalBuildProgress / totalUnbuiltWeight : 0.0;
+    return vec3(builtDensity, unbuiltDensity, avgProgress);
 }
 
 // Calculate unit density with holding info and age - larger radius for more blobby units
@@ -41,6 +107,13 @@ vec3 calcUnitDensityWithAge(vec2 uv) {
     float totalWeight = 0.0;
     float weightedAge = 0.0;
     
+    // Sub-cell position for smoother distance
+    vec2 gridPos = uv * u_resolution;
+    vec2 cellFrac = fract(gridPos);
+    
+    float scale = max(0.1, u_metaballScale);
+    float minDist = 0.3 / scale;
+    
     // Larger 9x9 sampling area for units (they're often several pixels apart)
     for (int dy = -4; dy <= 4; dy++) {
         for (int dx = -4; dx <= 4; dx++) {
@@ -48,8 +121,10 @@ vec3 calcUnitDensityWithAge(vec2 uv) {
             vec4 cellSample = texture(u_state, uv + offset * texelSize);
             
             if (isMiningUnit(cellSample)) {
-                float dist = length(offset);
-                if (dist < 0.5) dist = 0.5;
+                // Use sub-cell position for smoother distance
+                vec2 cellCenter = offset + vec2(0.5) - cellFrac;
+                float dist = length(cellCenter) / scale;
+                if (dist < minDist) dist = minDist;
                 float weight = 1.0 / (dist * dist);
                 
                 float age = getUnitAge(cellSample);
@@ -91,7 +166,10 @@ void main() {
     
     // Calculate densities for each type
     float resourceDensity = calcDensity(v_uv, CELL_RESOURCE);
-    float factoryDensity = calcDensity(v_uv, CELL_MINING_FACTORY);
+    vec3 factoryInfo = calcFactoryDensityWithStatus(v_uv);
+    float builtFactoryDensity = factoryInfo.x;
+    float unbuiltFactoryDensity = factoryInfo.y;
+    float buildProgress = factoryInfo.z;  // 0-1 for unbuilt factories
     vec3 unitInfo = calcUnitDensityWithAge(v_uv);
     float emptyUnitDensity = unitInfo.x;
     float holdingUnitDensity = unitInfo.y;
@@ -192,9 +270,9 @@ void main() {
         color = mix(color, wallColor, blobStrength * 0.95);
     }
     
-    // Factory - purple/magenta blob with energy glow
-    if (factoryDensity > factoryThreshold) {
-        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, factoryDensity);
+    // Built Factory - purple/magenta blob with energy glow and pulsing core
+    if (builtFactoryDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, builtFactoryDensity);
         
         // Get resource count from center cell
         vec4 centerCell = texture(u_state, v_uv);
@@ -210,10 +288,63 @@ void main() {
         vec3 factoryColor = mix(purpleDark, purpleBright, 0.3 + energyLevel * 0.7);
         
         // Energy core glow
-        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, factoryDensity);
+        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, builtFactoryDensity);
         factoryColor += vec3(0.2, 0.1, 0.3) * coreGlow * energyLevel;
         
+        // Pulsing aura for active factories (has resources ready to spawn)
+        if (energyLevel > 0.3) {
+            float pulse = sin(u_time * 4.0) * 0.5 + 0.5;
+            vec3 pulseColor = vec3(1.0, 0.5, 1.0) * pulse * energyLevel * 0.3;
+            factoryColor += pulseColor;
+            
+            // Particle-like sparkles for high energy
+            float sparkle = fract(sin(dot(pixelPos + u_time * 10.0, vec2(12.9898, 78.233))) * 43758.5453);
+            if (sparkle > 0.95 && energyLevel > 0.5) {
+                factoryColor += vec3(0.5, 0.3, 0.6);
+            }
+        }
+        
         color = mix(color, factoryColor, blobStrength);
+    }
+    
+    // Unbuilt Factory - grayish/dim purple that brightens with build progress
+    if (unbuiltFactoryDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, unbuiltFactoryDensity);
+        
+        // Start gray, transition to purple as it gets built
+        vec3 grayColor = vec3(0.25, 0.22, 0.28);  // Slightly purplish gray
+        vec3 purpleColor = vec3(0.5, 0.2, 0.6);   // Muted purple
+        vec3 unbuiltColor = mix(grayColor, purpleColor, buildProgress);
+        
+        // Pulsing "under construction" effect
+        float constructPulse = sin(u_time * 2.0) * 0.5 + 0.5;
+        unbuiltColor += vec3(0.05, 0.02, 0.08) * constructPulse;
+        
+        // Grid pattern overlay to show it's unfinished
+        float grid = step(0.5, fract(pixelPos.x * 0.5)) * step(0.5, fract(pixelPos.y * 0.5));
+        unbuiltColor *= 0.9 + grid * 0.1;
+        
+        color = mix(color, unbuiltColor, blobStrength);
+    }
+    
+    // Demolish cells - red/orange warning color with flashing
+    float demolishDensity = calcDensity(v_uv, CELL_DEMOLISH);
+    if (demolishDensity > factoryThreshold) {
+        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, demolishDensity);
+        
+        // Flashing red/orange warning
+        float flash = sin(u_time * 6.0) * 0.5 + 0.5;
+        vec3 redColor = vec3(0.8, 0.2, 0.1);
+        vec3 orangeColor = vec3(1.0, 0.5, 0.1);
+        vec3 demolishColor = mix(redColor, orangeColor, flash);
+        
+        // Add some destruction particles
+        float sparks = fract(sin(dot(pixelPos + u_time * 20.0, vec2(12.9898, 78.233))) * 43758.5453);
+        if (sparks > 0.9) {
+            demolishColor += vec3(0.5, 0.3, 0.0);
+        }
+        
+        color = mix(color, demolishColor, blobStrength);
     }
     
     // Subtle vignette

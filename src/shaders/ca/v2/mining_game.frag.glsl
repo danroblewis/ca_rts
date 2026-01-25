@@ -27,6 +27,7 @@ precision highp float;
 #include "./traits/movement.glsl"
 #include "./traits/spawning.glsl"
 #include "./traits/deposit.glsl"
+#include "./traits/demolish.glsl"
 
 uniform sampler2D u_state;
 uniform vec2 u_resolution;
@@ -48,6 +49,8 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     MovementResult movement = evaluateMovement(myPos, u_state, u_resolution, u_time);
     SpawnResult spawning = evaluateSpawning(myPos, u_state, u_resolution);
     DepositResult deposit = evaluateDeposit(myPos, u_state, u_resolution);
+    BuildResult build = evaluateBuild(myPos, u_state, u_resolution);
+    DemolishResult demolish = evaluateDemolish(myPos, u_state, u_resolution);
     
     // ========================================================================
     // Extract my role from each trait result
@@ -120,6 +123,69 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         }
     }
     
+    // --- BUILD (unbuilt factory construction) ---
+    if (build.happened) {
+        // Am I the building unit? (I become empty-handed)
+        if (distance(build.unitPos, myPos) < 0.5) {
+            // Keep the memory we had - we didn't decay it while holding
+            MemoryState mem;
+            mem.position = getUnitMemoryPos(myRaw);
+            mem.freshness = getUnitMemoryFreshness(myRaw);
+            mem.hasMemory = mem.freshness > 0.0;
+            mem.homesickTimer = 0.0;
+            mem.factoryChanged = false;
+            mem.newFactoryPos = vec2(-1.0);
+            
+            return encodeUnit(
+                false,  // no longer holding
+                0,      // reset counter
+                0.0,    // reset age (just built successfully)
+                getUnitFactory(myRaw),
+                mem
+            );
+        }
+        
+        // Am I the unbuilt factory cell being built?
+        if (distance(build.blueprintPos, myPos) < 0.5) {
+            int builds = countBuilds(myPos, u_state, u_resolution);
+            float newBuildProgress = min(getFactoryBuildProgress(myRaw) + float(builds), MAX_BUILD_PER_CELL);
+            vec2 center = getFactoryPos(myRaw);
+            
+            // Update this cell's build progress
+            // Note: The factory remains TYPE_FACTORY, just with updated G value
+            // The "built" status is determined by summing all cells' G values
+            return encodeUnbuiltFactory(newBuildProgress, center);
+        }
+    }
+    
+    // --- DEMOLISH (units destroying marked cells) ---
+    if (demolish.happened) {
+        // Am I the demolishing unit? (I pick up a resource)
+        if (distance(demolish.unitPos, myPos) < 0.5) {
+            // Unit picks up a resource from demolishing
+            MemoryState mem;
+            mem.position = myPos;  // Remember this location
+            mem.freshness = 50.0;  // Fresh memory
+            mem.hasMemory = true;
+            mem.homesickTimer = 0.0;
+            mem.factoryChanged = false;
+            mem.newFactoryPos = vec2(-1.0);
+            
+            return encodeUnit(
+                true,   // now holding a resource
+                0,      // reset counter
+                0.0,    // reset age
+                getUnitFactory(myRaw),
+                mem
+            );
+        }
+        
+        // Am I the demolish cell being destroyed?
+        if (distance(demolish.demolishPos, myPos) < 0.5) {
+            return encodeEmpty();
+        }
+    }
+    
     // ========================================================================
     // No trait affected me - handle staying in place
     // ========================================================================
@@ -133,9 +199,16 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         
         int newCounter;
         if (walking) {
-            newCounter = max(0, counter - 1);  // Decrement in walking mode
+            // Already in walking mode, keep counter high (don't decrement when blocked in walking mode)
+            // Only successful moves decrement counter (in transformArrival)
+            newCounter = counter;
         } else {
-            newCounter = counter + 1;  // Increment toward threshold
+            // Not walking yet, increment toward threshold
+            newCounter = counter + 1;
+            // When we JUST reach the threshold, boost to max to ensure walking mode sticks
+            if (float(newCounter) >= STATIONARY_THRESHOLD && float(counter) < STATIONARY_THRESHOLD) {
+                newCounter = 15;  // Max counter value, will take many successful moves to exit
+            }
         }
         
         // Get factory position early for age calculation
@@ -208,6 +281,9 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         float newResources = getFactoryResources(myRaw) + float(deposits);
         return encodeFactory(newResources, getFactoryPos(myRaw));
     }
+    
+    // Note: Factories (both built and unbuilt) are handled above in the FACTORY case
+    // and through the BUILD trait. No separate TYPE_FACTORY_BLUEPRINT handling needed.
     
     // Everything else stays as-is
     return myRaw;

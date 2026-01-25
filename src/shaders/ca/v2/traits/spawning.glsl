@@ -2,10 +2,10 @@
  * Spawning Trait - THE canonical spawning evaluation
  * 
  * 3x3 Factory spawning:
- * - Factories are 3x3 grids
- * - The "top-middle" cell controls spawning (has left, right, bottom factory neighbors)
- * - Resources are summed across all 9 cells
- * - When spawning, cost is subtracted equally from all 9 cells
+ * - Factories are 3x3 grids with empty center (8 outer cells)
+ * - The "top-middle" cell controls spawning (has left, right, corner factory neighbors)
+ * - Resources are summed across all 8 factory cells
+ * - When spawning, cost is subtracted equally from all 8 cells
  */
 
 #ifndef SPAWNING_GLSL
@@ -13,12 +13,6 @@
 
 #include "../core/types.glsl"
 #include "../core/traits.glsl"
-
-// ============================================================================
-// Spawning Constants
-// ============================================================================
-
-const float SPAWN_COST = 50.0;
 
 // ============================================================================
 // Spawning Result
@@ -34,19 +28,34 @@ struct SpawnResult {
 
 // ============================================================================
 // Helper: Check if a cell is the "top-middle" of a 3x3 factory
-// Top-middle has factory neighbors: LEFT, RIGHT, BELOW, but NOT ABOVE
+// Top-middle has factory neighbors: LEFT, RIGHT, and corner factories below
+// Note: Center of factory is empty, so we check diagonal corners instead
 // ============================================================================
 
 bool isTopMiddleFactory(vec2 pos, sampler2D state, vec2 resolution) {
+    vec4 myRaw = texture(state, (pos + 0.5) / resolution);
+    if (getType(myRaw) != TYPE_FACTORY) return false;
+    
+    vec2 myCenter = getFactoryPos(myRaw);
+    
     vec4 leftRaw = texture(state, (pos + vec2(-1.0, 0.0) + 0.5) / resolution);
     vec4 rightRaw = texture(state, (pos + vec2(1.0, 0.0) + 0.5) / resolution);
-    vec4 belowRaw = texture(state, (pos + vec2(0.0, -1.0) + 0.5) / resolution);
     vec4 aboveRaw = texture(state, (pos + vec2(0.0, 1.0) + 0.5) / resolution);
+    // Check bottom-left and bottom-right corners (center is empty now)
+    vec4 bottomLeftRaw = texture(state, (pos + vec2(-1.0, -1.0) + 0.5) / resolution);
+    vec4 bottomRightRaw = texture(state, (pos + vec2(1.0, -1.0) + 0.5) / resolution);
     
-    return getType(leftRaw) == TYPE_FACTORY &&
-           getType(rightRaw) == TYPE_FACTORY &&
-           getType(belowRaw) == TYPE_FACTORY &&
-           getType(aboveRaw) != TYPE_FACTORY;
+    // Top-middle has:
+    // - Left and right are factories with same center
+    // - Above is NOT factory (spawn location)
+    // - Bottom-left and bottom-right are factories with same center
+    bool leftOK = getType(leftRaw) == TYPE_FACTORY && distance(getFactoryPos(leftRaw), myCenter) < 0.5;
+    bool rightOK = getType(rightRaw) == TYPE_FACTORY && distance(getFactoryPos(rightRaw), myCenter) < 0.5;
+    bool aboveOK = getType(aboveRaw) != TYPE_FACTORY;
+    bool bottomLeftOK = getType(bottomLeftRaw) == TYPE_FACTORY && distance(getFactoryPos(bottomLeftRaw), myCenter) < 0.5;
+    bool bottomRightOK = getType(bottomRightRaw) == TYPE_FACTORY && distance(getFactoryPos(bottomRightRaw), myCenter) < 0.5;
+    
+    return leftOK && rightOK && aboveOK && bottomLeftOK && bottomRightOK;
 }
 
 // ============================================================================

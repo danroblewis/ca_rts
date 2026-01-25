@@ -30,11 +30,176 @@
             display: none;
             z-index: 100;
         }
+        
+        /* Shader Toggle UI */
+        #shader-toggle-container {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 200;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 16px;
+            border-radius: 8px;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            font-size: 12px;
+            color: #aaa;
+            user-select: none;
+        }
+        
+        #shader-toggle-container .label {
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+        
+        #shader-toggle-container .label.active {
+            opacity: 1;
+            color: #fff;
+        }
+        
+        .toggle-switch {
+            position: relative;
+            width: 48px;
+            height: 24px;
+            cursor: pointer;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, #2a1a3a 0%, #1a2a1a 100%);
+            border-radius: 24px;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 2px;
+            bottom: 2px;
+            background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
+            border-radius: 50%;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+        }
+        
+        .toggle-switch input:checked + .toggle-slider {
+            background: linear-gradient(135deg, #1a2a1a 0%, #0a3a2a 100%);
+        }
+        
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            box-shadow: 0 2px 8px rgba(34, 197, 94, 0.4);
+        }
+        
+        .toggle-switch:hover .toggle-slider {
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+        
+        /* Metaball Scale Slider */
+        #metaball-scale-container {
+            position: fixed;
+            top: 70px;
+            right: 16px;
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 16px;
+            border-radius: 8px;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            font-size: 12px;
+            color: #aaa;
+            user-select: none;
+            min-width: 160px;
+        }
+        
+        #metaball-scale-container .slider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        #metaball-scale-container .slider-value {
+            color: #8b5cf6;
+            font-weight: bold;
+        }
+        
+        #metaball-scale {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            background: linear-gradient(90deg, #2a1a3a, #8b5cf6);
+            border-radius: 3px;
+            outline: none;
+            cursor: pointer;
+        }
+        
+        #metaball-scale::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+        }
+        
+        #metaball-scale::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+        }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
     <div id="cursor-overlay"></div>
+    
+    <!-- Shader Toggle -->
+    <div id="shader-toggle-container">
+        <span class="label" id="label-metaball">Metaball</span>
+        <label class="toggle-switch">
+            <input type="checkbox" id="shader-toggle">
+            <span class="toggle-slider"></span>
+        </label>
+        <span class="label" id="label-debug">Debug</span>
+    </div>
+    
+    <!-- Metaball Scale Slider -->
+    <div id="metaball-scale-container">
+        <div class="slider-header">
+            <span>Blob Scale</span>
+            <span class="slider-value" id="metaball-scale-value">1.0</span>
+        </div>
+        <input type="range" id="metaball-scale" min="0.3" max="3.0" step="0.1" value="1.0">
+    </div>
     
     <script type="module" src="src/main.js"></script>
 </body>

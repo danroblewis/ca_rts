@@ -15,14 +15,6 @@
 #include "./types.glsl"
 
 // ============================================================================
-// Trait Constants (bitmask)
-// ============================================================================
-
-const int TRAIT_MOBILE = 1;      // Can move to adjacent cells
-const int TRAIT_SPAWNER = 2;     // Can create new cells
-const int TRAIT_MINABLE = 4;     // Can be extracted/mined
-
-// ============================================================================
 // Type -> Traits Mapping
 // ============================================================================
 
@@ -37,8 +29,8 @@ int getTraits(int cellType) {
 // Check if a cell type blocks movement (cannot be entered)
 bool blocksMovement(int cellType) {
     // Can move into: empty, resources (to mine), units (collision handled separately)
-    // Cannot move into: walls, factories
-    return cellType == TYPE_WALL || cellType == TYPE_FACTORY;
+    // Cannot move into: walls, factories (built or unbuilt), demolish markers
+    return cellType == TYPE_WALL || cellType == TYPE_FACTORY || cellType == TYPE_DEMOLISH;
 }
 
 bool hasTrait(int cellType, int trait) {
@@ -58,14 +50,8 @@ bool isMinable(int cellType) {
 }
 
 // ============================================================================
-// Direction Constants
+// Direction Helpers
 // ============================================================================
-
-const int DIR_NONE = 0;
-const int DIR_RIGHT = 1;
-const int DIR_UP = 2;
-const int DIR_LEFT = 3;
-const int DIR_DOWN = 4;
 
 vec2 dirToOffset(int dir) {
     if (dir == DIR_RIGHT) return vec2(1.0, 0.0);

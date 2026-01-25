@@ -17,14 +17,6 @@
 #include "./memory.glsl"
 
 // ============================================================================
-// Movement Constants
-// ============================================================================
-
-const int VISION_RANGE = 5;
-const float STATIONARY_THRESHOLD = 8.0;
-const float MAX_WANDER_DISTANCE = 100.0;  // Max distance from factory before returning
-
-// ============================================================================
 // Movement Result - what happened in the local region
 // ============================================================================
 
@@ -110,6 +102,82 @@ bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolu
     return false;
 }
 
+// Check if adjacent to a buildable (unbuilt) factory (for holding units to build instead of move)
+bool isAdjacentToBuildableFactory(vec2 pos, sampler2D state, vec2 resolution) {
+    for (int d = 1; d <= 4; d++) {
+        vec2 checkPos = pos + dirToOffset(d);
+        vec2 uv = (checkPos + 0.5) / resolution;
+        vec4 cell = texture(state, uv);
+        
+        if (getType(cell) == TYPE_FACTORY) {
+            vec2 center = getFactoryPos(cell);
+            // Check if factory is NOT built yet
+            float totalBuild = 0.0;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    vec2 cellPos = center + vec2(float(dx), float(dy));
+                    vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
+                    if (getType(cellRaw) == TYPE_FACTORY) {
+                        totalBuild += getFactoryBuildProgress(cellRaw);
+                    }
+                }
+            }
+            if (totalBuild < BUILD_THRESHOLD) {
+                // Factory is not built, check if this cell can still be built
+                float buildProgress = getFactoryBuildProgress(cell);
+                if (buildProgress < MAX_BUILD_PER_CELL) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Find nearest unbuilt factory that needs building within vision range
+// Returns the position of the nearest buildable factory cell, or (-1, -1) if none found
+vec2 findVisibleUnbuiltFactory(vec2 pos, sampler2D state, vec2 resolution) {
+    vec2 nearest = vec2(-1.0);
+    float nearestDist = 999.0;
+    
+    for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++) {
+        for (int dx = -VISION_RANGE; dx <= VISION_RANGE; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            vec2 checkPos = pos + vec2(float(dx), float(dy));
+            vec2 uv = (checkPos + 0.5) / resolution;
+            vec4 cell = texture(state, uv);
+            
+            if (getType(cell) == TYPE_FACTORY) {
+                vec2 center = getFactoryPos(cell);
+                // Check if factory is NOT built yet
+                float totalBuild = 0.0;
+                for (int cdy = -1; cdy <= 1; cdy++) {
+                    for (int cdx = -1; cdx <= 1; cdx++) {
+                        vec2 cellPos = center + vec2(float(cdx), float(cdy));
+                        vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
+                        if (getType(cellRaw) == TYPE_FACTORY) {
+                            totalBuild += getFactoryBuildProgress(cellRaw);
+                        }
+                    }
+                }
+                if (totalBuild < BUILD_THRESHOLD) {
+                    // Factory is not built, check if this cell can still be built
+                    float buildProgress = getFactoryBuildProgress(cell);
+                    if (buildProgress < MAX_BUILD_PER_CELL) {
+                        float dist = abs(float(dx)) + abs(float(dy));
+                        if (dist < nearestDist) {
+                            nearestDist = dist;
+                            nearest = checkPos;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return nearest;
+}
+
 int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resolution) {
     bool holding = getUnitHolding(raw);
     int counter = getUnitCounter(raw);
@@ -130,6 +198,11 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
         return DIR_NONE;  // Will deposit, not move
     }
     
+    // If holding and adjacent to buildable (unbuilt) factory, don't move (build instead)
+    if (holding && isAdjacentToBuildableFactory(pos, state, resolution)) {
+        return DIR_NONE;  // Will build, not move
+    }
+    
     // If homesick and adjacent to factory, stop (will reset timer in memory eval)
     if (homesick && hasHome && isAdjacentToFactory(pos, factoryPos, state, resolution)) {
         return DIR_NONE;  // Reached home, timer will reset
@@ -145,8 +218,14 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
         return randomDir(pos, time);  // Wander until we see a factory
     }
     
-    // Holding with home = go to factory
+    // Holding with home = check for visible unbuilt factory first, then go to home factory
     if (holding) {
+        // Prioritize building unbuilt factories if we can see one
+        vec2 visibleUnbuilt = findVisibleUnbuiltFactory(pos, state, resolution);
+        if (visibleUnbuilt.x >= 0.0) {
+            return dirToward(pos, visibleUnbuilt, time + pos.x * 0.1);
+        }
+        // No unbuilt factory visible, go to home factory to deposit
         return dirToward(pos, factoryPos, time + pos.x * 0.1);
     }
     

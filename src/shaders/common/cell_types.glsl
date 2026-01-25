@@ -12,8 +12,14 @@
 const float CELL_EMPTY = 0.0;
 const float CELL_RESOURCE = 1.0;
 const float CELL_MINING_UNIT = 2.0;
-const float CELL_MINING_FACTORY = 3.0;
+const float CELL_MINING_FACTORY = 3.0;  // Used for both built and unbuilt factories
 const float CELL_WALL = 4.0;
+// Type 5 is unused (was CELL_FACTORY_BLUEPRINT, now unified into CELL_MINING_FACTORY)
+const float CELL_DEMOLISH = 6.0;
+
+// Factory building constants
+const float MAX_BUILD_PER_CELL = 1.0;
+const float BUILD_THRESHOLD = 8.0;
 
 // ============================================================================
 // Coordinate packing (for grids up to 256x256)
@@ -62,6 +68,67 @@ bool isMiningFactory(vec4 cell) {
 
 bool isWall(vec4 cell) {
     return getCellType(cell) == CELL_WALL;
+}
+
+// isFactoryBlueprint removed - use isFactoryUnbuilt instead
+
+bool isDemolish(vec4 cell) {
+    return getCellType(cell) == CELL_DEMOLISH;
+}
+
+// ============================================================================
+// FACTORY BUILD STATUS
+// For unbuilt factories: G = build progress (0-MAX_BUILD_PER_CELL per cell)
+// For built factories: G = resources
+// B = centerX (center of 3x3 factory)
+// A = centerY
+// 
+// A factory is "built" when sum of G across all 8 outer cells >= BUILD_THRESHOLD
+// ============================================================================
+
+// Forward declare getFactoryPosition (needed by isFactoryUnbuilt below)
+vec2 getFactoryPosition(vec4 cell) {
+    return vec2(cell.b, cell.a);
+}
+
+float getFactoryBuildProgress(vec4 cell) {
+    return cell.g;
+}
+
+// Sum build progress / resources across 3x3 factory grid
+float sumFactoryBuildProgress(vec2 centerPos, sampler2D state, vec2 resolution) {
+    float total = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            vec2 cellPos = centerPos + vec2(float(dx), float(dy));
+            vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
+            if (isMiningFactory(cellRaw)) {
+                total += getFactoryBuildProgress(cellRaw);
+            }
+        }
+    }
+    return total;
+}
+
+// Check if a factory at centerPos is fully built
+bool isFactoryBuilt(vec2 centerPos, sampler2D state, vec2 resolution) {
+    return sumFactoryBuildProgress(centerPos, state, resolution) >= BUILD_THRESHOLD;
+}
+
+// Check if a factory cell is unbuilt (for rendering purposes)
+bool isFactoryUnbuilt(vec4 cell, sampler2D state, vec2 resolution) {
+    if (!isMiningFactory(cell)) return false;
+    vec2 center = getFactoryPosition(cell);
+    return !isFactoryBuilt(center, state, resolution);
+}
+
+// ============================================================================
+// DEMOLISH (marked for destruction)
+// B = centerX, A = centerY
+// ============================================================================
+
+vec2 getDemolishCenter(vec4 cell) {
+    return vec2(cell.b, cell.a);
 }
 
 // ============================================================================
@@ -195,9 +262,7 @@ float getFactoryResourceCount(vec4 cell) {
     return cell.g;
 }
 
-vec2 getFactoryPosition(vec4 cell) {
-    return vec2(cell.b, cell.a);
-}
+// getFactoryPosition is defined earlier (needed by isFactoryUnbuilt)
 
 vec4 createMiningFactory(float resourceCount, float selfX, float selfY) {
     return vec4(CELL_MINING_FACTORY, resourceCount, selfX, selfY);

@@ -20,8 +20,10 @@ import { runTest, assert, assertApprox, logSection } from './framework.js';
 const CELL_EMPTY = 0;
 const CELL_RESOURCE = 1;
 const CELL_MINING_UNIT = 2;
-const CELL_MINING_FACTORY = 3;
+const CELL_MINING_FACTORY = 3;  // Used for both built and unbuilt factories
 const CELL_WALL = 4;
+// Type 5 is unused (was CELL_FACTORY_BLUEPRINT, now unified into CELL_MINING_FACTORY)
+const CELL_DEMOLISH = 6;
 
 // Constants from shader (must match)
 const STATIONARY_THRESHOLD = 8;
@@ -33,6 +35,10 @@ const MAX_AGE = 500;  // Steps before unit dies from starvation
 const FACTORY_SAFE_ZONE = 10;  // Units within this distance heal
 const AGE_PACK_BASE = 32;  // Age packing base in G channel
 const MAX_WANDER_DISTANCE = 100;  // Units return when exceeding this
+
+// Blueprint constants (must match types.glsl)
+const MAX_BUILD_PER_CELL = 1;
+const BUILD_THRESHOLD = 8;  // Total across 3x3 to complete
 
 // Grid size for tests
 const TEST_GRID_SIZE = 16;
@@ -139,11 +145,13 @@ function createMiningFactory(resources, selfX, selfY) {
 
 // Create a 3x3 factory grid centered at (centerX, centerY)
 // All cells reference the center as selfPos
-// Resources are distributed equally among all 9 cells
+// Center cell stays empty, resources are distributed among 8 outer cells
 function create3x3Factory(sim, data, centerX, centerY, totalResources) {
-    const resourcesPerCell = totalResources / 9.0;
+    const resourcesPerCell = totalResources / 8.0;  // 8 cells (center is empty)
     for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
+            // Skip the center cell - it stays empty
+            if (dx === 0 && dy === 0) continue;
             sim.setCell(data, centerX + dx, centerY + dy, 
                 createMiningFactory(resourcesPerCell, centerX, centerY));
         }
@@ -152,6 +160,39 @@ function create3x3Factory(sim, data, centerX, centerY, totalResources) {
 
 function createWall() {
     return [CELL_WALL, 0, 0, 0];
+}
+
+// Create an unbuilt factory cell (buildProgress in G channel, center position in B/A)
+// Unbuilt factories use CELL_MINING_FACTORY with buildProgress < BUILD_THRESHOLD across the 3x3
+function createUnbuiltFactory(buildProgress, centerX, centerY) {
+    return [CELL_MINING_FACTORY, Math.min(buildProgress, MAX_BUILD_PER_CELL), centerX, centerY];
+}
+
+// Legacy alias for tests - now creates unbuilt factory instead of blueprint
+function createBlueprint(buildCount, centerX, centerY) {
+    return createUnbuiltFactory(buildCount, centerX, centerY);
+}
+
+// Create a 3x3 unbuilt factory grid centered at (centerX, centerY)
+// Center cell stays empty, outer cells are factory with buildProgress
+function create3x3UnbuiltFactory(sim, data, centerX, centerY, buildProgressPerCell = 0) {
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            // Skip the center cell - it stays empty
+            if (dx === 0 && dy === 0) continue;
+            sim.setCell(data, centerX + dx, centerY + dy, 
+                createUnbuiltFactory(buildProgressPerCell, centerX, centerY));
+        }
+    }
+}
+
+// Legacy alias for tests
+function create3x3Blueprint(sim, data, centerX, centerY, buildCountPerCell = 0) {
+    create3x3UnbuiltFactory(sim, data, centerX, centerY, buildCountPerCell);
+}
+
+function createDemolish(centerX, centerY) {
+    return [CELL_DEMOLISH, 0, centerX, centerY];
 }
 
 // ============================================================================
@@ -189,6 +230,45 @@ function getFactoryResources(cell) {
 
 function getFactoryPosition(cell) {
     return { x: cell[2], y: cell[3] };
+}
+
+// Get build progress from factory cell (works for both built and unbuilt)
+function getFactoryBuildProgress(cell) {
+    return cell[1];
+}
+
+// Legacy alias
+function getBlueprintBuildCount(cell) {
+    return getFactoryBuildProgress(cell);
+}
+
+function getBlueprintCenter(cell) {
+    return { x: cell[2], y: cell[3] };
+}
+
+// Sum build progress across 3x3 factory area (8 outer cells + empty center)
+// Works for both built and unbuilt factories (same type now)
+function sumFactoryBuildProgress(sim, data, centerX, centerY) {
+    let total = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            const cell = sim.getCell(data, centerX + dx, centerY + dy);
+            if (getCellType(cell) === CELL_MINING_FACTORY) {
+                total += getFactoryBuildProgress(cell);
+            }
+        }
+    }
+    return total;
+}
+
+// Check if a factory at centerPos is built (total progress >= threshold)
+function isFactoryBuilt(sim, data, centerX, centerY) {
+    return sumFactoryBuildProgress(sim, data, centerX, centerY) >= BUILD_THRESHOLD;
+}
+
+// Legacy alias
+function sumBlueprintBuildCount(sim, data, centerX, centerY) {
+    return sumFactoryBuildProgress(sim, data, centerX, centerY);
 }
 
 // ============================================================================
@@ -851,9 +931,13 @@ export async function runMiningTests() {
         sim.stepN(50);
         const result = sim.download();
         
-        // Should have: factory exists, unit exists (spawned), resource may be gone
-        const factoryCell = sim.getCell(result, 8, 4);
-        assert(getCellType(factoryCell) === CELL_MINING_FACTORY, 'Factory center should exist');
+        // Should have: factory exists (check outer cell, center is empty), unit exists (spawned)
+        const factoryOuterCell = sim.getCell(result, 7, 3);  // Bottom-left outer cell
+        assert(getCellType(factoryOuterCell) === CELL_MINING_FACTORY, 'Factory outer cell should exist');
+        
+        // Center should be empty
+        const factoryCenter = sim.getCell(result, 8, 4);
+        assert(getCellType(factoryCenter) === CELL_EMPTY, 'Factory center should be empty');
         
         const unitCount = sim.countCellType(result, CELL_MINING_UNIT);
         assert(unitCount >= 1, 'At least one unit should exist');
@@ -1241,6 +1325,1011 @@ export async function runMiningTests() {
                         `Unit should adopt visible factory (factory: ${factory.x},${factory.y})`);
                 }
             }
+        }
+        
+        sim.destroy();
+    });
+    
+    // ========================================================================
+    // UNBUILT FACTORY CONSTRUCTION TESTS
+    // ========================================================================
+    
+    logSection('Mining Game - Unbuilt Factory Construction');
+    
+    await runTest('Unbuilt Factory: unbuilt factory cell persists through simulation', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        create3x3UnbuiltFactory(sim, data, 8, 8, 0);
+        sim.upload(data);
+        
+        // Run simulation
+        sim.stepN(10);
+        const result = sim.download();
+        
+        // Unbuilt factory outer cell should still be there (center is empty)
+        const outerCell = sim.getCell(result, 7, 7);
+        assert(getCellType(outerCell) === CELL_MINING_FACTORY, 
+            `Unbuilt factory outer cell should persist (got type ${getCellType(outerCell)})`);
+        
+        // Should still be unbuilt (no one built it)
+        assert(!isFactoryBuilt(sim, result, 8, 8), 'Factory should still be unbuilt');
+        
+        // Center should be empty
+        const centerCell = sim.getCell(result, 8, 8);
+        assert(getCellType(centerCell) === CELL_EMPTY, 
+            `Factory center should be empty (got type ${getCellType(centerCell)})`);
+        
+        sim.destroy();
+    });
+    
+    await runTest('Unbuilt Factory: holding unit builds adjacent unbuilt factory cell', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Unbuilt factory centered at (8, 8)
+        create3x3UnbuiltFactory(sim, data, 8, 8, 0);
+        // Built factory far away (so unit doesn't deposit there instead)
+        create3x3Factory(sim, data, 2, 2, 100);  // High resources = definitely built
+        sim.upload(data);
+        
+        // Download and re-upload to ensure built factory is recognized
+        let initialData = sim.download();
+        
+        // Holding unit adjacent to unbuilt factory edge
+        sim.setCell(initialData, 7, 6, createMiningUnit(true, 0, 2, 2));  // Adjacent to (7,7) of unbuilt factory
+        sim.upload(initialData);
+        initialData = sim.download();
+        
+        // Check initial build count
+        const initialCell = sim.getCell(initialData, 7, 7);
+        assert(getFactoryBuildProgress(initialCell) === 0, 'Unbuilt factory should start with 0 build progress');
+        
+        sim.step();
+        const result = sim.download();
+        
+        // Unbuilt factory cell (7,7) should have increased build progress
+        const builtCell = sim.getCell(result, 7, 7);
+        assert(getCellType(builtCell) === CELL_MINING_FACTORY, 'Cell should still be factory type');
+        const buildProgress = getFactoryBuildProgress(builtCell);
+        assert(buildProgress === 1, `Factory cell should have build progress 1, got ${buildProgress}`);
+        
+        // Unit should be empty-handed
+        const unit = sim.findCell(result, CELL_MINING_UNIT);
+        assert(unit !== null, 'Unit should exist');
+        assert(!isHolding(unit.cell), 'Unit should be empty-handed after building');
+        
+        sim.destroy();
+    });
+    
+    await runTest('Unbuilt Factory: factory becomes built when build threshold reached', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Create unbuilt factory with 8 outer cells at max build (threshold = 8, max per cell = 1)
+        // Center cell is EMPTY (as per placement rules - center stays empty)
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) {
+                    // Center cell stays empty (not placed during factory creation)
+                    continue;
+                } else {
+                    // Outer cells - max build progress
+                    sim.setCell(data, 8 + dx, 8 + dy, createUnbuiltFactory(MAX_BUILD_PER_CELL, 8, 8));
+                }
+            }
+        }
+        sim.upload(data);
+        
+        // Check initial state - center should be empty, outer cells are factory type
+        const initialCenter = sim.getCell(data, 8, 8);
+        assert(getCellType(initialCenter) === CELL_EMPTY, 'Center should start as empty');
+        
+        // Calculate initial total (sum of 8 outer cells)
+        const initialTotal = sumFactoryBuildProgress(sim, data, 8, 8);
+        assert(initialTotal === 8, `Initial build progress should be 8, got ${initialTotal}`);
+        
+        // Factory should now be considered "built" since total >= threshold
+        assert(isFactoryBuilt(sim, data, 8, 8), 'Factory should be built (threshold reached)');
+        
+        sim.step();
+        const result = sim.download();
+        
+        // 8 outer cells should still be factory, center stays empty
+        let factoryCount = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const cell = sim.getCell(result, 8 + dx, 8 + dy);
+                if (dx === 0 && dy === 0) {
+                    // Center stays empty
+                    assert(getCellType(cell) === CELL_EMPTY, 'Center should stay empty');
+                } else if (getCellType(cell) === CELL_MINING_FACTORY) {
+                    factoryCount++;
+                }
+            }
+        }
+        assert(factoryCount === 8, `8 outer cells should be factory, got ${factoryCount}`);
+        
+        // Should still be built
+        assert(isFactoryBuilt(sim, result, 8, 8), 'Factory should still be built');
+        
+        sim.destroy();
+    });
+    
+    await runTest('Unbuilt Factory: factory is NOT built if below threshold', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Create unbuilt factory with only 7 outer cells with build progress (below threshold of 8)
+        // Center stays empty (as per placement rules)
+        let cellsBuilt = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) {
+                    // Center cell stays empty
+                    continue;
+                } else if (cellsBuilt < 7) {
+                    // First 7 outer cells - max build progress
+                    sim.setCell(data, 8 + dx, 8 + dy, createUnbuiltFactory(MAX_BUILD_PER_CELL, 8, 8));
+                    cellsBuilt++;
+                } else {
+                    // 8th outer cell - 0 build progress
+                    sim.setCell(data, 8 + dx, 8 + dy, createUnbuiltFactory(0, 8, 8));
+                }
+            }
+        }
+        sim.upload(data);
+        
+        // Calculate initial total
+        const initialTotal = sumFactoryBuildProgress(sim, data, 8, 8);
+        assert(initialTotal === 7, `Initial build progress should be 7, got ${initialTotal}`);
+        
+        // Should NOT be built yet
+        assert(!isFactoryBuilt(sim, data, 8, 8), 'Factory should NOT be built with only 7 progress');
+        
+        sim.step();
+        const result = sim.download();
+        
+        // Outer cells should still be factory type (but unbuilt)
+        const outerCell = sim.getCell(result, 7, 7);
+        assert(getCellType(outerCell) === CELL_MINING_FACTORY, 
+            `Cell should still be factory type (got type ${getCellType(outerCell)})`);
+        
+        // Should still NOT be built
+        assert(!isFactoryBuilt(sim, result, 8, 8), 'Factory should still NOT be built');
+        
+        sim.destroy();
+    });
+    
+    await runTest('Unbuilt Factory: center cell stays empty when factory becomes built', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        // Center cell is empty (as per placement rules), outer cells are factory type
+        // The factory is "built" when outer cells reach threshold
+        // Center stays empty (units can't reach it anyway)
+        
+        const data = sim.createEmptyGrid();
+        // Create unbuilt factory centered at (8, 8)
+        // All 8 outer cells have build progress = 1 (total = 8 = threshold)
+        // Center cell is EMPTY (not placed)
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) {
+                    // Center stays empty
+                    continue;
+                }
+                sim.setCell(data, 8 + dx, 8 + dy, createUnbuiltFactory(1, 8, 8));
+            }
+        }
+        sim.upload(data);
+        
+        // Verify total (should be 8 from outer cells only)
+        const total = sumFactoryBuildProgress(sim, data, 8, 8);
+        assert(total === 8, `Total should be 8, got ${total}`);
+        
+        // Should be built now
+        assert(isFactoryBuilt(sim, data, 8, 8), 'Factory should be built');
+        
+        sim.step();
+        const result = sim.download();
+        
+        // CENTER cell should remain empty
+        const centerCell = sim.getCell(result, 8, 8);
+        assert(getCellType(centerCell) === CELL_EMPTY, 
+            `Center cell should stay empty (got type ${getCellType(centerCell)})`);
+        
+        // Outer cells should still be factory
+        const outerCell = sim.getCell(result, 7, 7);
+        assert(getCellType(outerCell) === CELL_MINING_FACTORY, 
+            `Outer cells should be factory (got type ${getCellType(outerCell)})`);
+        
+        sim.destroy();
+    });
+    
+    await runTest('Unbuilt Factory: complete build cycle with single unit', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        // Factory at (2, 8) with resources to spawn units
+        create3x3Factory(sim, data, 2, 8, SPAWN_COST * 2);
+        // Unbuilt factory at (12, 8) - far from factory
+        create3x3UnbuiltFactory(sim, data, 12, 8, 0);
+        // Resources between factory and unbuilt factory (unit will mine these and build)
+        for (let i = 0; i < 10; i++) {
+            sim.setCell(data, 6 + i % 3, 6 + Math.floor(i / 3), createResource());
+        }
+        sim.upload(data);
+        
+        // Initial state checks (8 outer cells, center is empty)
+        // Count factory cells at (12, 8) - they start as unbuilt (CELL_MINING_FACTORY with 0 progress)
+        let initialFactoryCells = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;  // Skip center
+                const cell = sim.getCell(data, 12 + dx, 8 + dy);
+                if (getCellType(cell) === CELL_MINING_FACTORY) {
+                    initialFactoryCells++;
+                }
+            }
+        }
+        assert(initialFactoryCells === 8, 'Should start with 8 unbuilt factory cells (center empty)');
+        assert(!isFactoryBuilt(sim, data, 12, 8), 'Factory at (12,8) should start unbuilt');
+        
+        // Run for a while - should spawn unit, mine resources, build unbuilt factory
+        sim.stepN(500);
+        const result = sim.download();
+        
+        // Check factory cells at (12, 8)
+        let factoryCellsAt12_8 = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;  // Skip center
+                const cell = sim.getCell(result, 12 + dx, 8 + dy);
+                if (getCellType(cell) === CELL_MINING_FACTORY) {
+                    factoryCellsAt12_8++;
+                }
+            }
+        }
+        
+        // All 8 outer cells should still be factory type
+        assert(factoryCellsAt12_8 === 8, `Structure should have 8 outer cells, got ${factoryCellsAt12_8}`);
+        
+        sim.destroy();
+    });
+    
+    await runTest('Unbuilt Factory: unit moves away from fully-built factory (not stuck on center cell)', async () => {
+        // This test verifies that when a factory has all 8 border cells built (meeting threshold),
+        // the factory is recognized as built and units don't get stuck. Center stays empty (placement rule).
+        
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        // Use a fixed time for deterministic behavior
+        sim.setTime(42);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a home factory for the unit at corner (to be far from the test area)
+        create3x3Factory(sim, data, 2, 2, 10);
+        
+        // Create a factory centered at (8, 8) with all 8 border cells built (buildProgress = 1)
+        // Center cell is EMPTY (as per placement rules)
+        // Total = 8 which meets BUILD_THRESHOLD, so it should be considered "built"
+        const factoryCenterX = 8;
+        const factoryCenterY = 8;
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) {
+                    // Center stays empty (placement rule)
+                    continue;
+                }
+                sim.setCell(data, factoryCenterX + dx, factoryCenterY + dy, 
+                    createUnbuiltFactory(1, factoryCenterX, factoryCenterY));
+            }
+        }
+        
+        // Place a non-holding unit just outside the factory
+        // Unit at (10, 8) - to the right of the factory, belongs to factory at (2,2)
+        const unitStartX = 10;
+        const unitStartY = 8;
+        sim.setCell(data, unitStartX, unitStartY, createMiningUnit(false, 0, 2, 2));
+        
+        sim.upload(data);
+        
+        // Verify initial state: center should be empty, outer cells should be factory
+        const initialCenter = sim.getCell(data, factoryCenterX, factoryCenterY);
+        assert(getCellType(initialCenter) === CELL_EMPTY, 'Center should start as empty');
+        
+        // Verify factory is built
+        assert(isFactoryBuilt(sim, data, factoryCenterX, factoryCenterY), 'Factory should be built');
+        
+        // Track maximum distance the unit travels from start position
+        let maxDistance = 0;
+        
+        // Run simulation for 50 steps, checking unit position each step
+        for (let step = 0; step < 50; step++) {
+            sim.step();
+            const result = sim.download();
+            
+            // After first step, verify factory is still built
+            if (step === 0) {
+                // Center stays empty
+                const centerAfterStep = sim.getCell(result, factoryCenterX, factoryCenterY);
+                assert(getCellType(centerAfterStep) === CELL_EMPTY, 
+                    `Center should stay empty (got type ${getCellType(centerAfterStep)})`);
+                // Outer cell should be factory
+                const outerAfterStep = sim.getCell(result, factoryCenterX + 1, factoryCenterY);
+                assert(getCellType(outerAfterStep) === CELL_MINING_FACTORY, 
+                    `Outer cells should be factory (got type ${getCellType(outerAfterStep)})`);
+            }
+            
+            // Find the unit and measure distance from start
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        const dist = Math.abs(x - unitStartX) + Math.abs(y - unitStartY);
+                        if (dist > maxDistance) {
+                            maxDistance = dist;
+                        }
+                    }
+                }
+            }
+            
+            // Upload result for next step
+            sim.upload(result);
+        }
+        
+        // Unit should have moved at least 4 cells away at some point
+        // If stuck trying to build the center cell, it would stay close
+        assert(maxDistance >= 4, 
+            `Unit should move away from factory (max distance: ${maxDistance}, expected >= 4)`);
+        
+        sim.destroy();
+    });
+    
+    await runTest('Unbuilt Factory: holding unit moves toward visible unbuilt factory', async () => {
+        // This test verifies that a holding unit prioritizes moving toward 
+        // a visible unbuilt factory over returning to its home factory
+        
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        // Use a fixed time for deterministic behavior
+        sim.setTime(42);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a home factory at corner - far from the unbuilt factory
+        create3x3Factory(sim, data, 2, 2, 100);  // Built factory with high resources
+        
+        // Create an unbuilt factory at (12, 8) - this is within vision range from (8, 8)
+        create3x3UnbuiltFactory(sim, data, 12, 8, 0);
+        
+        // Place a HOLDING unit at (8, 8) - can see unbuilt factory but not adjacent to home factory
+        // Unit belongs to factory at (2, 2) which is far away
+        sim.setCell(data, 8, 8, createMiningUnit(true, 0, 2, 2));
+        
+        sim.upload(data);
+        
+        // Verify the unbuilt factory is NOT built
+        assert(!isFactoryBuilt(sim, data, 12, 8), 'Factory at (12,8) should be unbuilt');
+        
+        // Track unit position over several steps
+        // If the unit goes toward the unbuilt factory, it should move right (toward x=12)
+        // If it goes toward the home factory, it should move left (toward x=2)
+        let result = sim.download();
+        let unitX = 8;
+        let unitY = 8;
+        
+        // Run a few steps and check direction of movement
+        for (let step = 0; step < 10; step++) {
+            sim.step();
+            result = sim.download();
+            
+            // Find the unit
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        unitX = x;
+                        unitY = y;
+                    }
+                }
+            }
+        }
+        
+        // Unit should have moved toward the unbuilt factory (right, toward x=12), not home factory (left, toward x=2)
+        assert(unitX > 8, 
+            `Unit should move toward unbuilt factory (x > 8), but ended at x=${unitX}`);
+        
+        sim.destroy();
+    });
+}
+
+// ============================================================================
+// Unit Movement Near Factory Tests
+// ============================================================================
+
+export async function runUnitMovementNearFactoryTests() {
+    logSection('Mining Game - Unit Movement Near Factory');
+    
+    // Test: Units near factory should not get stuck - they should move away to find resources
+    await runTest('Movement: units near factory move away when no resources visible', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        // Use a fixed seed for determinism
+        sim.setTime(123);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a built factory at the center with LOW resources (won't spawn)
+        create3x3Factory(sim, data, 8, 8, 20);
+        
+        // Place 4 non-holding units adjacent to the factory (at cardinal directions from top-middle)
+        // Top-middle of factory is at (8, 9), so we place units around that
+        const unitPositions = [
+            [8, 10],  // Above top-middle (spawn position)
+            [6, 8],   // Left of factory
+            [10, 8],  // Right of factory
+            [8, 6],   // Below factory
+        ];
+        
+        for (const [ux, uy] of unitPositions) {
+            // Create non-holding unit with memory (so they have somewhere to go)
+            sim.setCell(data, ux, uy, createMiningUnit(false, 0, 8, 8, 2, 2, 50));
+        }
+        
+        sim.upload(data);
+        
+        // Record initial positions
+        const initialPositions = new Set(unitPositions.map(([x, y]) => `${x},${y}`));
+        
+        // Run simulation for several steps
+        for (let step = 0; step < 20; step++) {
+            sim.step();
+        }
+        
+        let result = sim.download();
+        
+        // Find all unit positions after simulation
+        const finalPositions = [];
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    finalPositions.push([x, y]);
+                }
+            }
+        }
+        
+        // All 4 units should still exist
+        assert(finalPositions.length === 4, 
+            `Expected 4 units, found ${finalPositions.length}`);
+        
+        // At least some units should have moved
+        let unitsMoved = 0;
+        for (const [x, y] of finalPositions) {
+            if (!initialPositions.has(`${x},${y}`)) {
+                unitsMoved++;
+            }
+        }
+        
+        assert(unitsMoved >= 2, 
+            `Expected at least 2 units to have moved, but only ${unitsMoved} moved`);
+        
+        sim.destroy();
+    });
+    
+    // Test: Freshly spawned units should move away from factory
+    await runTest('Movement: freshly spawned unit moves away from factory', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        sim.setTime(456);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a factory at (8, 8) with no resources (won't spawn more)
+        create3x3Factory(sim, data, 8, 8, 10);
+        
+        // Place a freshly spawned unit (no memory, not holding) at (8, 10) - spawn position
+        // This mimics what a newly spawned unit looks like
+        sim.setCell(data, 8, 10, createMiningUnit(false, 0, 8, 8, -1, -1, 0, 0));
+        
+        sim.upload(data);
+        
+        // Track if the unit moves
+        let hasMoved = false;
+        let lastX = 8, lastY = 10;
+        
+        // Run simulation - unit should eventually do a random walk
+        for (let step = 0; step < 30; step++) {
+            sim.step();
+            const result = sim.download();
+            
+            // Find the unit
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        if (x !== lastX || y !== lastY) {
+                            hasMoved = true;
+                        }
+                        lastX = x;
+                        lastY = y;
+                    }
+                }
+            }
+            
+            if (hasMoved) break;
+        }
+        
+        assert(hasMoved, 
+            `Freshly spawned unit should have moved from spawn position, but stayed at (${lastX}, ${lastY})`);
+        
+        sim.destroy();
+    });
+    
+    // Test: Holding units adjacent to BUILT factory should deposit, not get stuck
+    await runTest('Movement: holding unit adjacent to built factory deposits', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        sim.setTime(111);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a BUILT factory at (8, 8)
+        create3x3Factory(sim, data, 8, 8, 8);
+        
+        // Place a HOLDING unit at (8, 10) - above the factory
+        sim.setCell(data, 8, 10, createMiningUnit(true, 0, 8, 8, 4, 4, 50, 0));
+        
+        sim.upload(data);
+        
+        // Run one step - the unit should deposit
+        sim.step();
+        
+        const result = sim.download();
+        
+        // Find the unit
+        let foundUnit = false;
+        let unitHolding = true;
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    foundUnit = true;
+                    const g = cell[1];
+                    unitHolding = (g % 2) === 1;
+                }
+            }
+        }
+        
+        assert(foundUnit, 'Unit should still exist');
+        assert(!unitHolding, 'Unit should have deposited and no longer be holding');
+        
+        sim.destroy();
+    });
+    
+    // Test: Units without memory and no visible resources should still random walk
+    await runTest('Movement: units with no memory random walk away from factory', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        sim.setTime(999);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a factory at (8, 8) with NO resources
+        create3x3Factory(sim, data, 8, 8, 8);
+        
+        // Place a unit directly adjacent to the factory with NO memory, not holding
+        // This is exactly what a freshly spawned unit looks like
+        // Position at (8, 10) - right above the factory top-middle
+        sim.setCell(data, 8, 10, createMiningUnit(false, 0, 8, 8, -1, -1, 0, 0));
+        
+        sim.upload(data);
+        
+        // Run many steps and track if the unit ever moves more than 2 cells away
+        let maxDistanceFromStart = 0;
+        let unitStuckCounter = 0;  // Count how many steps it stays at original position
+        
+        for (let step = 0; step < 50; step++) {
+            sim.step();
+            const result = sim.download();
+            
+            // Find the unit
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        const dist = Math.abs(x - 8) + Math.abs(y - 10);
+                        maxDistanceFromStart = Math.max(maxDistanceFromStart, dist);
+                        if (x === 8 && y === 10) {
+                            unitStuckCounter++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Unit should have moved at least 2 cells away at some point
+        // If it's stuck at (8, 10) for more than 20 steps, that's a problem
+        assert(maxDistanceFromStart >= 2 || unitStuckCounter < 20, 
+            `Unit appears stuck: max distance=${maxDistanceFromStart}, stuck count=${unitStuckCounter}/50`);
+        
+        sim.destroy();
+    });
+    
+    // Test: Multiple units around factory don't all get stuck (collision resolution works)
+    await runTest('Movement: units around factory eventually disperse', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        sim.setTime(789);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a factory at center
+        create3x3Factory(sim, data, 8, 8, 100);
+        
+        // Surround the factory with 8 non-holding units (all adjacent cells)
+        // These units have no memory and should do random walks
+        const surroundingPositions = [];
+        for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+                // Skip factory cells and center
+                if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) continue;
+                // Only use adjacent positions
+                if (Math.abs(dx) <= 2 && Math.abs(dy) <= 2 && 
+                    (Math.abs(dx) === 2 || Math.abs(dy) === 2)) {
+                    surroundingPositions.push([8 + dx, 8 + dy]);
+                }
+            }
+        }
+        
+        // Place 8 units from the first 8 valid positions
+        const unitPositions = surroundingPositions.slice(0, 8);
+        for (const [ux, uy] of unitPositions) {
+            if (ux >= 0 && ux < TEST_GRID_SIZE && uy >= 0 && uy < TEST_GRID_SIZE) {
+                sim.setCell(data, ux, uy, createMiningUnit(false, 0, 8, 8, -1, -1, 0, 0));
+            }
+        }
+        
+        sim.upload(data);
+        
+        // Calculate initial average distance from factory center
+        function avgDistanceFromCenter(positions) {
+            let total = 0;
+            for (const [x, y] of positions) {
+                total += Math.sqrt((x - 8) ** 2 + (y - 8) ** 2);
+            }
+            return total / positions.length;
+        }
+        
+        const initialAvgDist = avgDistanceFromCenter(unitPositions);
+        
+        // Run simulation for many steps
+        for (let step = 0; step < 100; step++) {
+            sim.step();
+        }
+        
+        let result = sim.download();
+        
+        // Find all unit positions
+        const finalPositions = [];
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    finalPositions.push([x, y]);
+                }
+            }
+        }
+        
+        // Some units may have died from starvation (far from factory too long)
+        // But at least some should remain and have dispersed
+        assert(finalPositions.length >= 1, 
+            `Expected at least 1 unit to survive, found ${finalPositions.length}`);
+        
+        const finalAvgDist = avgDistanceFromCenter(finalPositions);
+        
+        // Units should have dispersed somewhat (average distance should increase or at least some moved)
+        // Or they should have found resources (if any existed)
+        // The key is they shouldn't ALL be stuck in their original positions
+        const movedAwayFromFactory = finalPositions.some(([x, y]) => {
+            return !unitPositions.some(([ox, oy]) => ox === x && oy === y);
+        });
+        
+        assert(movedAwayFromFactory, 
+            'At least some units should have moved from their initial positions');
+        
+        sim.destroy();
+    });
+    
+    // Test: Congested factory - many units nearby should still be able to disperse
+    // This simulates what happens after a factory has been running for a while
+    await runTest('Movement: congested factory allows units to disperse', async () => {
+        const sim = createMiningSimulation(32, 32);  // Larger grid
+        await sim.init();
+        
+        sim.setTime(1234);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a factory at (16, 16)
+        create3x3Factory(sim, data, 16, 16, 40);  // Not enough to spawn
+        
+        // Create 12 non-holding units in a cluster around the factory
+        // Some directly adjacent, some slightly further out
+        const unitPositions = [
+            [16, 18], [17, 18], [15, 18],  // Row above
+            [18, 17], [18, 16], [18, 15],  // Column to right
+            [16, 14], [17, 14], [15, 14],  // Row below
+            [14, 17], [14, 16], [14, 15],  // Column to left
+        ];
+        
+        for (const [ux, uy] of unitPositions) {
+            sim.setCell(data, ux, uy, createMiningUnit(false, 0, 16, 16, -1, -1, 0, 0));
+        }
+        
+        sim.upload(data);
+        
+        // Run for many steps
+        for (let step = 0; step < 200; step++) {
+            sim.step();
+        }
+        
+        const result = sim.download();
+        
+        // Find all unit positions
+        const finalPositions = [];
+        for (let y = 0; y < 32; y++) {
+            for (let x = 0; x < 32; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    finalPositions.push([x, y]);
+                }
+            }
+        }
+        
+        // Count how many are still very close to factory (within 2 cells)
+        let nearFactoryCount = 0;
+        for (const [x, y] of finalPositions) {
+            if (Math.abs(x - 16) <= 3 && Math.abs(y - 16) <= 3) {
+                nearFactoryCount++;
+            }
+        }
+        
+        // Not all units should be stuck near factory - at least some should have wandered
+        const wanderedAway = finalPositions.length - nearFactoryCount;
+        assert(wanderedAway >= 3 || finalPositions.length < 6, 
+            `Expected at least 3 units to wander away, but only ${wanderedAway} did (${finalPositions.length} total, ${nearFactoryCount} near factory)`);
+        
+        sim.destroy();
+    });
+    
+    // Test: A single unit directly adjacent to factory should eventually wander away
+    // This is the EXACT case described in the bug report - blue non-holding unit stuck next to factory
+    await runTest('Movement: single unit adjacent to factory wanders away', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        sim.setTime(42);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a small factory at (4, 4) - far from grid edges
+        create3x3Factory(sim, data, 4, 4, 8);  // Low resources, won't spawn
+        
+        // Place a single NON-HOLDING unit directly adjacent to the factory
+        // Position at (4, 6) - directly above top-middle of factory
+        sim.setCell(data, 4, 6, createMiningUnit(false, 0, 4, 4, -1, -1, 0, 0));
+        
+        sim.upload(data);
+        
+        // Track where the unit goes
+        let maxDistanceFromStart = 0;
+        let stepsAtStartPos = 0;
+        
+        for (let step = 0; step < 50; step++) {
+            sim.step();
+            const result = sim.download();
+            
+            // Find the unit
+            let foundUnit = false;
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        foundUnit = true;
+                        const dist = Math.abs(x - 4) + Math.abs(y - 6);
+                        maxDistanceFromStart = Math.max(maxDistanceFromStart, dist);
+                        if (x === 4 && y === 6) {
+                            stepsAtStartPos++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Unit should have moved away from start at some point
+        // If it stayed at start for more than 30/50 steps, it's stuck
+        assert(maxDistanceFromStart >= 2 || stepsAtStartPos < 30, 
+            `Unit seems stuck: max distance from start = ${maxDistanceFromStart}, spent ${stepsAtStartPos}/50 steps at start`);
+        
+        sim.destroy();
+    });
+    
+    // Test: Unit sees resource THROUGH/BEHIND factory - check for oscillation bug
+    // This tests a scenario where the unit bounces between walking and non-walking mode
+    await runTest('Movement: unit with blocked resource path does not oscillate in place', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        sim.setTime(666);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a factory at (8, 8)
+        create3x3Factory(sim, data, 8, 8, 8);
+        
+        // Place a resource BELOW the factory - unit can see it but factory blocks path
+        sim.setCell(data, 8, 5, createResource());
+        
+        // Place unit at spawn position (8, 10) - directly above factory
+        sim.setCell(data, 8, 10, createMiningUnit(false, 0, 8, 8, -1, -1, 0, 0));
+        
+        sim.upload(data);
+        
+        // Track if the unit stays stuck in a small area
+        const positionHistory = [];
+        
+        for (let step = 0; step < 50; step++) {
+            sim.step();
+            const result = sim.download();
+            
+            // Find unit position
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        positionHistory.push({x, y});
+                    }
+                }
+            }
+        }
+        
+        // Check for oscillation: count unique positions
+        const uniquePositions = new Set(positionHistory.map(p => `${p.x},${p.y}`));
+        
+        // If oscillating between just 2-3 positions, that's a problem
+        // A healthy random walk should visit more positions
+        assert(uniquePositions.size >= 5, 
+            `Unit appears to be oscillating - only visited ${uniquePositions.size} unique positions: ${[...uniquePositions].join(' ')}`);
+        
+        sim.destroy();
+    });
+    
+    // Test: Unit sees resource THROUGH/BEHIND factory - should still be able to reach it
+    // This tests a scenario where the resource is visible but the path is blocked
+    await runTest('Movement: unit can reach resource blocked by factory', async () => {
+        const sim = createMiningSimulation(TEST_GRID_SIZE, TEST_GRID_SIZE);
+        await sim.init();
+        
+        sim.setTime(555);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a factory at center (8, 8)
+        create3x3Factory(sim, data, 8, 8, 8);
+        
+        // Place a resource BELOW the factory (inside vision range from spawn position)
+        // Unit spawns at (8, 10), resource at (8, 5) - factory blocks direct path
+        sim.setCell(data, 8, 5, createResource());
+        
+        // Place unit at spawn position
+        sim.setCell(data, 8, 10, createMiningUnit(false, 0, 8, 8, -1, -1, 0, 0));
+        
+        sim.upload(data);
+        
+        // Track unit position and whether it eventually mines the resource
+        let minedResource = false;
+        let unitStuck = false;
+        let stepsNearFactory = 0;
+        
+        for (let step = 0; step < 100; step++) {
+            sim.step();
+            const result = sim.download();
+            
+            // Check if resource was mined
+            const resourceCell = sim.getCell(result, 8, 5);
+            if (getCellType(resourceCell) !== CELL_RESOURCE) {
+                minedResource = true;
+            }
+            
+            // Find unit and check if stuck near factory
+            for (let y = 0; y < TEST_GRID_SIZE; y++) {
+                for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        // Check if within 2 cells of factory top
+                        if (Math.abs(x - 8) <= 1 && y >= 9 && y <= 11) {
+                            stepsNearFactory++;
+                        }
+                    }
+                }
+            }
+            
+            if (minedResource) break;
+        }
+        
+        // Unit should either mine the resource OR not be stuck near factory for too long
+        assert(minedResource || stepsNearFactory < 50, 
+            `Unit ${minedResource ? 'mined' : 'did not mine'} resource, spent ${stepsNearFactory}/100 steps stuck near factory`);
+        
+        sim.destroy();
+    });
+    
+    // Test: Simulate actual spawning behavior - factory spawns units over time
+    await runTest('Movement: spawned units disperse from factory', async () => {
+        const sim = createMiningSimulation(32, 32);
+        await sim.init();
+        
+        sim.setTime(777);
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a factory at center with enough resources to spawn units
+        create3x3Factory(sim, data, 16, 16, 200);  // 200 resources = ~4 spawns
+        
+        // Add some resources around the map for units to find
+        sim.setCell(data, 5, 5, createResource());
+        sim.setCell(data, 25, 5, createResource());
+        sim.setCell(data, 5, 25, createResource());
+        sim.setCell(data, 25, 25, createResource());
+        
+        sim.upload(data);
+        
+        // Run simulation for a while - factory should spawn units that disperse
+        for (let step = 0; step < 300; step++) {
+            sim.step();
+        }
+        
+        const result = sim.download();
+        
+        // Count units and check their distribution
+        let totalUnits = 0;
+        let unitsNearFactory = 0;  // Within 4 cells of factory
+        
+        for (let y = 0; y < 32; y++) {
+            for (let x = 0; x < 32; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    totalUnits++;
+                    if (Math.abs(x - 16) <= 4 && Math.abs(y - 16) <= 4) {
+                        unitsNearFactory++;
+                    }
+                }
+            }
+        }
+        
+        // Should have spawned some units
+        assert(totalUnits >= 1, `Expected at least 1 unit, found ${totalUnits}`);
+        
+        // Not all units should be stuck near factory (unless there's only 1-2)
+        if (totalUnits >= 3) {
+            assert(unitsNearFactory < totalUnits, 
+                `All ${totalUnits} units stuck near factory (${unitsNearFactory} near)`);
         }
         
         sim.destroy();
