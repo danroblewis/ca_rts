@@ -468,6 +468,8 @@ canvas.addEventListener('click', (event) => {
         const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
         const resourcesPerCell = totalResources / 8.0;  // 8 cells (center is empty)
         
+        console.log(`[Factory Placement] currentPlayer: ${currentPlayer}, PLAYER_1: ${PLAYER_1}, PLAYER_2: ${PLAYER_2}`);
+        
         // Place 3x3 grid of factory cells (center cell stays empty)
         // All cells store the center position
         // G channel = resources for built, or build progress (0) for unbuilt
@@ -602,17 +604,21 @@ networkSync.onConnectionChange = (connected) => {
 };
 
 networkSync.onPlayerJoined = (playerId, isHost) => {
-    console.log(`[Multiplayer] ${isHost ? 'You are the host' : 'Player joined'}: ${playerId}`);
+    console.log(`[Multiplayer] ${isHost ? 'You are the host' : 'Player joined'}: ${playerId}, networkSync.playerId: ${networkSync.playerId}`);
     
     // Only assign our player number when WE join, not when others join
     // networkSync.playerId is set before this callback, so we can check if this is our own join
     if (playerId === networkSync.playerId) {
+        console.log(`[Multiplayer] This is our join! Setting currentPlayer based on playerId: ${playerId}`);
         if (playerId === 1) {
             currentPlayer = PLAYER_1;
         } else {
             currentPlayer = PLAYER_2;
         }
+        console.log(`[Multiplayer] currentPlayer is now: ${currentPlayer} (PLAYER_1=${PLAYER_1}, PLAYER_2=${PLAYER_2})`);
         updatePlayerIndicator();
+    } else {
+        console.log(`[Multiplayer] This is another player's join, not updating currentPlayer. Current: ${currentPlayer}`);
     }
     updateNetworkIndicator();
 };
@@ -722,7 +728,7 @@ const SIM_BATCH_SIZE = 10; // Steps per batch in fast mode
 
 // Toggle: true = sync with render (debug), false = fast as possible
 // Force sync mode when not on localhost (to avoid overloading remote servers)
-let SYNC_SIM_WITH_RENDER = !window.location.hostname.includes('localhost');
+let SYNC_SIM_WITH_RENDER = !window.location.hostname.includes('localhost') || true;
 
 // Expose toggle to console for easy switching
 window.toggleSimSync = () => {
