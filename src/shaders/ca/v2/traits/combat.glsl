@@ -14,7 +14,8 @@
 #include "../core/random.glsl"
 
 // Combat damage (age increase when losing a fight)
-const float COMBAT_DAMAGE = 50.0;
+// With MAX_AGE=500, this means ~3-4 lost fights to die
+const float COMBAT_DAMAGE = 150.0;
 
 // ============================================================================
 // Combat Result
