@@ -34,28 +34,38 @@ export class NetworkSync {
     /**
      * Serialize grid data to a compact format for transmission
      * Uses base64 encoding of the raw float data
+     * Logs how long serialization takes.
      */
     serializeGrid(gridData) {
+        const start = performance.now();
         // Convert Float32Array to base64
         const bytes = new Uint8Array(gridData.buffer);
         let binary = '';
         for (let i = 0; i < bytes.length; i++) {
             binary += String.fromCharCode(bytes[i]);
         }
-        return btoa(binary);
+        const base64 = btoa(binary);
+        const elapsed = performance.now() - start;
+        console.log(`[NetworkSync] serializeGrid took ${elapsed.toFixed(2)} ms`);
+        return base64;
     }
 
     /**
      * Deserialize grid data from transmission format
+     * Logs how long deserialization takes.
      */
     deserializeGrid(serialized) {
+        const start = performance.now();
         // Convert base64 back to Float32Array
         const binary = atob(serialized);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
             bytes[i] = binary.charCodeAt(i);
         }
-        return new Float32Array(bytes.buffer);
+        const floatArray = new Float32Array(bytes.buffer);
+        const elapsed = performance.now() - start;
+        console.log(`[NetworkSync] deserializeGrid took ${elapsed.toFixed(2)} ms`);
+        return floatArray;
     }
 
     /**

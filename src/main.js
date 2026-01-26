@@ -12,7 +12,7 @@ import { AudioEngine } from './audio/AudioEngine.js';
 // ============================================================================
 
 // Grid size (width and height in cells)
-const GRID_SIZE = 256;
+const GRID_SIZE = 512;
 
 // Default map seed (can be overridden via ?seed=12345 URL param)
 const DEFAULT_MAP_SEED = 12345;
@@ -27,18 +27,25 @@ const SIM_BATCH_SIZE = 10;            // Simulation steps per batch in fast mode
 const SYNC_SIM_BATCH_SIZE = 1;        // Simulation steps per batch in synced (normal) mode
 const DEFAULT_SYNC_MODE = true;       // true = sync with render (normal), false = fast as possible
 
-// Map generation - Resource blobs
-const NUM_BLOBS = 150;                // Number of resource clusters
+// Map generation - Resource blobs (scaled 4x for 512x512)
+const NUM_BLOBS = 600;                // Number of resource clusters (was 150)
 const BLOB_MIN_RADIUS = 3;            // Minimum blob radius
 const BLOB_MAX_RADIUS = 8;            // Maximum blob radius
 const BLOB_DENSITY = 0.6;             // % of cells in blob that have resources
 
-// Map generation - Walls
-const NUM_WALL_LINES = 44;            // Number of wall lines
+// Map generation - Walls (scaled 4x for 512x512)
+const NUM_WALL_LINES = 176;           // Number of wall lines (was 44)
 const WALL_MIN_LENGTH = 5;            // Minimum wall line length
 const WALL_MAX_LENGTH = 20;           // Maximum wall line length
-const NUM_WALL_BLOBS = 5;             // Number of small wall clusters
+const NUM_WALL_BLOBS = 20;            // Number of small wall clusters (was 5)
 const WALL_BLOB_RADIUS = 3;           // Radius of wall clusters
+
+// Camera/Viewport settings
+const DEFAULT_ZOOM = 2.0;             // Initial zoom (2.0 = shows same area as before, 1.0 = full map)
+const MIN_ZOOM = 1.5;                 // Minimum zoom (1.5 = at most 2/3 of map visible, prevents seeing entire map)
+const MAX_ZOOM = 8.0;                 // Maximum zoom (zoomed in 8x)
+const ZOOM_SPEED = 0.1;               // Zoom speed per wheel tick
+const PAN_SPEED = 1.0;                // Pan speed multiplier
 
 // Gameplay settings
 const FIRST_FACTORY_RESOURCES = 50;   // Resources given to first factory only
@@ -296,8 +303,8 @@ updateAudioButton();
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 
 // Encoding constants (must match GLSL)
-const COORD_PACK_BASE = 256.0;
-const MEMORY_PACK_BASE = 65536.0;
+const COORD_PACK_BASE = 512.0;
+const MEMORY_PACK_BASE = 262144.0;
 const SELECTED_PACK_BASE = 32.0;  // Selection bit at position 5 in G channel
 const AGE_PACK_BASE = 64.0;       // Age starts at bit 6 (after selection bit)
 const COMMAND_FRESHNESS = 100.0;  // High freshness so command is prioritized
@@ -592,13 +599,44 @@ let mouseY = 0;
 let shiftHeld = false;
 // Cursor overlay is now rendered in shader (see u_shiftHeld, u_deleteRadius, u_mousePos)
 
-// Convert screen coords to grid coords
+// Camera state for pan and zoom
+let cameraX = GRID_SIZE / 2;  // Camera center X (in grid units)
+let cameraY = GRID_SIZE / 2;  // Camera center Y (in grid units)
+let cameraZoom = DEFAULT_ZOOM;  // Current zoom level
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
+let panStartCameraX = 0;
+let panStartCameraY = 0;
+
+// Get visible grid size based on zoom
+function getVisibleGridSize() {
+    return GRID_SIZE / cameraZoom;
+}
+
+// Clamp camera to keep view within map bounds
+function clampCamera() {
+    const halfVisible = getVisibleGridSize() / 2;
+    cameraX = Math.max(halfVisible, Math.min(GRID_SIZE - halfVisible, cameraX));
+    cameraY = Math.max(halfVisible, Math.min(GRID_SIZE - halfVisible, cameraY));
+}
+
+// Convert screen coords to grid coords (accounting for camera)
 function screenToGrid(screenX, screenY) {
     const rect = canvas.getBoundingClientRect();
+    // Normalized screen position (0-1)
     const normalizedX = (screenX - rect.left) / rect.width;
     const normalizedY = (screenY - rect.top) / rect.height;
-    const gridX = Math.floor(normalizedX * GRID_SIZE);
-    const gridY = Math.floor((1 - normalizedY) * GRID_SIZE);
+    
+    // Convert to centered coordinates (-0.5 to 0.5)
+    const centeredX = normalizedX - 0.5;
+    const centeredY = -(normalizedY - 0.5);  // Y is inverted
+    
+    // Apply camera transform: centered coords * visible size + camera center
+    const visibleSize = getVisibleGridSize();
+    const gridX = Math.floor(cameraX + centeredX * visibleSize);
+    const gridY = Math.floor(cameraY + centeredY * visibleSize);
+    
     return {
         x: Math.max(0, Math.min(GRID_SIZE - 1, gridX)),
         y: Math.max(0, Math.min(GRID_SIZE - 1, gridY))
@@ -607,9 +645,17 @@ function screenToGrid(screenX, screenY) {
 
 // Inverse of screenToGrid - convert grid coords to screen coords
 function gridToScreen(gridX, gridY) {
-        const rect = canvas.getBoundingClientRect();
-    const normalizedX = gridX / GRID_SIZE;
-    const normalizedY = 1 - (gridY / GRID_SIZE);  // Y is inverted
+    const rect = canvas.getBoundingClientRect();
+    const visibleSize = getVisibleGridSize();
+    
+    // Convert grid to centered coords relative to camera
+    const centeredX = (gridX - cameraX) / visibleSize;
+    const centeredY = (gridY - cameraY) / visibleSize;
+    
+    // Convert to normalized screen position
+    const normalizedX = centeredX + 0.5;
+    const normalizedY = 0.5 - centeredY;  // Y is inverted
+    
     return {
         x: rect.left + normalizedX * rect.width,
         y: rect.top + normalizedY * rect.height
@@ -674,12 +720,46 @@ function clearSelection() {
     clearAllSelections();
 }
 
-// Track mouse movement
+// Track mouse movement (and pan if middle button held)
 canvas.addEventListener('mousemove', (event) => {
     mouseX = event.clientX;
     mouseY = event.clientY;
+    
+    // Handle panning with middle mouse button
+    if (isPanning) {
+        const rect = canvas.getBoundingClientRect();
+        const dx = (event.clientX - panStartX) / rect.width;
+        const dy = (event.clientY - panStartY) / rect.height;
+        const visibleSize = getVisibleGridSize();
+        
+        cameraX = panStartCameraX - dx * visibleSize * PAN_SPEED;
+        cameraY = panStartCameraY + dy * visibleSize * PAN_SPEED;  // Y is inverted
+        clampCamera();
+    }
     // All cursor UI is rendered in shader (selection box, command indicator, delete overlay)
 });
+
+// Zoom with mouse wheel
+canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    
+    // Get mouse position in grid coords before zoom
+    const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
+    
+    // Adjust zoom
+    const zoomDelta = event.deltaY > 0 ? -ZOOM_SPEED : ZOOM_SPEED;
+    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
+    
+    if (newZoom !== cameraZoom) {
+        cameraZoom = newZoom;
+        
+        // Adjust camera position to keep mouse position stable
+        const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
+        cameraX += mouseGridBefore.x - mouseGridAfter.x;
+        cameraY += mouseGridBefore.y - mouseGridAfter.y;
+        clampCamera();
+    }
+}, { passive: false });
 
 // Track shift key
 window.addEventListener('keydown', (event) => {
@@ -706,9 +786,21 @@ window.addEventListener('keyup', (event) => {
     }
 });
 
-// Mouse down - start selection or set command destination
+// Mouse down - start selection, panning, or set command destination
 canvas.addEventListener('mousedown', (event) => {
-    // Spectators cannot interact
+    // Middle mouse button - start panning
+    if (event.button === 1) {
+        event.preventDefault();
+        isPanning = true;
+        panStartX = event.clientX;
+        panStartY = event.clientY;
+        panStartCameraX = cameraX;
+        panStartCameraY = cameraY;
+        canvas.style.cursor = 'grabbing';
+        return;
+    }
+    
+    // Spectators cannot interact (but can still pan)
     if (isSpectator) return;
     
     // Right click or ctrl+click - start selection
@@ -757,8 +849,15 @@ canvas.addEventListener('mousedown', (event) => {
     }
 });
 
-// Mouse up - finalize selection
+// Mouse up - finalize selection or stop panning
 canvas.addEventListener('mouseup', (event) => {
+    // Stop panning on middle mouse release
+    if (event.button === 1 && isPanning) {
+        isPanning = false;
+        canvas.style.cursor = 'default';
+        return;
+    }
+    
     if (isSelecting && (event.button === 2 || event.ctrlKey)) {
         selectionEnd = { x: event.clientX, y: event.clientY };
         
@@ -849,6 +948,10 @@ canvas.addEventListener('click', async (event) => {
                 
                 if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
                     const owner = cellType === CELL_MINING_FACTORY_P2 ? PLAYER_2 : PLAYER_1;
+                    
+                    // Only allow demolishing own factories
+                    if (owner !== currentPlayer) continue;
+                    
                     const centerX = currentData[idx + 2];
                     const centerY = currentData[idx + 3];
                     
@@ -1598,7 +1701,10 @@ async function toggleMultiplayer() {
 // Sync state after an action
 function syncAction(action) {
     if (isMultiplayer) {
+        const start = performance.now();
         const gridData = grid.download();
+        const elapsed = performance.now() - start;
+        console.log(`[syncAction] grid.download() took ${elapsed.toFixed(2)} ms`);
         networkSync.syncState(gridData, action, simTime);
     }
 }
@@ -1914,6 +2020,10 @@ function renderLoop() {
     renderShader.setFloat('u_metaballScale', METABALL_SCALE);  // Metaball blob scale
     renderShader.setInt('u_frameCount', frameCount);  // Number of frames to blend
     renderShader.setFloat('u_temporalBlend', TEMPORAL_BLEND);  // Temporal blend strength
+    
+    // Camera uniforms for pan and zoom
+    renderShader.setVec2('u_cameraPos', cameraX, cameraY);
+    renderShader.setFloat('u_cameraZoom', cameraZoom);
     
     // Selection system uniforms
     // Note: Selection is now stored in unit data (G channel bit 5), no separate texture needed

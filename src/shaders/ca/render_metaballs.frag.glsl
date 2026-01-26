@@ -58,6 +58,32 @@ uniform vec2 u_mousePos;         // Mouse position (UV coords, 0-1)
 uniform float u_shiftHeld;       // 1.0 if shift key is held (delete mode)
 uniform float u_deleteRadius;    // Delete radius in grid cells
 
+// Camera/viewport uniforms for pan and zoom
+uniform vec2 u_cameraPos;        // Camera center in grid coordinates
+uniform float u_cameraZoom;      // Zoom level (1.0 = full map visible, 2.0 = half map visible)
+
+// Transform screen UV (0-1) to world UV (0-1) based on camera position and zoom
+// Returns world UV that can be used to sample textures
+vec2 screenToWorldUV(vec2 screenUV) {
+    // Convert screen UV to centered coords (-0.5 to 0.5)
+    vec2 centered = screenUV - 0.5;
+    
+    // Scale by zoom (higher zoom = smaller visible area)
+    vec2 scaled = centered / u_cameraZoom;
+    
+    // Offset by camera position (convert camera pos from grid coords to UV)
+    vec2 cameraUV = u_cameraPos / u_resolution;
+    
+    // Final world UV
+    return scaled + cameraUV;
+}
+
+// Check if world UV is within valid bounds (0-1)
+bool isInBounds(vec2 worldUV) {
+    return worldUV.x >= 0.0 && worldUV.x <= 1.0 && 
+           worldUV.y >= 0.0 && worldUV.y <= 1.0;
+}
+
 // Sample from a specific frame by index
 vec4 sampleFrame(int frame, vec2 uv) {
     if (frame == 0) return texture(u_state0, uv);
@@ -535,19 +561,32 @@ float calcRockEdge(vec2 uv, float baseDensity, float threshold, float scale) {
 }
 
 void main() {
-    vec2 pixelPos = v_uv * u_resolution;
+    // Transform screen UV to world UV based on camera position and zoom
+    vec2 worldUV = screenToWorldUV(v_uv);
+    vec2 pixelPos = worldUV * u_resolution;
     
-    // Background with subtle gradient
+    // Check if we're viewing outside the map bounds
+    bool outOfBounds = !isInBounds(worldUV);
+    
+    // Background with subtle gradient (based on world position for consistency when panning)
     vec3 bgColor = mix(
         vec3(0.02, 0.04, 0.08),
         vec3(0.06, 0.08, 0.12),
-        v_uv.y
+        clamp(worldUV.y, 0.0, 1.0)
     );
+    
+    // Out of bounds areas are darker
+    if (outOfBounds) {
+        bgColor = vec3(0.01, 0.02, 0.03);
+    }
     
     vec3 color = bgColor;
     
+    // Skip world rendering if out of bounds
+    if (!outOfBounds) {
+    
     // Calculate ALL static densities in a single pass (massive perf improvement)
-    AllDensities d = calcAllStaticDensities(v_uv);
+    AllDensities d = calcAllStaticDensities(worldUV);
     
     // Extract values from unified calculation
     float resourceDensity = d.resourceDens;
@@ -568,20 +607,20 @@ void main() {
     float buildProgress = max(p1BuildProgress, p2BuildProgress);
     
     // Player 1 units (purple/magenta)
-    vec3 p1UnitInfo = calcUnitDensityForPlayer(v_uv, PLAYER_1);
+    vec3 p1UnitInfo = calcUnitDensityForPlayer(worldUV, PLAYER_1);
     float p1EmptyUnitDensity = p1UnitInfo.x;
     float p1HoldingUnitDensity = p1UnitInfo.y;
     float p1AvgAge = p1UnitInfo.z;
     
     // Player 2 units (teal/green)
-    vec3 p2UnitInfo = calcUnitDensityForPlayer(v_uv, PLAYER_2);
+    vec3 p2UnitInfo = calcUnitDensityForPlayer(worldUV, PLAYER_2);
     float p2EmptyUnitDensity = p2UnitInfo.x;
     float p2HoldingUnitDensity = p2UnitInfo.y;
     float p2AvgAge = p2UnitInfo.z;
     
     // Selection densities (only for current player's units)
-    float p1SelectionDensity = calcSelectionDensity(v_uv, PLAYER_1);
-    float p2SelectionDensity = calcSelectionDensity(v_uv, PLAYER_2);
+    float p1SelectionDensity = calcSelectionDensity(worldUV, PLAYER_1);
+    float p2SelectionDensity = calcSelectionDensity(worldUV, PLAYER_2);
     
     // Combined for compatibility
     float emptyUnitDensity = p1EmptyUnitDensity + p2EmptyUnitDensity;
@@ -596,11 +635,11 @@ void main() {
     
     // Resources - ROCK TEXTURE with procedural detail
     // Use irregular rock edge instead of smooth metaball
-    float rockEdge = calcRockEdge(v_uv, resourceDensity, resourceThreshold, 8.0);
+    float rockEdge = calcRockEdge(worldUV, resourceDensity, resourceThreshold, 8.0);
     
     if (rockEdge > 0.01) {
         // Calculate rock texture at this pixel
-        RockTexture rock = calcRockTexture(v_uv, 12.0);
+        RockTexture rock = calcRockTexture(worldUV, 12.0);
         
         // Base rock colors - gold/amber ore with stone undertones
         vec3 stoneBase = vec3(0.35, 0.30, 0.22);     // Gray-brown stone
@@ -781,11 +820,11 @@ void main() {
     
     // Walls - ROCK TEXTURE stone blocks (using unified density)
     float wallDensity = d.wallDens;
-    float wallEdge = calcRockEdge(v_uv, wallDensity, 0.5, 6.0);
+    float wallEdge = calcRockEdge(worldUV, wallDensity, 0.5, 6.0);
     
     if (wallEdge > 0.01) {
         // Calculate rock texture for walls (different scale than ore)
-        RockTexture rock = calcRockTexture(v_uv, 8.0);
+        RockTexture rock = calcRockTexture(worldUV, 8.0);
         
         // Gray stone colors
         vec3 stoneDark = vec3(0.18, 0.18, 0.20);
@@ -812,61 +851,115 @@ void main() {
         color = mix(color, wallColor, wallEdge * 0.95);
     }
     
-    // Player 1 Built Factory - purple/magenta blob with energy glow
-    if (p1BuiltFactoryDensity > factoryThreshold) {
-        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, p1BuiltFactoryDensity);
+    // Player 1 Built Factory - ULTRA BRIGHT purple/magenta beacon with dramatic throbbing
+    if (p1BuiltFactoryDensity > factoryThreshold * 0.25) {  // Much lower threshold for LARGE appearance
+        float blobStrength = smoothstep(factoryThreshold * 0.25, factoryThreshold + 3.0, p1BuiltFactoryDensity);
         
-        vec4 centerCell = texture(u_state, v_uv);
+        vec4 centerCell = texture(u_state, worldUV);
         float resources = 0.0;
         if (isMiningFactory(centerCell) && isPlayer1(centerCell)) {
             resources = getFactoryResourceCount(centerCell);
         }
         float energyLevel = min(resources / 10.0, 1.0);
         
-        vec3 purpleDark = vec3(0.4, 0.1, 0.5);
-        vec3 purpleBright = vec3(0.8, 0.3, 1.0);
-        vec3 factoryColor = mix(purpleDark, purpleBright, 0.3 + energyLevel * 0.7);
+        // DRAMATIC throbbing - much more visible pulsing
+        float throb = sin(u_time * 4.0) * 0.4 + 0.6;  // Faster, stronger throbbing
+        float fastThrob = sin(u_time * 10.0) * 0.25 + 0.75;  // Fast secondary pulse
+        float ultraThrob = sin(u_time * 2.0) * 0.5 + 0.5;  // Slow dramatic pulse
         
-        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, p1BuiltFactoryDensity);
-        factoryColor += vec3(0.2, 0.1, 0.3) * coreGlow * energyLevel;
+        // MUCH brighter base colors
+        vec3 purpleDark = vec3(0.6, 0.2, 0.8);
+        vec3 purpleBright = vec3(1.2, 0.6, 1.3);  // HDR-style overbright
+        vec3 factoryColor = mix(purpleDark, purpleBright, 0.5 + energyLevel * 0.5);
         
-        if (energyLevel > 0.3) {
-            float pulse = sin(u_time * 4.0) * 0.5 + 0.5;
-            factoryColor += vec3(1.0, 0.5, 1.0) * pulse * energyLevel * 0.3;
-            float sparkle = fract(sin(dot(pixelPos + u_time * 10.0, vec2(12.9898, 78.233))) * 43758.5453);
-            if (sparkle > 0.95 && energyLevel > 0.5) {
-                factoryColor += vec3(0.5, 0.3, 0.6);
+        // Multi-layer throbbing glow
+        factoryColor *= (0.7 + throb * 0.5 + ultraThrob * 0.3);
+        
+        // Intense core glow - always visible
+        float coreGlow = smoothstep(factoryThreshold * 0.5, factoryThreshold + 3.0, p1BuiltFactoryDensity);
+        factoryColor += vec3(0.6, 0.3, 0.8) * coreGlow * fastThrob * 1.5;
+        
+        // Multiple expanding beacon rings (like a radar pulse)
+        for (int ring = 0; ring < 3; ring++) {
+            float ringOffset = float(ring) * 0.33;
+            float beaconPhase = fract(u_time * 0.4 + ringOffset);
+            float beaconRadius = beaconPhase * 6.0;  // Larger expansion
+            float distFromCenter = factoryThreshold + 3.0 - p1BuiltFactoryDensity;
+            float beaconRing = smoothstep(beaconRadius - 0.8, beaconRadius, distFromCenter) *
+                              smoothstep(beaconRadius + 0.8, beaconRadius, distFromCenter);
+            factoryColor += vec3(1.0, 0.6, 1.0) * beaconRing * (1.0 - beaconPhase) * 0.4;
+        }
+        
+        // Outer glow halo (always visible, pulsing)
+        float haloStrength = smoothstep(factoryThreshold * 0.2, factoryThreshold * 0.6, p1BuiltFactoryDensity);
+        vec3 haloColor = vec3(0.8, 0.4, 1.0) * haloStrength * (0.4 + ultraThrob * 0.4);
+        color = color + haloColor * 0.5;  // Add halo BEFORE mixing main color
+        
+        // Energy-based extra brightness with more sparkles
+        if (energyLevel > 0.2) {
+            factoryColor += vec3(0.2, 0.1, 0.25) * energyLevel;
+            float sparkle = fract(sin(dot(pixelPos + u_time * 12.0, vec2(12.9898, 78.233))) * 43758.5453);
+            if (sparkle > 0.88) {
+                factoryColor += vec3(0.8, 0.5, 0.9);
             }
         }
+        
         color = mix(color, factoryColor, blobStrength);
     }
     
-    // Player 2 Built Factory - green/teal blob with energy glow
-    if (p2BuiltFactoryDensity > factoryThreshold) {
-        float blobStrength = smoothstep(factoryThreshold, factoryThreshold + 1.5, p2BuiltFactoryDensity);
+    // Player 2 Built Factory - ULTRA BRIGHT green/teal beacon with dramatic throbbing
+    if (p2BuiltFactoryDensity > factoryThreshold * 0.25) {  // Much lower threshold for LARGE appearance
+        float blobStrength = smoothstep(factoryThreshold * 0.25, factoryThreshold + 3.0, p2BuiltFactoryDensity);
         
-        vec4 centerCell = texture(u_state, v_uv);
+        vec4 centerCell = texture(u_state, worldUV);
         float resources = 0.0;
         if (isMiningFactory(centerCell) && isPlayer2(centerCell)) {
             resources = getFactoryResourceCount(centerCell);
         }
         float energyLevel = min(resources / 10.0, 1.0);
         
-        vec3 greenDark = vec3(0.1, 0.4, 0.3);
-        vec3 greenBright = vec3(0.3, 0.9, 0.5);
-        vec3 factoryColor = mix(greenDark, greenBright, 0.3 + energyLevel * 0.7);
+        // DRAMATIC throbbing - much more visible pulsing
+        float throb = sin(u_time * 4.0) * 0.4 + 0.6;  // Faster, stronger throbbing
+        float fastThrob = sin(u_time * 10.0) * 0.25 + 0.75;  // Fast secondary pulse
+        float ultraThrob = sin(u_time * 2.0) * 0.5 + 0.5;  // Slow dramatic pulse
         
-        float coreGlow = smoothstep(factoryThreshold, factoryThreshold + 2.0, p2BuiltFactoryDensity);
-        factoryColor += vec3(0.1, 0.3, 0.2) * coreGlow * energyLevel;
+        // MUCH brighter base colors
+        vec3 greenDark = vec3(0.2, 0.6, 0.5);
+        vec3 greenBright = vec3(0.5, 1.3, 0.7);  // HDR-style overbright
+        vec3 factoryColor = mix(greenDark, greenBright, 0.5 + energyLevel * 0.5);
         
-        if (energyLevel > 0.3) {
-            float pulse = sin(u_time * 4.0) * 0.5 + 0.5;
-            factoryColor += vec3(0.4, 1.0, 0.6) * pulse * energyLevel * 0.3;
-            float sparkle = fract(sin(dot(pixelPos + u_time * 10.0, vec2(12.9898, 78.233))) * 43758.5453);
-            if (sparkle > 0.95 && energyLevel > 0.5) {
-                factoryColor += vec3(0.3, 0.6, 0.4);
+        // Multi-layer throbbing glow
+        factoryColor *= (0.7 + throb * 0.5 + ultraThrob * 0.3);
+        
+        // Intense core glow - always visible
+        float coreGlow = smoothstep(factoryThreshold * 0.5, factoryThreshold + 3.0, p2BuiltFactoryDensity);
+        factoryColor += vec3(0.3, 0.8, 0.5) * coreGlow * fastThrob * 1.5;
+        
+        // Multiple expanding beacon rings (like a radar pulse)
+        for (int ring = 0; ring < 3; ring++) {
+            float ringOffset = float(ring) * 0.33;
+            float beaconPhase = fract(u_time * 0.4 + ringOffset);
+            float beaconRadius = beaconPhase * 6.0;  // Larger expansion
+            float distFromCenter = factoryThreshold + 3.0 - p2BuiltFactoryDensity;
+            float beaconRing = smoothstep(beaconRadius - 0.8, beaconRadius, distFromCenter) *
+                              smoothstep(beaconRadius + 0.8, beaconRadius, distFromCenter);
+            factoryColor += vec3(0.5, 1.0, 0.7) * beaconRing * (1.0 - beaconPhase) * 0.4;
+        }
+        
+        // Outer glow halo (always visible, pulsing)
+        float haloStrength = smoothstep(factoryThreshold * 0.2, factoryThreshold * 0.6, p2BuiltFactoryDensity);
+        vec3 haloColor = vec3(0.4, 1.0, 0.6) * haloStrength * (0.4 + ultraThrob * 0.4);
+        color = color + haloColor * 0.5;  // Add halo BEFORE mixing main color
+        
+        // Energy-based extra brightness with more sparkles
+        if (energyLevel > 0.2) {
+            factoryColor += vec3(0.1, 0.25, 0.15) * energyLevel;
+            float sparkle = fract(sin(dot(pixelPos + u_time * 12.0, vec2(12.9898, 78.233))) * 43758.5453);
+            if (sparkle > 0.88) {
+                factoryColor += vec3(0.5, 0.9, 0.6);
             }
         }
+        
         color = mix(color, factoryColor, blobStrength);
     }
     
@@ -922,8 +1015,10 @@ void main() {
         color = mix(color, demolishColor, blobStrength);
     }
     
+    } // end of if (!outOfBounds) block for world rendering
+    
     // ========================================================================
-    // Selection UI Overlay
+    // Selection UI Overlay (screen-space, always rendered)
     // ========================================================================
     
     // Selection box (while dragging)
@@ -1007,6 +1102,167 @@ void main() {
                 // Interior - slight red tint
                 color = mix(color, deleteColor, 0.15);
             }
+        }
+    }
+    
+    // ========================================================================
+    // MINIMAP - Bottom-left corner, fast low-res sampling
+    // ========================================================================
+    {
+        // Minimap parameters
+        float minimapSize = 0.2;  // 20% of screen width/height
+        float minimapMargin = 0.02;  // 2% margin from edges
+        vec2 minimapOrigin = vec2(minimapMargin, minimapMargin);  // Bottom-left
+        
+        // Check if we're in the minimap region
+        vec2 minimapUV = (v_uv - minimapOrigin) / minimapSize;
+        
+        if (minimapUV.x >= 0.0 && minimapUV.x <= 1.0 && 
+            minimapUV.y >= 0.0 && minimapUV.y <= 1.0) {
+            
+            // Dark background with border
+            vec3 minimapColor = vec3(0.02, 0.04, 0.06);
+            
+            // Border check
+            float borderWidth = 0.02;
+            bool onBorder = minimapUV.x < borderWidth || minimapUV.x > 1.0 - borderWidth ||
+                           minimapUV.y < borderWidth || minimapUV.y > 1.0 - borderWidth;
+            
+            if (onBorder) {
+                minimapColor = vec3(0.3, 0.35, 0.4);
+            } else {
+                // Sample the game state at this minimap position (low res - skip pixels)
+                // Use block sampling for better coverage
+                vec2 worldSampleUV = minimapUV;
+                
+                // Accumulate from a small region to catch units/factories
+                float resourceDens = 0.0;
+                float p1FactoryDens = 0.0;
+                float p2FactoryDens = 0.0;
+                float p1UnitDens = 0.0;
+                float p2UnitDens = 0.0;
+                float wallDens = 0.0;
+                
+                // Sample a 4x4 block for each minimap pixel
+                float blockSize = 4.0 / u_resolution.x;
+                for (int dy = 0; dy < 4; dy++) {
+                    for (int dx = 0; dx < 4; dx++) {
+                        vec2 sampleOffset = vec2(float(dx), float(dy)) * blockSize / 4.0;
+                        vec2 sampleUV = worldSampleUV + sampleOffset;
+                        vec4 cell = texture(u_state, sampleUV);
+                        float cellType = getCellType(cell);
+                        
+                        if (cellType == CELL_RESOURCE) {
+                            resourceDens += 1.0;
+                        } else if (cellType == CELL_WALL) {
+                            wallDens += 1.0;
+                        } else if (isMiningFactory(cell)) {
+                            float player = getPlayerFromCell(cell);
+                            if (player == PLAYER_1) {
+                                p1FactoryDens += 8.0;  // Factories are VERY prominent
+                            } else {
+                                p2FactoryDens += 8.0;
+                            }
+                        } else if (isMiningUnit(cell)) {
+                            float player = getPlayerFromCell(cell);
+                            if (player == PLAYER_1) {
+                                p1UnitDens += 1.0;
+                            } else {
+                                p2UnitDens += 1.0;
+                            }
+                        }
+                    }
+                }
+                
+                // Normalize
+                resourceDens /= 16.0;
+                p1FactoryDens /= 16.0;
+                p2FactoryDens /= 16.0;
+                p1UnitDens /= 16.0;
+                p2UnitDens /= 16.0;
+                wallDens /= 16.0;
+                
+                // DRAMATIC throbbing effect for factories - multiple layers
+                float throb = sin(u_time * 5.0) * 0.5 + 0.5;  // Faster, stronger pulse
+                float fastThrob = sin(u_time * 12.0) * 0.3 + 0.7;  // Fast secondary pulse
+                float ultraThrob = sin(u_time * 2.5) * 0.4 + 0.6;  // Slow dramatic pulse
+                
+                // Layer colors: background -> resources -> walls -> units -> factories
+                // Resources - yellow/gold
+                if (resourceDens > 0.0) {
+                    minimapColor = mix(minimapColor, vec3(0.6, 0.5, 0.2), resourceDens * 0.8);
+                }
+                
+                // Walls - gray
+                if (wallDens > 0.0) {
+                    minimapColor = mix(minimapColor, vec3(0.3, 0.35, 0.4), wallDens * 0.7);
+                }
+                
+                // P1 Units - magenta/purple dots
+                if (p1UnitDens > 0.0) {
+                    minimapColor = mix(minimapColor, vec3(0.8, 0.35, 0.9), p1UnitDens);
+                }
+                
+                // P2 Units - cyan/teal dots
+                if (p2UnitDens > 0.0) {
+                    minimapColor = mix(minimapColor, vec3(0.35, 0.8, 0.7), p2UnitDens);
+                }
+                
+                // P1 Factories - ULTRA BRIGHT pulsing purple BEACONS!
+                if (p1FactoryDens > 0.0) {
+                    // Multi-layer brightness with dramatic pulsing
+                    float combinedThrob = 0.5 + throb * 0.3 + ultraThrob * 0.2;
+                    vec3 factoryCore = vec3(1.3, 0.5, 1.4) * combinedThrob;  // HDR-bright core
+                    vec3 factoryGlow = vec3(0.9, 0.3, 1.0) * fastThrob;  // Outer glow
+                    
+                    // Blend factory with strong prominence
+                    float factoryStrength = min(p1FactoryDens * 3.0, 1.0);
+                    minimapColor = mix(minimapColor, factoryCore, factoryStrength);
+                    
+                    // Add additive glow on top
+                    minimapColor += factoryGlow * factoryStrength * 0.3;
+                }
+                
+                // P2 Factories - ULTRA BRIGHT pulsing green BEACONS!
+                if (p2FactoryDens > 0.0) {
+                    // Multi-layer brightness with dramatic pulsing
+                    float combinedThrob = 0.5 + throb * 0.3 + ultraThrob * 0.2;
+                    vec3 factoryCore = vec3(0.5, 1.4, 0.7) * combinedThrob;  // HDR-bright core
+                    vec3 factoryGlow = vec3(0.3, 1.0, 0.5) * fastThrob;  // Outer glow
+                    
+                    // Blend factory with strong prominence
+                    float factoryStrength = min(p2FactoryDens * 3.0, 1.0);
+                    minimapColor = mix(minimapColor, factoryCore, factoryStrength);
+                    
+                    // Add additive glow on top
+                    minimapColor += factoryGlow * factoryStrength * 0.3;
+                }
+                
+                // Show current viewport as a white rectangle
+                // Calculate the viewport bounds on the minimap
+                vec2 viewportCenter = u_cameraPos / u_resolution;
+                float viewportSize = 1.0 / u_cameraZoom;
+                vec2 viewportMin = viewportCenter - vec2(viewportSize * 0.5);
+                vec2 viewportMax = viewportCenter + vec2(viewportSize * 0.5);
+                
+                float viewBorderWidth = 0.01;
+                bool onViewBorder = false;
+                if (minimapUV.x >= viewportMin.x && minimapUV.x <= viewportMax.x &&
+                    minimapUV.y >= viewportMin.y && minimapUV.y <= viewportMax.y) {
+                    // Check if on the border of the viewport rectangle
+                    if (minimapUV.x < viewportMin.x + viewBorderWidth || minimapUV.x > viewportMax.x - viewBorderWidth ||
+                        minimapUV.y < viewportMin.y + viewBorderWidth || minimapUV.y > viewportMax.y - viewBorderWidth) {
+                        onViewBorder = true;
+                    }
+                }
+                
+                if (onViewBorder) {
+                    minimapColor = mix(minimapColor, vec3(1.0, 1.0, 1.0), 0.7);
+                }
+            }
+            
+            // Apply minimap with slight transparency for glass effect
+            color = mix(color, minimapColor, 0.9);
         }
     }
     

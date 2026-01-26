@@ -95,7 +95,7 @@ MINIMAP_COLORS = {
     CELL_FACTORY_P2: (50, 150, 90),     # Darker green player 2 factories
 }
 
-def generate_minimap_png(grid_state_b64: str, grid_size: int = 256, minimap_size: int = 48) -> bytes:
+def generate_minimap_png(grid_state_b64: str, grid_size: int = 512, minimap_size: int = 64) -> bytes:
     """
     Generate a minimap PNG from base64-encoded grid state.
     
@@ -104,7 +104,7 @@ def generate_minimap_png(grid_state_b64: str, grid_size: int = 256, minimap_size
     
     Args:
         grid_state_b64: Base64 encoded Float32Array (RGBA per cell)
-        grid_size: Original grid size (256x256)
+        grid_size: Original grid size (512x512)
         minimap_size: Output minimap size (48x48)
     
     Returns:

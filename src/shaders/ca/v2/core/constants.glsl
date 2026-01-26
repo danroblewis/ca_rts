@@ -55,8 +55,8 @@ const int DIR_DOWN_RIGHT = 8;
 // COORDINATE PACKING
 // ============================================================================
 
-const float COORD_PACK_BASE = 256.0;
-const float MEMORY_PACK_BASE = 65536.0;  // 256 * 256
+const float COORD_PACK_BASE = 512.0;
+const float MEMORY_PACK_BASE = 262144.0;  // 512 * 512
 const float INVALID_PACKED_COORDS = -1.0;
 
 // ============================================================================

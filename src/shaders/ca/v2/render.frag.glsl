@@ -24,13 +24,57 @@ uniform float u_metaballScale;    // Not used but declared for compatibility
 uniform int u_frameCount;         // Not used but declared for compatibility
 uniform float u_temporalBlend;    // Not used but declared for compatibility
 
+// Camera/viewport uniforms for pan and zoom
+uniform vec2 u_cameraPos;         // Camera center in grid coordinates
+uniform float u_cameraZoom;       // Zoom level (1.0 = full map visible, 2.0 = half map visible)
+
+// UI uniforms (declared for compatibility, not all used in debug shader)
+uniform float u_currentPlayer;
+uniform float u_isSelecting;
+uniform vec2 u_selectionStart;
+uniform vec2 u_selectionEnd;
+uniform float u_hasActiveSelection;
+uniform vec2 u_mousePos;
+uniform float u_shiftHeld;
+uniform float u_deleteRadius;
+
 in vec2 v_uv;
 out vec4 fragColor;
 
+// Transform screen UV (0-1) to world UV (0-1) based on camera position and zoom
+vec2 screenToWorldUV(vec2 screenUV) {
+    // Convert screen UV to centered coords (-0.5 to 0.5)
+    vec2 centered = screenUV - 0.5;
+    
+    // Scale by zoom (higher zoom = smaller visible area)
+    vec2 scaled = centered / u_cameraZoom;
+    
+    // Offset by camera position (convert camera pos from grid coords to UV)
+    vec2 cameraUV = u_cameraPos / u_resolution;
+    
+    // Final world UV
+    return scaled + cameraUV;
+}
+
+// Check if world UV is within valid bounds (0-1)
+bool isInBounds(vec2 worldUV) {
+    return worldUV.x >= 0.0 && worldUV.x <= 1.0 && 
+           worldUV.y >= 0.0 && worldUV.y <= 1.0;
+}
+
 void main() {
-    vec4 raw = texture(u_state, v_uv);
+    // Transform screen UV to world UV based on camera position and zoom
+    vec2 worldUV = screenToWorldUV(v_uv);
+    
+    // Check if we're viewing outside the map bounds
+    if (!isInBounds(worldUV)) {
+        fragColor = vec4(0.02, 0.03, 0.05, 1.0);  // Dark out-of-bounds
+        return;
+    }
+    
+    vec4 raw = texture(u_state, worldUV);
     int cellType = getType(raw);
-    vec2 pos = floor(v_uv * u_resolution);
+    vec2 pos = floor(worldUV * u_resolution);
     
     vec3 color;
     

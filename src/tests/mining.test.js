@@ -48,8 +48,8 @@ const TEST_GRID_SIZE = 16;
 // Cell Data Encoding (mirrors GLSL cell_types.glsl)
 // ============================================================================
 
-// Coordinate packing (supports up to 256x256 grids)
-const COORD_PACK_BASE = 256;
+// Coordinate packing (supports up to 512x512 grids)
+const COORD_PACK_BASE = 512;
 
 // Special sentinel value for invalid/no coordinates (matches GLSL)
 const INVALID_PACKED_COORDS = -1;
@@ -97,8 +97,8 @@ function unpackHoldingAndCounter(packed) {
     return { holding: result.holding, counter: result.counter };
 }
 
-// Memory packing (supports up to 256x256 grids)
-const MEMORY_PACK_BASE = COORD_PACK_BASE * COORD_PACK_BASE;  // 65536
+// Memory packing (supports up to 512x512 grids)
+const MEMORY_PACK_BASE = COORD_PACK_BASE * COORD_PACK_BASE;  // 262144
 
 function packMemory(x, y, freshness) {
     if (freshness <= 0) return -1;

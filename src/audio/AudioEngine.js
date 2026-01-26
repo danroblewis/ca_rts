@@ -61,7 +61,7 @@ export class AudioEngine {
             await this.createGeneratedLoops();
             
             this.initialized = true;
-            console.log('[AudioEngine] Initialized');
+            // console.log('[AudioEngine] Initialized');
             
             return true;
         } catch (e) {
@@ -388,24 +388,24 @@ export class AudioEngine {
         // === TEMPORARY DEBUG: Log raw params every 60 frames ===
         this.debugFrameCount = (this.debugFrameCount || 0) + 1;
         if (this.debugFrameCount % 60 === 0) {
-            console.log(
-                "[Audio] Params: mining",
-                params.miningVolume !== undefined ? Math.floor(params.miningVolume * 1000) / 1000 : undefined,
-                ", combat",
-                params.combatVolume !== undefined ? Math.floor(params.combatVolume * 1000) / 1000 : undefined,
-                ", factory",
-                params.factoryHum !== undefined ? Math.floor(params.factoryHum * 1000) / 1000 : undefined,
-                ", swarm",
-                params.swarmVolume !== undefined ? Math.floor(params.swarmVolume * 1000) / 1000 : undefined,
-                ", spawn",
-                params.spawnRate !== undefined ? Math.floor(params.spawnRate * 100) / 100 : undefined,
-                ", explosion",
-                params.explosionRate !== undefined ? Math.floor(params.explosionRate * 100) / 100 : undefined,
-                ", depletion",
-                params.depletionRate !== undefined ? Math.floor(params.depletionRate * 100) / 100 : undefined,
-                ", islands",
-                params.islandDepletion !== undefined ? params.islandDepletion : 0
-            );
+            // console.log(
+            //     "[Audio] Params: mining",
+            //     params.miningVolume !== undefined ? Math.floor(params.miningVolume * 1000) / 1000 : undefined,
+            //     ", combat",
+            //     params.combatVolume !== undefined ? Math.floor(params.combatVolume * 1000) / 1000 : undefined,
+            //     ", factory",
+            //     params.factoryHum !== undefined ? Math.floor(params.factoryHum * 1000) / 1000 : undefined,
+            //     ", swarm",
+            //     params.swarmVolume !== undefined ? Math.floor(params.swarmVolume * 1000) / 1000 : undefined,
+            //     ", spawn",
+            //     params.spawnRate !== undefined ? Math.floor(params.spawnRate * 100) / 100 : undefined,
+            //     ", explosion",
+            //     params.explosionRate !== undefined ? Math.floor(params.explosionRate * 100) / 100 : undefined,
+            //     ", depletion",
+            //     params.depletionRate !== undefined ? Math.floor(params.depletionRate * 100) / 100 : undefined,
+            //     ", islands",
+            //     params.islandDepletion !== undefined ? params.islandDepletion : 0
+            // );
         }
         // === END TEMPORARY DEBUG ===
         
@@ -421,10 +421,10 @@ export class AudioEngine {
         
         // === TEMPORARY LOGGING (except mining - too frequent) ===
         if (this.targetVolumes.combat > 0.05) {
-            console.log(`[Audio] Combat: ${this.targetVolumes.combat.toFixed(2)}`);
+            // console.log(`[Audio] Combat: ${this.targetVolumes.combat.toFixed(2)}`);
         }
         if (this.targetVolumes.factory > 0.05) {
-            // console.log(`[Audio] Factory hum: ${this.targetVolumes.factory.toFixed(2)}`);
+            // // console.log(`[Audio] Factory hum: ${this.targetVolumes.factory.toFixed(2)}`);
         }
         if (this.targetVolumes.swarm > 0.05) {
             console.log(`[Audio] Swarm: ${this.targetVolumes.swarm.toFixed(2)}`);

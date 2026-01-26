@@ -27,16 +27,16 @@ const float MAX_BUILD_PER_CELL = 1.0;
 const float BUILD_THRESHOLD = 8.0;
 
 // ============================================================================
-// Coordinate packing (for grids up to 256x256)
-// Pack two 8-bit coordinates into one float
+// Coordinate packing (for grids up to 512x512)
+// Pack two 9-bit coordinates into one float
 // ============================================================================
 
 float packCoords(vec2 pos) {
-    return floor(pos.x) + floor(pos.y) * 256.0;
+    return floor(pos.x) + floor(pos.y) * 512.0;
 }
 
 vec2 unpackCoords(float packed) {
-    return vec2(mod(packed, 256.0), floor(packed / 256.0));
+    return vec2(mod(packed, 512.0), floor(packed / 512.0));
 }
 
 // Special value for "no location"
@@ -195,7 +195,7 @@ const float NEWBORN_AGE = -30.0;        // Starting age for newly spawned units 
 // Memory freshness settings
 const float MEMORY_MAX_FRESHNESS = 30.0;  // Starts at this when mining
 const float MEMORY_SHARE_PENALTY = 5.0;   // Lose this much freshness when shared
-const float COORD_PACK_SIZE = 65536.0;    // 256 * 256 for coord packing
+const float COORD_PACK_SIZE = 262144.0;   // 512 * 512 for coord packing
 
 // Unpack G channel
 float getHoldingBit(vec4 cell) {
