@@ -529,14 +529,15 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
         
         // Age handling:
         // - If holding, don't age
-        // - If near factory, heal (reduce age)  
+        // - If near BUILT factory, heal (reduce age) - unbuilt factories don't heal
         // - Otherwise, starve (increase age)
         bool nearFactory = (factoryPos.x >= 0.0 && distance(destPos, factoryPos) <= FACTORY_SAFE_ZONE);
+        bool factoryIsBuilt = nearFactory && isFactoryBuilt(factoryPos, state, resolution);
         float newAge;
         if (holding) {
             newAge = age;
-        } else if (nearFactory) {
-            newAge = 0.0;  // Heal near factory
+        } else if (factoryIsBuilt) {
+            newAge = 0.0;  // Heal near BUILT factory
         } else {
             newAge = age + 1.0;  // Starving
         }

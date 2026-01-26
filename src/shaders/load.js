@@ -61,17 +61,26 @@ async function fetchShader(path) {
 
 /**
  * Process #include directives in shader source.
+ * Uses include guards to prevent duplicate includes across branches.
+ * 
  * @param {string} source - Shader source code
  * @param {string} filePath - Path of the current file (for resolving relative includes)
- * @param {Set<string>} included - Set of already-included files (for circular detection)
+ * @param {Set<string>} ancestorChain - Set of files in current include chain (for circular detection)
+ * @param {Set<string>} globallyIncluded - Set of ALL files already included (to prevent duplicates)
  * @returns {Promise<string>} - Processed shader source with includes expanded
  */
-async function processIncludes(source, filePath, included = new Set()) {
-    // Detect circular includes
-    if (included.has(filePath)) {
+async function processIncludes(source, filePath, ancestorChain = new Set(), globallyIncluded = new Set()) {
+    // Detect circular includes (same file in the current chain = infinite loop)
+    if (ancestorChain.has(filePath)) {
         throw new Error(`Circular include detected: ${filePath}`);
     }
-    included.add(filePath);
+    
+    // Track this file in the ancestor chain for circular detection
+    const newAncestorChain = new Set(ancestorChain);
+    newAncestorChain.add(filePath);
+    
+    // Note: globallyIncluded is managed by the caller to prevent race conditions
+    // The caller marks files as included BEFORE calling processIncludes
     
     // Match #include "path" or #include <path>
     const includeRegex = /^[ \t]*#include\s+["<]([^">]+)[">]\s*$/gm;
@@ -92,15 +101,37 @@ async function processIncludes(source, filePath, included = new Set()) {
         return source;
     }
     
-    // Fetch ALL includes in parallel for better performance
+    // Resolve all paths and filter out already-included files
     const resolvedPaths = matches.map(m => resolvePath(filePath, m.path));
+    
+    // Fetch ALL includes in parallel (cache handles duplicates efficiently)
     const fetchPromises = resolvedPaths.map(path => fetchShader(path));
     const includeSources = await Promise.all(fetchPromises);
     
-    // Process nested includes in parallel too
-    const processedPromises = includeSources.map((src, i) => 
-        processIncludes(src, resolvedPaths[i], new Set(included))
-    );
+    // Process nested includes - but skip files already globally included
+    // IMPORTANT: We must mark files as included BEFORE starting parallel processing
+    // to prevent race conditions where multiple branches try to include the same file
+    let skippedCount = 0;
+    const alreadyIncludedFlags = resolvedPaths.map(path => {
+        if (globallyIncluded.has(path)) {
+            skippedCount++;
+            return true; // Already included
+        }
+        globallyIncluded.add(path); // Mark as included NOW to prevent parallel duplication
+        return false;
+    });
+    
+    if (skippedCount > 0) {
+        console.log(`    ↳ Skipped ${skippedCount} duplicate include(s) in ${filePath.split('/').pop()}`);
+    }
+    
+    const processedPromises = includeSources.map((src, i) => {
+        if (alreadyIncludedFlags[i]) {
+            // Already included elsewhere - return empty to avoid duplication
+            return Promise.resolve(`// (already included: ${matches[i].path})`);
+        }
+        return processIncludes(src, resolvedPaths[i], newAncestorChain, globallyIncluded);
+    });
     const processedSources = await Promise.all(processedPromises);
     
     // Replace includes in reverse order (so indices stay valid)
@@ -127,8 +158,14 @@ async function processIncludes(source, filePath, included = new Set()) {
  * @returns {Promise<string>} - Fully processed shader source
  */
 export async function loadShader(path) {
+    const label = `  📄 ${path.split('/').pop()}`;
+    console.time(label);
     const source = await fetchShader(path);
-    return await processIncludes(source, path);
+    // Each loadShader call gets its own globallyIncluded set (shaders are independent)
+    const globallyIncluded = new Set([path]);
+    const result = await processIncludes(source, path, new Set(), globallyIncluded);
+    console.timeEnd(label);
+    return result;
 }
 
 /**

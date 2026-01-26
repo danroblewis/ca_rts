@@ -144,11 +144,19 @@ console.log('GPU compute framework initialized');
 // Load Shaders (v2 architecture) - Load both render shaders
 // ============================================================================
 
+console.time('⏱️ Total shader loading');
+console.time('⏱️ Shader source loading (fetch + preprocess)');
+
 const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise.all([
     loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
     loadShader('./src/shaders/ca/render_metaballs.frag.glsl'),
     loadShader('./src/shaders/ca/v2/render.frag.glsl')
 ]);
+
+console.timeEnd('⏱️ Shader source loading (fetch + preprocess)');
+console.log(`  Shader sizes: sim=${simShaderSource.length}, metaball=${metaballShaderSource.length}, debug=${debugShaderSource.length}`);
+
+console.time('⏱️ Shader compilation (GPU)');
 
 // Create shaders (compilation starts in parallel with KHR_parallel_shader_compile if available)
 const simShader = new ComputeShader(simShaderSource);
@@ -161,6 +169,9 @@ await Promise.all([
     metaballRenderShader.waitReady(),
     debugRenderShader.waitReady()
 ]);
+
+console.timeEnd('⏱️ Shader compilation (GPU)');
+console.timeEnd('⏱️ Total shader loading');
 
 // Active render shader (switchable)
 let renderShader = currentShaderMode === 'debug' ? debugRenderShader : metaballRenderShader;

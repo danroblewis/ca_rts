@@ -29,6 +29,7 @@ precision highp float;
 #include "./traits/deposit.glsl"
 #include "./traits/demolish.glsl"
 #include "./traits/attack.glsl"
+#include "./traits/combat.glsl"
 
 uniform sampler2D u_state;
 uniform vec2 u_resolution;
@@ -53,6 +54,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     BuildResult build = evaluateBuild(myPos, u_state, u_resolution);
     DemolishResult demolish = evaluateDemolish(myPos, u_state, u_resolution);
     AttackResult attack = evaluateAttack(myPos, u_state, u_resolution);
+    CombatResult combat = evaluateCombat(myPos, u_time, u_state, u_resolution);
     
     // ========================================================================
     // Extract my role from each trait result
@@ -262,15 +264,25 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         // - If holding, don't age (carrying resource is productive)
         // - If near factory, heal (reduce age)
         // - If not holding and far from factory, increment age (starving)
+        // - Combat damage is added as age (pushing toward death)
         // - If age reaches MAX_AGE, unit dies!
         float newAge = age;
+        // Only heal near BUILT factories (unbuilt factories don't provide healing)
         bool nearFactory = (factoryPos.x >= 0.0 && distance(myPos, factoryPos) <= FACTORY_SAFE_ZONE);
+        bool factoryIsBuilt = nearFactory && isFactoryBuilt(factoryPos, u_state, u_resolution);
         
-        if (holding) {
+        // Apply combat damage first (if we lost a fight this frame)
+        if (combat.tookDamage) {
+            newAge = age + combat.damageAmount;
+            if (newAge >= MAX_AGE) {
+                // Unit died in combat!
+                return encodeEmpty();
+            }
+        } else if (holding) {
             // Don't age while carrying resources
             newAge = age;
-        } else if (nearFactory) {
-            // Heal while near factory - reduce age
+        } else if (factoryIsBuilt) {
+            // Heal while near BUILT factory - reduce age
             newAge = max(0.0, age - 2.0);  // Heal twice as fast as starving
         } else {
             // Starving - increment age
