@@ -21,6 +21,10 @@ const DEFAULT_MAP_SEED = 12345;
 const METABALL_SCALE = 1.0;           // Metaball blob scale (0.5 = tighter, 2.0 = blobbier)
 const TEMPORAL_BLEND = 1.0;           // Temporal AA blend (0 = off, 1 = full). Only affects moving units.
 
+// Performance mode (for slower devices like MacBooks)
+let performanceMode = new URLSearchParams(window.location.search).get('perf') === '1';
+let showMinimap = !performanceMode;   // Disable minimap in performance mode
+
 // Simulation speed settings
 const LOG_INTERVAL = 1000;            // Stats logging interval in ms
 const SIM_BATCH_SIZE = 10;            // Simulation steps per batch in fast mode
@@ -221,6 +225,50 @@ updateToggleLabels();
 // Expose to console for easy switching
 window.switchShader = switchShader;
 console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or switchShader('metaball') to change)`);
+
+// ============================================================================
+// Performance Mode Toggle
+// ============================================================================
+
+const perfToggle = document.getElementById('perf-toggle');
+const perfLabel = document.getElementById('perf-label');
+
+function updatePerfLabel() {
+    if (performanceMode) {
+        perfLabel.style.opacity = '1';
+        perfLabel.style.color = '#22c55e';
+        perfToggle.checked = true;
+    } else {
+        perfLabel.style.opacity = '0.8';
+        perfLabel.style.color = '#aaa';
+        perfToggle.checked = false;
+    }
+}
+
+function togglePerformanceMode(enabled) {
+    performanceMode = enabled;
+    showMinimap = !enabled;
+    
+    // Update URL
+    const url = new URL(window.location);
+    if (enabled) {
+        url.searchParams.set('perf', '1');
+    } else {
+        url.searchParams.delete('perf');
+    }
+    window.history.replaceState({}, '', url);
+    
+    updatePerfLabel();
+    console.log(`Performance mode: ${enabled ? 'ON' : 'OFF'} (minimap: ${showMinimap ? 'visible' : 'hidden'})`);
+}
+
+perfToggle.addEventListener('change', (e) => {
+    togglePerformanceMode(e.target.checked);
+});
+
+// Initialize from URL
+updatePerfLabel();
+console.log(`Performance mode: ${performanceMode ? 'ON' : 'OFF'}`);
 
 // ============================================================================
 // Initialize World
@@ -739,34 +787,60 @@ canvas.addEventListener('mousemove', (event) => {
     // All cursor UI is rendered in shader (selection box, command indicator, delete overlay)
 });
 
-// Pan with mouse wheel/trackpad scroll, zoom with Alt/Option + wheel
+// Scroll handling: mouse wheel = zoom, trackpad two-finger = pan
+// Detect if we're on macOS (likely has trackpad)
+const isMacOS = navigator.platform.toUpperCase().indexOf('MAC') >= 0 || 
+                navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+
 canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
     
-    // Alt/Option + wheel = zoom
-    if (event.altKey) {
-        // Get mouse position in grid coords before zoom
-        const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
+    // On macOS: default to pan (trackpad behavior), Alt+scroll = zoom
+    // On other OS: default to zoom (mouse wheel behavior), scroll with horizontal = pan
+    if (isMacOS) {
+        // macOS: Alt/Option = zoom, otherwise pan
+        if (event.altKey) {
+            // Zoom mode
+            const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
+            const zoomDelta = -event.deltaY * ZOOM_SPEED * 0.01;
+            cameraZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
+            const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
+            cameraX += mouseGridBefore.x - mouseGridAfter.x;
+            cameraY += mouseGridBefore.y - mouseGridAfter.y;
+            clampCamera();
+        } else {
+            // Pan mode (default on macOS)
+            const visibleSize = getVisibleGridSize();
+            const panScale = visibleSize / 500;
+            cameraX += event.deltaX * panScale;
+            cameraY -= event.deltaY * panScale;
+            clampCamera();
+        }
+    } else {
+        // Windows/Linux: Scroll = zoom, scroll with significant horizontal = pan
+        const hasHorizontal = Math.abs(event.deltaX) > 2;
         
-        // Zoom based on deltaY
-        const zoomDelta = -event.deltaY * ZOOM_SPEED * 0.01;
-        cameraZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
-        
-        // Adjust camera to keep mouse position stable
-        const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
-        cameraX += mouseGridBefore.x - mouseGridAfter.x;
-        cameraY += mouseGridBefore.y - mouseGridAfter.y;
-        clampCamera();
-        return;
+        if (hasHorizontal) {
+            // Pan mode (detected trackpad-like behavior)
+            const visibleSize = getVisibleGridSize();
+            const panScale = visibleSize / 500;
+            cameraX += event.deltaX * panScale;
+            cameraY -= event.deltaY * panScale;
+            clampCamera();
+        } else {
+            // Zoom mode (default on non-Mac)
+            const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
+            let zoomAmount = event.deltaY;
+            if (event.deltaMode === 1) zoomAmount *= 16;
+            if (event.deltaMode === 2) zoomAmount *= 100;
+            const zoomDelta = -zoomAmount * ZOOM_SPEED * 0.01;
+            cameraZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
+            const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
+            cameraX += mouseGridBefore.x - mouseGridAfter.x;
+            cameraY += mouseGridBefore.y - mouseGridAfter.y;
+            clampCamera();
+        }
     }
-    
-    // Regular scroll = pan (for trackpad users)
-    const visibleSize = getVisibleGridSize();
-    const panScale = visibleSize / 500;  // Adjust sensitivity
-    
-    cameraX += event.deltaX * panScale;
-    cameraY -= event.deltaY * panScale;  // Y is inverted
-    clampCamera();
 });
 
 // Track shift key
@@ -811,42 +885,43 @@ canvas.addEventListener('mousedown', (event) => {
     // Spectators cannot interact (but can still pan)
     if (isSpectator) return;
     
-    // Right click or ctrl+click - start selection
+    // Left click with active selection = set command destination (easier on MacBook trackpads)
+    if (event.button === 0 && hasActiveSelection && selectedRegion && !shiftHeld) {
+        event.preventDefault();
+        const destPos = screenToGrid(event.clientX, event.clientY);
+        
+        // Create command for the selected units
+        activeCommand = {
+            sourceX1: selectedRegion.x1,
+            sourceY1: selectedRegion.y1,
+            sourceX2: selectedRegion.x2,
+            sourceY2: selectedRegion.y2,
+            destX: destPos.x,
+            destY: destPos.y,
+            player: currentPlayer
+        };
+        
+        console.log('[Command] Sending units from', selectedRegion, 'to', destPos);
+        
+        // Show visual feedback
+        showCommandPing(event.clientX, event.clientY);
+        
+        // Apply command to units in the grid
+        applyUnitCommand(activeCommand);
+        
+        // Sync command to other players
+        if (isMultiplayer && networkSync.isConnected) {
+            syncAction('unit_command', activeCommand);
+        }
+        
+        // Don't clear selection - user can issue multiple commands to same units
+        // Selection is only cleared when user presses Escape
+        return;
+    }
+    
+    // Right click or ctrl+click - start new selection (clears any existing)
     if (event.button === 2 || event.ctrlKey) {
         event.preventDefault();
-        
-        // If we have an active selection, this click sets the destination
-        if (hasActiveSelection && selectedRegion) {
-            const destPos = screenToGrid(event.clientX, event.clientY);
-            
-            // Create command for the selected units
-            activeCommand = {
-                sourceX1: selectedRegion.x1,
-                sourceY1: selectedRegion.y1,
-                sourceX2: selectedRegion.x2,
-                sourceY2: selectedRegion.y2,
-                destX: destPos.x,
-                destY: destPos.y,
-                player: currentPlayer
-            };
-            
-            console.log('[Command] Sending units from', selectedRegion, 'to', destPos);
-            
-            // Show visual feedback
-            showCommandPing(event.clientX, event.clientY);
-            
-            // Apply command to units in the grid
-            applyUnitCommand(activeCommand);
-            
-            // Sync command to other players
-            if (isMultiplayer && networkSync.isConnected) {
-                syncAction('unit_command', activeCommand);
-            }
-            
-            // Don't clear selection - user can issue multiple commands to same units
-            // Selection is only cleared when user presses Escape
-            return;
-        }
         
         // Start new selection
         isSelecting = true;
@@ -1192,7 +1267,10 @@ function updatePlayerIndicator() {
 updatePlayerIndicator();
 
 // FPS/TPS display
-function updateFpsDisplay(currentTps, targetTps, potentialTps = null) {
+let lastFrameTime = 0;
+let frameTimeSmoothed = 16.67;
+
+function updateFpsDisplay(currentTps, targetTps, potentialTps = null, renderFps = 60) {
     let fpsDisplay = document.getElementById('fps-display');
     if (!fpsDisplay) {
         fpsDisplay = document.createElement('div');
@@ -1234,8 +1312,11 @@ function updateFpsDisplay(currentTps, targetTps, potentialTps = null) {
             fpsDisplay.style.color = '#9f9';
         }
     } else {
-        fpsDisplay.textContent = `${Math.round(currentTps)} TPS`;
-        fpsDisplay.style.color = currentTps < 30 ? '#f99' : currentTps < 50 ? '#ff9' : '#9f9';
+        // Always show both TPS and render FPS for debugging
+        const fps = Math.round(renderFps);
+        const tps = Math.round(currentTps);
+        fpsDisplay.textContent = `${fps} FPS | ${tps} TPS`;
+        fpsDisplay.style.color = fps <= 30 ? '#f99' : fps < 55 ? '#ff9' : '#9f9';
     }
 }
 
@@ -1954,8 +2035,8 @@ function logStats() {
         tpsFrameCount = 0;
         lastTpsCalcTime = now;
         
-        // Update FPS display
-        updateFpsDisplay(effectiveTicksPerSecond, targetTicksPerSecond, potentialTicksPerSecond);
+        // Update FPS display - potentialTicksPerSecond IS the render FPS when synced
+        updateFpsDisplay(effectiveTicksPerSecond, targetTicksPerSecond, potentialTicksPerSecond, potentialTicksPerSecond);
     }
     
     // Send heartbeat periodically in multiplayer
@@ -2129,15 +2210,35 @@ function renderLoop() {
         const effectiveTargetTps = isMultiplayer ? Math.max(1, targetTicksPerSecond + TPS_MARGIN) : 999;
         const targetFrameTime = 1000 / effectiveTargetTps;
         
+        // Initialize lastSimStepTime on first frame
+        if (lastSimStepTime === 0) {
+            lastSimStepTime = now;
+        }
+        
         // Run simulation if enough time has passed (or if in single-player, always run)
-        if (!isMultiplayer || lastSimStepTime === 0 || (now - lastSimStepTime) >= targetFrameTime) {
+        // Use a while loop to catch up if we're behind
+        if (!isMultiplayer) {
+            // Single player: run every frame
             for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
                 simulationStep();
             }
             lastSimStepTime = now;
+        } else {
+            // Multiplayer: throttle to target TPS, but run multiple steps if behind
+            let stepsTaken = 0;
+            const maxStepsPerFrame = 3;  // Prevent runaway if very behind
+            while ((now - lastSimStepTime) >= targetFrameTime && stepsTaken < maxStepsPerFrame) {
+                for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
+                    simulationStep();
+                }
+                lastSimStepTime += targetFrameTime;  // Advance by target amount, not "now"
+                stepsTaken++;
+            }
         }
-        logStats();
     }
+    
+    // Always call logStats to update FPS display
+    logStats();
     
     // Selection is now stored in unit data (G channel bit 5) and moves automatically
     
@@ -2174,6 +2275,10 @@ function renderLoop() {
     // Camera uniforms for pan and zoom
     renderShader.setVec2('u_cameraPos', cameraX, cameraY);
     renderShader.setFloat('u_cameraZoom', cameraZoom);
+    
+    // Performance mode uniforms
+    renderShader.setFloat('u_showMinimap', showMinimap ? 1.0 : 0.0);
+    renderShader.setFloat('u_performanceMode', performanceMode ? 1.0 : 0.0);
     
     // Selection system uniforms
     // Note: Selection is now stored in unit data (G channel bit 5), no separate texture needed

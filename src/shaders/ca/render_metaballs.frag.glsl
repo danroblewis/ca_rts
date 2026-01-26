@@ -11,11 +11,16 @@ precision highp float;
 // Higher = smoother motion blur but more GPU cost
 // Only affects moving units (static elements always use current frame only)
 #define TEMPORAL_FRAME_COUNT 4
+#define TEMPORAL_FRAME_COUNT_PERF 1  // Performance mode: no temporal AA
 
 // Kernel sizes for density sampling (radius, so 2 = 5x5, 3 = 7x7, 4 = 9x9)
 #define STATIC_KERNEL_RADIUS 2      // For resources, walls, factories (5x5)
 #define UNIT_KERNEL_RADIUS 2        // For units - current frame (5x5)
 #define UNIT_TEMPORAL_KERNEL_RADIUS 2  // For units - older frames (5x5)
+
+// Performance mode kernel sizes (smaller = faster)
+#define STATIC_KERNEL_RADIUS_PERF 1      // 3x3 sampling
+#define UNIT_KERNEL_RADIUS_PERF 1        // 3x3 sampling
 
 // Temporal trail smoothing - higher = smoother/wider trails, lower = tighter
 #define TEMPORAL_BLUR_SIGMA 0.8
@@ -61,6 +66,10 @@ uniform float u_deleteRadius;    // Delete radius in grid cells
 // Camera/viewport uniforms for pan and zoom
 uniform vec2 u_cameraPos;        // Camera center in grid coordinates
 uniform float u_cameraZoom;      // Zoom level (1.0 = full map visible, 2.0 = half map visible)
+
+// Performance mode uniforms
+uniform float u_showMinimap;     // 1.0 = show minimap, 0.0 = hide minimap
+uniform float u_performanceMode; // 1.0 = performance mode (reduced quality)
 
 // Transform screen UV (0-1) to world UV (0-1) based on camera position and zoom
 // Returns world UV that can be used to sample textures
@@ -154,8 +163,12 @@ AllDensities calcAllStaticDensities(vec2 uv) {
     float minDist = 0.3 / scale;
     
     // Single pass over the neighborhood
+    // In performance mode, use smaller 3x3 kernel instead of 5x5
+    int kernelRadius = (u_performanceMode > 0.5) ? STATIC_KERNEL_RADIUS_PERF : STATIC_KERNEL_RADIUS;
     for (int dy = -STATIC_KERNEL_RADIUS; dy <= STATIC_KERNEL_RADIUS; dy++) {
+        if (abs(dy) > kernelRadius) continue;  // Skip in perf mode
         for (int dx = -STATIC_KERNEL_RADIUS; dx <= STATIC_KERNEL_RADIUS; dx++) {
+            if (abs(dx) > kernelRadius) continue;  // Skip in perf mode
             vec2 offset = vec2(float(dx), float(dy));
             vec2 sampleUV = uv + offset * texelSize;
             vec4 cellSample = texture(u_state, sampleUV);
@@ -219,8 +232,11 @@ float calcDensityHQ(vec2 uv, float targetType) {
     float scale = max(0.1, u_metaballScale);
     float minDist = 0.3 / scale;
     
+    int kr2 = (u_performanceMode > 0.5) ? STATIC_KERNEL_RADIUS_PERF : STATIC_KERNEL_RADIUS;
     for (int dy = -STATIC_KERNEL_RADIUS; dy <= STATIC_KERNEL_RADIUS; dy++) {
+        if (abs(dy) > kr2) continue;
         for (int dx = -STATIC_KERNEL_RADIUS; dx <= STATIC_KERNEL_RADIUS; dx++) {
+            if (abs(dx) > kr2) continue;
             vec2 offset = vec2(float(dx), float(dy));
             vec2 sampleUV = uv + offset * texelSize;
             vec4 cellSample = texture(u_state, sampleUV);
@@ -259,8 +275,11 @@ vec3 calcFactoryDensityForPlayer(vec2 uv, float targetPlayer) {
     float scale = max(0.1, u_metaballScale);
     float minDist = 0.3 / scale;
     
+    int facKernelRadius = (u_performanceMode > 0.5) ? 1 : 2;
     for (int dy = -2; dy <= 2; dy++) {
+        if (abs(dy) > facKernelRadius) continue;
         for (int dx = -2; dx <= 2; dx++) {
+            if (abs(dx) > facKernelRadius) continue;
             vec2 offset = vec2(float(dx), float(dy));
             vec4 cellSample = texture(u_state, uv + offset * texelSize);
             
@@ -317,8 +336,11 @@ vec3 calcUnitDensityForPlayer(vec2 uv, float targetPlayer) {
     
     // Temporal sampling - use TEMPORAL_FRAME_COUNT frames
     // Frame 0 gets larger kernel, older frames get smaller kernel for speed
-    int numFrames = min(clamp(u_frameCount, 1, 8), TEMPORAL_FRAME_COUNT);
+    // In performance mode: only 1 frame, smaller kernel
+    int maxFrames = (u_performanceMode > 0.5) ? TEMPORAL_FRAME_COUNT_PERF : TEMPORAL_FRAME_COUNT;
+    int numFrames = min(clamp(u_frameCount, 1, 8), maxFrames);
     float blendStrength = clamp(u_temporalBlend, 0.0, 1.0);
+    int unitKernelRadius = (u_performanceMode > 0.5) ? UNIT_KERNEL_RADIUS_PERF : UNIT_KERNEL_RADIUS;
     
     for (int frame = 0; frame < TEMPORAL_FRAME_COUNT; frame++) {
         if (frame >= numFrames) break;
@@ -327,31 +349,31 @@ vec3 calcUnitDensityForPlayer(vec2 uv, float targetPlayer) {
         totalTemporalWeight += frameWeight;
         
         // Use configurable kernel sizes
-        int kernelSize = (frame == 0) ? UNIT_KERNEL_RADIUS : UNIT_TEMPORAL_KERNEL_RADIUS;
+        int kernelSize = (frame == 0) ? unitKernelRadius : UNIT_TEMPORAL_KERNEL_RADIUS;
         
         for (int dy = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
             if (abs(dy) > kernelSize) continue;
             for (int dx = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
                 if (abs(dx) > kernelSize) continue;
                 
-                vec2 offset = vec2(float(dx), float(dy));
+            vec2 offset = vec2(float(dx), float(dy));
                 vec4 cellSample = sampleFrame(frame, uv + offset * texelSize);
-                
+            
                 if (isMiningUnit(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
                     // Use sub-cell position for smoother distance
                     vec2 cellCenter = offset + vec2(0.5) - cellFrac;
                     float dist = length(cellCenter) / scale;
                     if (dist < minDist) dist = minDist;
                     float weight = (1.0 / (dist * dist)) * frameWeight;
-                    
-                    float age = getUnitAge(cellSample);
-                    weightedAge += age * weight;
-                    totalWeight += weight;
-                    
-                    if (isHoldingResource(cellSample)) {
-                        holdingDensity += weight;
-                    } else {
-                        emptyDensity += weight;
+                
+                float age = getUnitAge(cellSample);
+                weightedAge += age * weight;
+                totalWeight += weight;
+                
+                if (isHoldingResource(cellSample)) {
+                    holdingDensity += weight;
+                } else {
+                    emptyDensity += weight;
                     }
                 }
             }
@@ -391,8 +413,11 @@ float calcSelectionDensity(vec2 uv, float targetPlayer) {
     float minDist = 0.3 / scale;
     
     // Sample current frame only for selection
+    int selKernelRadius = (u_performanceMode > 0.5) ? UNIT_KERNEL_RADIUS_PERF : UNIT_KERNEL_RADIUS;
     for (int dy = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
+        if (abs(dy) > selKernelRadius) continue;
         for (int dx = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
+            if (abs(dx) > selKernelRadius) continue;
             vec2 offset = vec2(float(dx), float(dy));
             vec2 sampleUV = uv + offset * texelSize;
             vec4 cellSample = texture(u_state0, sampleUV);
@@ -685,8 +710,8 @@ void main() {
     bool p1IsSelected = p1SelectionDensity > 0.1;  // Check if any selected units here
     if (p1TotalUnitDensity > unitThreshold * 0.3) {
         float p1AgeRatio = p1AvgAge / MAX_AGE;
-        float ageBrightness = 1.0;
-        vec3 ageColorMod = vec3(1.0);
+    float ageBrightness = 1.0;
+    vec3 ageColorMod = vec3(1.0);
         float newbornScale = 1.0;  // Size multiplier for newborn units
         
         // Newborn glow effect (negative age)
@@ -700,12 +725,12 @@ void main() {
             ageBrightness = 1.0 - fadeFactor * 0.7;
         } else if (p1AgeRatio >= deathFlashStart) {
             float deathProgress = (p1AgeRatio - deathFlashStart) / (1.0 - deathFlashStart);
-            if (deathProgress < 0.3) {
-                float flashIntensity = deathProgress / 0.3;
+        if (deathProgress < 0.3) {
+            float flashIntensity = deathProgress / 0.3;
                 ageColorMod = mix(vec3(0.3), vec3(3.0), flashIntensity);
-            } else {
-                float fadeOut = (deathProgress - 0.3) / 0.7;
-                ageBrightness = mix(1.5, 0.1, fadeOut);
+        } else {
+            float fadeOut = (deathProgress - 0.3) / 0.7;
+            ageBrightness = mix(1.5, 0.1, fadeOut);
             }
         }
         
@@ -801,7 +826,7 @@ void main() {
             vec3 tealColor = vec3(0.3, 0.85, 0.7) * ageBrightness * ageColorMod;
             vec3 greenColor = vec3(0.4, 0.95, 0.35) * ageBrightness * ageColorMod;
             vec3 unitColor = mix(tealColor, greenColor, holdingRatio);
-            
+        
             // Selection effect - add bright white outline/ring
             if (p2IsSelected) {
                 unitColor *= selectionBrightness;
@@ -813,8 +838,8 @@ void main() {
             }
             
             float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, scaledDensity);
-            unitColor += vec3(0.2) * coreGlow * ageBrightness;
-            color = mix(color, unitColor, blobStrength);
+        unitColor += vec3(0.2) * coreGlow * ageBrightness;
+        color = mix(color, unitColor, blobStrength);
         }
     }
     
@@ -1108,7 +1133,7 @@ void main() {
     // ========================================================================
     // MINIMAP - Bottom-left corner, fast low-res sampling
     // ========================================================================
-    {
+    {  // Always show minimap (it's useful even in performance mode)
         // Minimap parameters
         float minimapSize = 0.2;  // 20% of screen width/height
         float minimapMargin = 0.02;  // 2% margin from edges

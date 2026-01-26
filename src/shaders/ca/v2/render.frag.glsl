@@ -92,7 +92,7 @@ void main() {
         vec3 baseColor;
         if (player == PLAYER_1) {
             // Player 1: Purple/magenta theme (matches factories)
-            if (getUnitHolding(raw)) {
+        if (getUnitHolding(raw)) {
                 baseColor = vec3(0.95, 0.4, 0.8);  // Magenta = carrying
             } else {
                 baseColor = vec3(0.6, 0.4, 1.0);  // Purple = searching
@@ -144,7 +144,7 @@ void main() {
         
         if (isBuilt) {
             // Built factory - bright color
-            float brightness = 0.5 + min(getFactoryResources(raw) / 10.0, 0.5);
+        float brightness = 0.5 + min(getFactoryResources(raw) / 10.0, 0.5);
             color = builtColor * brightness;
         } else {
             // Unbuilt factory - dimmer, show build progress
