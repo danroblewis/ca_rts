@@ -58,7 +58,9 @@ const float INVALID_PACKED_COORDS = -1.0;
 // UNIT PROPERTIES
 // ============================================================================
 
-const float AGE_PACK_BASE = 32.0;        // counter uses bits 1-4, age starts at bit 5
+// G channel bit packing: holding (bit 0) + counter*2 (bits 1-4) + selected*32 (bit 5) + age*64 (bits 6+)
+const float SELECTED_PACK_BASE = 32.0;   // Selection flag at bit 5
+const float AGE_PACK_BASE = 64.0;        // Age starts at bit 6 (after selection bit)
 const float MAX_AGE = 500.0;             // Steps before unit dies from starvation
 const float FACTORY_SAFE_ZONE = 10.0;    // Units within this distance of factory don't starve
 const float NEWBORN_AGE = -30.0;         // Starting age for newly spawned units (negative = newborn glow)

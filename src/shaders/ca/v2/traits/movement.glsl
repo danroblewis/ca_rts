@@ -497,6 +497,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
                 myPlayer,
                 true,  // now holding
                 0,     // reset counter
+                getUnitSelected(arrivingCell),  // preserve selection
                 0.0,   // reset age (just mined successfully!)
                 factoryPos,
                 mem
@@ -569,6 +570,7 @@ vec4 transformArrival(vec4 arrivingCell, vec4 destinationCell, vec2 destPos, sam
             myPlayer,
             holding,
             newCounter,
+            getUnitSelected(arrivingCell),  // preserve selection
             newAge,
             factoryPos,
             mem

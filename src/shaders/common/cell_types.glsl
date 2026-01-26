@@ -186,10 +186,11 @@ vec4 createResource(float amount) {
 // Threshold: after this many steps stuck, start walking
 const float STATIONARY_THRESHOLD = 8.0;
 
-// Age/starvation settings
-const float AGE_PACK_BASE = 32.0;  // Age starts at bit 5
-const float MAX_AGE = 500.0;       // Steps before unit dies from starvation
-const float NEWBORN_AGE = -30.0;   // Starting age for newly spawned units (negative = newborn glow)
+// G channel bit packing: holding (bit 0) + counter*2 (bits 1-4) + selected*32 (bit 5) + age*64 (bits 6+)
+const float SELECTED_PACK_BASE = 32.0;  // Selection flag at bit 5
+const float AGE_PACK_BASE = 64.0;       // Age starts at bit 6 (after selection bit)
+const float MAX_AGE = 500.0;            // Steps before unit dies from starvation
+const float NEWBORN_AGE = -30.0;        // Starting age for newly spawned units (negative = newborn glow)
 
 // Memory freshness settings
 const float MEMORY_MAX_FRESHNESS = 30.0;  // Starts at this when mining
@@ -205,13 +206,22 @@ float getStationaryCounter(vec4 cell) {
     return mod(floor(cell.g / 2.0), 16.0);  // 4 bits for counter (0-15)
 }
 
-float getUnitAge(vec4 cell) {
-    return floor(cell.g / AGE_PACK_BASE);
+bool getUnitSelected(vec4 cell) {
+    return mod(floor(cell.g / SELECTED_PACK_BASE), 2.0) > 0.5;  // bit 5
 }
 
-// Pack holding + counter + age into G
+float getUnitAge(vec4 cell) {
+    return floor(cell.g / AGE_PACK_BASE);  // bits 6+
+}
+
+// Pack holding + counter + selected + age into G
+float packHoldingCounterSelectedAge(float holding, float counter, float selected, float age) {
+    return floor(holding) + floor(counter) * 2.0 + floor(selected) * SELECTED_PACK_BASE + floor(age) * AGE_PACK_BASE;
+}
+
+// Legacy: Pack holding + counter + age (no selection)
 float packHoldingCounterAge(float holding, float counter, float age) {
-    return floor(holding) + floor(counter) * 2.0 + floor(age) * AGE_PACK_BASE;
+    return packHoldingCounterSelectedAge(holding, counter, 0.0, age);
 }
 
 // Legacy function for backward compatibility

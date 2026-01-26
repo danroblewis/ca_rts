@@ -45,6 +45,17 @@ uniform float u_metaballScale;   // Scale factor for metaball effect (0.5 = tigh
 uniform int u_frameCount;        // Number of frames to blend (1-8, default 8)
 uniform float u_temporalBlend;   // Temporal blend strength (0 = no blend, 1 = full blend)
 
+// Selection system
+// Selection is now stored directly in unit data (G channel bit 5), no separate texture needed
+uniform float u_currentPlayer;   // Current player (1.0 or 2.0) - only their selected units are shown
+
+// Selection UI (rendered in shader instead of DOM)
+uniform float u_isSelecting;     // 1.0 if currently dragging a selection box
+uniform vec2 u_selectionStart;   // Selection box start corner (UV coords, 0-1)
+uniform vec2 u_selectionEnd;     // Selection box end corner (UV coords, 0-1)
+uniform float u_hasActiveSelection; // 1.0 if there's an active selection awaiting command
+uniform vec2 u_commandPos;       // Command indicator position (UV coords, 0-1)
+
 // Sample from a specific frame by index
 vec4 sampleFrame(int frame, vec2 uv) {
     if (frame == 0) return texture(u_state0, uv);
@@ -332,6 +343,49 @@ vec3 calcUnitDensityWithAge(vec2 uv) {
     return vec3(p1.x + p2.x, p1.y + p2.y, max(p1.z, p2.z));
 }
 
+// ============================================================================
+// SELECTION DENSITY CALCULATION
+// ============================================================================
+// Returns selection density for units of a specific player
+// Only samples current frame (frame 0) since selection state is updated per-frame
+
+float calcSelectionDensity(vec2 uv, float targetPlayer) {
+    // Only render selection for the current player viewing the game
+    if (targetPlayer != u_currentPlayer) return 0.0;
+    
+    vec2 texelSize = 1.0 / u_resolution;
+    float selectionDensity = 0.0;
+    
+    vec2 gridPos = uv * u_resolution;
+    vec2 cellFrac = fract(gridPos);
+    
+    float scale = max(0.1, u_metaballScale);
+    float minDist = 0.3 / scale;
+    
+    // Sample current frame only for selection
+    for (int dy = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
+        for (int dx = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
+            vec2 offset = vec2(float(dx), float(dy));
+            vec2 sampleUV = uv + offset * texelSize;
+            vec4 cellSample = texture(u_state0, sampleUV);
+            
+            // Check if this is a unit of the target player
+            if (isMiningUnit(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
+                // Check if this unit is selected (stored in G channel bit 5)
+                if (getUnitSelected(cellSample)) {
+                    vec2 cellCenter = offset + vec2(0.5) - cellFrac;
+                    float dist = length(cellCenter) / scale;
+                    if (dist < minDist) dist = minDist;
+                    float weight = 1.0 / (dist * dist);
+                    selectionDensity += weight;
+                }
+            }
+        }
+    }
+    
+    return selectionDensity;
+}
+
 // ============================================
 // PROCEDURAL NOISE FUNCTIONS FOR ROCK TEXTURE
 // ============================================
@@ -523,6 +577,10 @@ void main() {
     float p2HoldingUnitDensity = p2UnitInfo.y;
     float p2AvgAge = p2UnitInfo.z;
     
+    // Selection densities (only for current player's units)
+    float p1SelectionDensity = calcSelectionDensity(v_uv, PLAYER_1);
+    float p2SelectionDensity = calcSelectionDensity(v_uv, PLAYER_2);
+    
     // Combined for compatibility
     float emptyUnitDensity = p1EmptyUnitDensity + p2EmptyUnitDensity;
     float holdingUnitDensity = p1HoldingUnitDensity + p2HoldingUnitDensity;
@@ -583,6 +641,7 @@ void main() {
     
     // Player 1 units - purple/magenta theme (matches their factories)
     float p1TotalUnitDensity = p1EmptyUnitDensity + p1HoldingUnitDensity;
+    bool p1IsSelected = p1SelectionDensity > 0.1;  // Check if any selected units here
     if (p1TotalUnitDensity > unitThreshold * 0.3) {
         float p1AgeRatio = p1AvgAge / MAX_AGE;
         float ageBrightness = 1.0;
@@ -609,13 +668,21 @@ void main() {
             }
         }
         
+        // Selection effect - make selected units brighter and pulse
+        float selectionBrightness = 1.0;
+        float selectionPulse = 0.0;
+        if (p1IsSelected) {
+            selectionBrightness = 1.5;  // 50% brighter
+            selectionPulse = sin(u_time * 4.0) * 0.3 + 0.3;  // Gentle pulse
+        }
+        
         // Apply newborn scale to make newborns appear larger
         float scaledDensity = p1TotalUnitDensity * newbornScale;
         float holdingRatio = p1HoldingUnitDensity / max(p1TotalUnitDensity, 0.001);
         float glowStrength = smoothstep(0.0, unitThreshold, scaledDensity);
         // Purple glow tones matching P1 factory
         vec3 glowColor = mix(vec3(0.25, 0.1, 0.35), vec3(0.4, 0.15, 0.5), holdingRatio);
-        glowColor *= ageBrightness * ageColorMod;
+        glowColor *= ageBrightness * ageColorMod * selectionBrightness;
         color = color + glowColor * glowStrength * 0.6;
         
         if (scaledDensity > unitThreshold) {
@@ -624,6 +691,17 @@ void main() {
             vec3 purpleColor = vec3(0.6, 0.4, 1.0) * ageBrightness * ageColorMod;
             vec3 magentaColor = vec3(0.95, 0.4, 0.8) * ageBrightness * ageColorMod;
             vec3 unitColor = mix(purpleColor, magentaColor, holdingRatio);
+            
+            // Selection effect - add bright white outline/ring
+            if (p1IsSelected) {
+                unitColor *= selectionBrightness;
+                // Add pulsing white highlight
+                unitColor += vec3(1.0, 1.0, 1.0) * selectionPulse;
+                // Make selected units slightly larger appearance with outer glow
+                float outerRing = smoothstep(unitThreshold * 0.5, unitThreshold, scaledDensity);
+                color += vec3(1.0, 0.9, 1.0) * outerRing * 0.4 * (1.0 + selectionPulse);
+            }
+            
             float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, scaledDensity);
             unitColor += vec3(0.2) * coreGlow * ageBrightness;
             color = mix(color, unitColor, blobStrength);
@@ -632,6 +710,7 @@ void main() {
     
     // Player 2 units - green theme (matches their factories)
     float p2TotalUnitDensity = p2EmptyUnitDensity + p2HoldingUnitDensity;
+    bool p2IsSelected = p2SelectionDensity > 0.1;  // Check if any selected units here
     if (p2TotalUnitDensity > unitThreshold * 0.3) {
         float p2AgeRatio = p2AvgAge / MAX_AGE;
         float ageBrightness = 1.0;
@@ -658,13 +737,21 @@ void main() {
             }
         }
         
+        // Selection effect - make selected units brighter and pulse
+        float selectionBrightness = 1.0;
+        float selectionPulse = 0.0;
+        if (p2IsSelected) {
+            selectionBrightness = 1.5;  // 50% brighter
+            selectionPulse = sin(u_time * 4.0) * 0.3 + 0.3;  // Gentle pulse
+        }
+        
         // Apply newborn scale to make newborns appear larger
         float scaledDensity = p2TotalUnitDensity * newbornScale;
         float holdingRatio = p2HoldingUnitDensity / max(p2TotalUnitDensity, 0.001);
         float glowStrength = smoothstep(0.0, unitThreshold, scaledDensity);
         // Green glow tones matching P2 factory
         vec3 glowColor = mix(vec3(0.1, 0.3, 0.15), vec3(0.15, 0.4, 0.1), holdingRatio);
-        glowColor *= ageBrightness * ageColorMod;
+        glowColor *= ageBrightness * ageColorMod * selectionBrightness;
         color = color + glowColor * glowStrength * 0.6;
         
         if (scaledDensity > unitThreshold) {
@@ -673,6 +760,17 @@ void main() {
             vec3 tealColor = vec3(0.3, 0.85, 0.7) * ageBrightness * ageColorMod;
             vec3 greenColor = vec3(0.4, 0.95, 0.35) * ageBrightness * ageColorMod;
             vec3 unitColor = mix(tealColor, greenColor, holdingRatio);
+            
+            // Selection effect - add bright white outline/ring
+            if (p2IsSelected) {
+                unitColor *= selectionBrightness;
+                // Add pulsing white highlight
+                unitColor += vec3(1.0, 1.0, 1.0) * selectionPulse;
+                // Make selected units slightly larger appearance with outer glow
+                float outerRing = smoothstep(unitThreshold * 0.5, unitThreshold, scaledDensity);
+                color += vec3(0.9, 1.0, 0.9) * outerRing * 0.4 * (1.0 + selectionPulse);
+            }
+            
             float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, scaledDensity);
             unitColor += vec3(0.2) * coreGlow * ageBrightness;
             color = mix(color, unitColor, blobStrength);
@@ -820,6 +918,65 @@ void main() {
         }
         
         color = mix(color, demolishColor, blobStrength);
+    }
+    
+    // ========================================================================
+    // Selection UI Overlay
+    // ========================================================================
+    
+    // Selection box (while dragging)
+    if (u_isSelecting > 0.5) {
+        vec2 boxMin = min(u_selectionStart, u_selectionEnd);
+        vec2 boxMax = max(u_selectionStart, u_selectionEnd);
+        
+        // Check if we're on the border of the selection box
+        float borderWidth = 2.0 / u_canvasResolution.x;  // 2 pixels wide
+        
+        bool inBox = v_uv.x >= boxMin.x && v_uv.x <= boxMax.x && 
+                     v_uv.y >= boxMin.y && v_uv.y <= boxMax.y;
+        bool inInnerBox = v_uv.x >= boxMin.x + borderWidth && v_uv.x <= boxMax.x - borderWidth && 
+                          v_uv.y >= boxMin.y + borderWidth && v_uv.y <= boxMax.y - borderWidth;
+        
+        if (inBox) {
+            if (!inInnerBox) {
+                // Border - white with some transparency
+                color = mix(color, vec3(1.0), 0.8);
+            } else {
+                // Interior - slight tint
+                color = mix(color, vec3(1.0), 0.1);
+            }
+        }
+    }
+    
+    // Command indicator (crosshair at cursor when selection is active)
+    if (u_hasActiveSelection > 0.5) {
+        vec2 cursorDist = abs(v_uv - u_commandPos);
+        float pixelSize = 1.0 / u_canvasResolution.x;
+        
+        // Crosshair parameters
+        float crossSize = 15.0 * pixelSize;    // Size of crosshair arms
+        float crossWidth = 2.0 * pixelSize;    // Width of crosshair lines
+        float gapSize = 4.0 * pixelSize;       // Gap in center
+        
+        // Horizontal line
+        bool onHorizontal = cursorDist.y < crossWidth && 
+                           cursorDist.x > gapSize && cursorDist.x < crossSize;
+        // Vertical line
+        bool onVertical = cursorDist.x < crossWidth && 
+                         cursorDist.y > gapSize && cursorDist.y < crossSize;
+        
+        if (onHorizontal || onVertical) {
+            // Animated pulse
+            float pulse = sin(u_time * 4.0) * 0.2 + 0.8;
+            vec3 crosshairColor = vec3(1.0, 0.85, 0.3) * pulse;  // Golden yellow
+            color = mix(color, crosshairColor, 0.9);
+        }
+        
+        // Center dot
+        float centerDist = length(cursorDist);
+        if (centerDist < 3.0 * pixelSize) {
+            color = vec3(1.0, 0.85, 0.3);  // Golden yellow
+        }
     }
     
     // Subtle vignette

@@ -1,5 +1,6 @@
 import { GPU } from './gpu/GPU.js';
 import { ComputeShader } from './gpu/ComputeShader.js';
+import { DataTexture } from './gpu/DataTexture.js';
 import { loadShader } from './shaders/load.js';
 import { CAGrid } from './ca/CAGrid.js';
 import { getNetworkSync } from './network/NetworkSync.js';
@@ -206,6 +207,11 @@ console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or swi
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
 
 // ============================================================================
+// Selection System - Selection state is stored directly in unit data (G channel bit 5)
+// ============================================================================
+// No separate texture needed - selection moves with units automatically
+
+// ============================================================================
 // Initialize Audio System
 // ============================================================================
 const audioReductionPipeline = new AudioReductionPipeline(GRID_SIZE, 4);
@@ -275,6 +281,32 @@ updateAudioButton();
 
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 
+// Encoding constants (must match GLSL)
+const COORD_PACK_BASE = 256.0;
+const MEMORY_PACK_BASE = 65536.0;
+const SELECTED_PACK_BASE = 32.0;  // Selection bit at position 5 in G channel
+const AGE_PACK_BASE = 64.0;       // Age starts at bit 6 (after selection bit)
+const COMMAND_FRESHNESS = 100.0;  // High freshness so command is prioritized
+
+// Helper to get selection bit from G channel
+function getUnitSelectedFromG(g) {
+    return Math.floor(g / SELECTED_PACK_BASE) % 2 >= 0.5;
+}
+
+// Helper to set selection bit in G channel
+function setUnitSelectionInG(g, selected) {
+    const holding = Math.floor(g) % 2;
+    const counter = Math.floor(g / 2) % 16;
+    const age = Math.floor(g / AGE_PACK_BASE);
+    return holding + counter * 2 + (selected ? SELECTED_PACK_BASE : 0) + age * AGE_PACK_BASE;
+}
+
+// Helper to pack coordinates (must match GLSL)
+function packCoords(x, y) {
+    if (x < 0 || y < 0) return -1;
+    return Math.floor(x) + Math.floor(y) * COORD_PACK_BASE;
+}
+
 // Helper to set a cell
 function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
     const idx = (y * GRID_SIZE + x) * 4;
@@ -282,6 +314,126 @@ function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
     data[idx + 1] = dataA;
     data[idx + 2] = dataB;
     data[idx + 3] = dataC;
+}
+
+// ============================================================================
+// Selection Management - Works directly with grid data
+// ============================================================================
+
+// Mark units in a region as selected (only current player's units)
+// Sets the selection bit (bit 5) in the G channel of each unit
+function markUnitsInRegion(region) {
+    const currentData = grid.download();
+    const unitType = currentPlayer === PLAYER_2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
+    
+    let unitsMarked = 0;
+    
+    for (let y = Math.max(0, region.y1); y <= Math.min(GRID_SIZE - 1, region.y2); y++) {
+        for (let x = Math.max(0, region.x1); x <= Math.min(GRID_SIZE - 1, region.x2); x++) {
+            const gridIdx = (y * GRID_SIZE + x) * 4;
+            const cellType = Math.floor(currentData[gridIdx] + 0.5);
+            
+            // Check if this is our unit
+            if (cellType === unitType) {
+                // Set the selection bit in G channel
+                currentData[gridIdx + 1] = setUnitSelectionInG(currentData[gridIdx + 1], true);
+                unitsMarked++;
+            }
+        }
+    }
+    
+    // Upload modified grid data
+    if (unitsMarked > 0) {
+        grid.upload(currentData);
+        console.log(`[Selection] Marked ${unitsMarked} units`);
+    }
+    
+    return unitsMarked;
+}
+
+// Clear all selections from the grid (clears selection bit for all units)
+function clearAllSelections() {
+    const currentData = grid.download();
+    const unitType = currentPlayer === PLAYER_2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
+    
+    let unitsCleared = 0;
+    
+    for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+            const gridIdx = (y * GRID_SIZE + x) * 4;
+            const cellType = Math.floor(currentData[gridIdx] + 0.5);
+            
+            // Check if this is our unit
+            if (cellType === unitType) {
+                // Check if currently selected
+                if (getUnitSelectedFromG(currentData[gridIdx + 1])) {
+                    // Clear the selection bit
+                    currentData[gridIdx + 1] = setUnitSelectionInG(currentData[gridIdx + 1], false);
+                    unitsCleared++;
+                }
+            }
+        }
+    }
+    
+    // Upload modified grid data
+    if (unitsCleared > 0) {
+        grid.upload(currentData);
+        console.log(`[Selection] Cleared ${unitsCleared} units`);
+    }
+    
+    return unitsCleared;
+}
+
+// No longer needed - selection now moves with units automatically in GPU
+// function updateSelectionForMovingUnits() { ... }
+
+// Apply a unit command - modify units that are marked as selected
+function applyUnitCommand(command) {
+    const { destX, destY, player } = command;
+    
+    // Download current grid state
+    const currentData = grid.download();
+    
+    // Determine unit type for this player
+    const unitType = player === PLAYER_2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
+    
+    let unitsCommanded = 0;
+    
+    // Iterate through entire grid looking for selected units
+    for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+            const gridIdx = (y * GRID_SIZE + x) * 4;
+            const cellType = Math.floor(currentData[gridIdx] + 0.5);
+            
+            // Check if this is our unit and if it's selected (bit 5 in G channel)
+            if (cellType === unitType && getUnitSelectedFromG(currentData[gridIdx + 1])) {
+                // Update the unit's factory position (home base) to the destination
+                // This allows units to move beyond their original distance limit
+                // Channel B (gridIdx + 2) stores the packed factory position
+                const newFactoryPos = packCoords(destX, destY);
+                currentData[gridIdx + 2] = newFactoryPos;
+                
+                // Encode the destination as memory with high freshness
+                const newMemory = packCoords(destX, destY) + COMMAND_FRESHNESS * MEMORY_PACK_BASE;
+                
+                // Update the unit's memory to point to destination
+                currentData[gridIdx + 3] = newMemory;
+                
+                unitsCommanded++;
+            }
+        }
+    }
+    
+    // Upload modified data
+    if (unitsCommanded > 0) {
+        grid.upload(currentData);
+        console.log(`[Command] Commanded ${unitsCommanded} units to move to (${destX}, ${destY})`);
+    } else {
+        console.log('[Command] No selected units found');
+    }
+    
+    // Don't clear selection - user can issue multiple commands to same units
+    // Selection is only cleared when user presses Escape
 }
 
 // Helper to check if a cell is empty (don't overwrite resources)
@@ -439,6 +591,17 @@ function screenToGrid(screenX, screenY) {
     };
 }
 
+// Inverse of screenToGrid - convert grid coords to screen coords
+function gridToScreen(gridX, gridY) {
+    const rect = canvas.getBoundingClientRect();
+    const normalizedX = gridX / GRID_SIZE;
+    const normalizedY = 1 - (gridY / GRID_SIZE);  // Y is inverted
+    return {
+        x: rect.left + normalizedX * rect.width,
+        y: rect.top + normalizedY * rect.height
+    };
+}
+
 // Update cursor overlay position and visibility
 function updateCursorOverlay() {
     if (shiftHeld) {
@@ -459,11 +622,68 @@ function updateCursorOverlay() {
     }
 }
 
+// ============================================================================
+// Unit Selection and Command System
+// ============================================================================
+
+let isSelecting = false;
+let selectionStart = null;
+let selectionEnd = null;
+let hasActiveSelection = false;
+let selectedRegion = null;  // {x1, y1, x2, y2} in grid coords
+
+// Active command storage (for GPU)
+let activeCommand = null;  // {sourceX1, sourceY1, sourceX2, sourceY2, destX, destY, player}
+
+// Selection box and command indicator are now rendered in the shader
+// (see render_metaballs.frag.glsl u_isSelecting, u_hasActiveSelection, etc.)
+
+// Add command-ping animation (for showCommandPing)
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes command-ping {
+        0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+        100% { transform: translate(-50%, -50%) scale(3); opacity: 0; }
+    }
+`;
+document.head.appendChild(style);
+
+// Show command destination ping effect
+function showCommandPing(screenX, screenY) {
+    const ping = document.createElement('div');
+    ping.style.cssText = `
+        position: fixed;
+        left: ${screenX}px;
+        top: ${screenY}px;
+        width: 20px;
+        height: 20px;
+        border: 3px solid #ffcc00;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 101;
+        animation: command-ping 0.5s ease-out forwards;
+    `;
+    document.body.appendChild(ping);
+    setTimeout(() => ping.remove(), 500);
+}
+
+function clearSelection() {
+    isSelecting = false;
+    hasActiveSelection = false;
+    selectedRegion = null;
+    selectionStart = null;
+    selectionEnd = null;
+    
+    // Clear selection bits in all units
+    clearAllSelections();
+}
+
 // Track mouse movement
 canvas.addEventListener('mousemove', (event) => {
     mouseX = event.clientX;
     mouseY = event.clientY;
     updateCursorOverlay();
+    // Selection box and command indicator are now rendered in shader
 });
 
 // Track shift key
@@ -471,6 +691,16 @@ window.addEventListener('keydown', (event) => {
     if (event.key === 'Shift') {
         shiftHeld = true;
         updateCursorOverlay();
+    }
+    // Escape clears selection and syncs to other players
+    if (event.key === 'Escape') {
+        if (hasActiveSelection) {
+            // Sync selection clear to other players
+            if (isMultiplayer && networkSync.isConnected) {
+                syncAction('clear_selection', { player: currentPlayer });
+            }
+        }
+        clearSelection();
     }
 });
 
@@ -481,7 +711,111 @@ window.addEventListener('keyup', (event) => {
     }
 });
 
+// Mouse down - start selection or set command destination
+canvas.addEventListener('mousedown', (event) => {
+    // Right click or ctrl+click - start selection
+    if (event.button === 2 || event.ctrlKey) {
+        event.preventDefault();
+        
+        // If we have an active selection, this click sets the destination
+        if (hasActiveSelection && selectedRegion) {
+            const destPos = screenToGrid(event.clientX, event.clientY);
+            
+            // Create command for the selected units
+            activeCommand = {
+                sourceX1: selectedRegion.x1,
+                sourceY1: selectedRegion.y1,
+                sourceX2: selectedRegion.x2,
+                sourceY2: selectedRegion.y2,
+                destX: destPos.x,
+                destY: destPos.y,
+                player: currentPlayer
+            };
+            
+            console.log('[Command] Sending units from', selectedRegion, 'to', destPos);
+            
+            // Show visual feedback
+            showCommandPing(event.clientX, event.clientY);
+            
+            // Apply command to units in the grid
+            applyUnitCommand(activeCommand);
+            
+            // Sync command to other players
+            if (isMultiplayer && networkSync.isConnected) {
+                syncAction('unit_command', activeCommand);
+            }
+            
+            // Don't clear selection - user can issue multiple commands to same units
+            // Selection is only cleared when user presses Escape
+            return;
+        }
+        
+        // Start new selection
+        isSelecting = true;
+        selectionStart = { x: event.clientX, y: event.clientY };
+        selectionEnd = null;
+        hasActiveSelection = false;
+        selectedRegion = null;
+    }
+});
+
+// Mouse up - finalize selection
+canvas.addEventListener('mouseup', (event) => {
+    if (isSelecting && (event.button === 2 || event.ctrlKey)) {
+        selectionEnd = { x: event.clientX, y: event.clientY };
+        
+        // Convert to grid coordinates
+        const start = screenToGrid(selectionStart.x, selectionStart.y);
+        const end = screenToGrid(selectionEnd.x, selectionEnd.y);
+        
+        selectedRegion = {
+            x1: Math.min(start.x, end.x),
+            y1: Math.min(start.y, end.y),
+            x2: Math.max(start.x, end.x),
+            y2: Math.max(start.y, end.y)
+        };
+        
+        // Check if selection is large enough (at least 2x2)
+        if (selectedRegion.x2 - selectedRegion.x1 >= 1 && selectedRegion.y2 - selectedRegion.y1 >= 1) {
+            // Mark units in the selection region in the selection texture
+            const unitsMarked = markUnitsInRegion(selectedRegion);
+            
+            if (unitsMarked > 0) {
+                hasActiveSelection = true;
+                console.log('[Selection] Selected region:', selectedRegion, 'with', unitsMarked, 'units');
+                // Shader shows selected units directly via u_hasActiveSelection
+                
+                // Sync selection to network so other player's actions don't clear it
+                if (isMultiplayer && networkSync.isConnected) {
+                    syncAction('unit_selection', { 
+                        player: currentPlayer,
+                        region: selectedRegion 
+                    });
+                }
+            } else {
+                console.log('[Selection] No units in region');
+                clearSelection();
+            }
+        } else {
+            clearSelection();
+        }
+        
+        isSelecting = false;
+        // Selection box is rendered in shader, no DOM cleanup needed
+    }
+});
+
+// Prevent context menu on canvas
+canvas.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+});
+
 canvas.addEventListener('click', async (event) => {
+    // If we're in selection mode or have active selection, don't do normal click
+    if (isSelecting || hasActiveSelection) {
+        return;
+    }
+    
     // Auto-initialize audio on first user interaction (browser requires user gesture)
     if (!audioInitialized) {
         initAudio(); // Don't await - let it init in background
@@ -887,8 +1221,23 @@ networkSync.onStateReceived = (syncData) => {
             const url = new URL(window.location);
             url.searchParams.delete('player');
             window.location.href = url.toString();
+        } else if (action.type === 'unit_command') {
+            // Other player issued a unit command
+            console.log(`[Multiplayer] Player ${syncData.playerId} issued unit command`);
+            // The grid state is already applied, no need to reapply the command
+        } else if (action.type === 'clear_selection') {
+            // Other player cleared their selection
+            console.log(`[Multiplayer] Player ${syncData.playerId} cleared selection`);
+            // No action needed - selections are local to each player
+        } else if (action.type === 'unit_selection') {
+            // Other player made a selection
+            console.log(`[Multiplayer] Player ${syncData.playerId} selected units in region`);
+            // No action needed - selections are local to each player
         }
     }
+    
+    // Selection is stored in unit data (G channel bit 5) and persists automatically
+    // No need to re-apply selection - it's part of the grid state
     
     console.log(`[Multiplayer] State applied. Action: ${action?.type || 'unknown'}`);
 };
@@ -1397,6 +1746,8 @@ function renderLoop() {
         logStats();
     }
     
+    // Selection is now stored in unit data (G channel bit 5) and moves automatically
+    
     // ========================================================================
     // Audio: Run reduction pipeline and update audio engine
     // ========================================================================
@@ -1426,6 +1777,36 @@ function renderLoop() {
     renderShader.setFloat('u_metaballScale', METABALL_SCALE);  // Metaball blob scale
     renderShader.setInt('u_frameCount', frameCount);  // Number of frames to blend
     renderShader.setFloat('u_temporalBlend', TEMPORAL_BLEND);  // Temporal blend strength
+    
+    // Selection system uniforms
+    // Note: Selection is now stored in unit data (G channel bit 5), no separate texture needed
+    renderShader.setFloat('u_currentPlayer', currentPlayer);  // 1.0 or 2.0
+    
+    // Selection UI uniforms (rendered in shader instead of DOM)
+    renderShader.setFloat('u_isSelecting', isSelecting ? 1.0 : 0.0);
+    renderShader.setFloat('u_hasActiveSelection', hasActiveSelection ? 1.0 : 0.0);
+    
+    // Convert screen coordinates to UV (0-1) for shader
+    const rect = canvas.getBoundingClientRect();
+    const screenToUV = (x, y) => ({
+        x: (x - rect.left) / rect.width,
+        y: 1.0 - (y - rect.top) / rect.height  // Flip Y for shader
+    });
+    
+    if (isSelecting && selectionStart) {
+        const startUV = screenToUV(selectionStart.x, selectionStart.y);
+        const endUV = screenToUV(mouseX, mouseY);
+        renderShader.setVec2('u_selectionStart', startUV.x, startUV.y);
+        renderShader.setVec2('u_selectionEnd', endUV.x, endUV.y);
+    } else {
+        renderShader.setVec2('u_selectionStart', 0.0, 0.0);
+        renderShader.setVec2('u_selectionEnd', 0.0, 0.0);
+    }
+    
+    // Command indicator position (cursor when selection is active)
+    const cursorUV = screenToUV(mouseX, mouseY);
+    renderShader.setVec2('u_commandPos', cursorUV.x, cursorUV.y);
+    
     renderShader.dispatch();
 
     renderFrameCount++;

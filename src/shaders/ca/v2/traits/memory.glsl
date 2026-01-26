@@ -321,8 +321,8 @@ bool isHomesick(MemoryState mem) {
 // Encode a unit with MemoryState object (cleaner API)
 // ============================================================================
 
-vec4 encodeUnit(int player, bool holding, int counter, float age, vec2 factoryPos, MemoryState mem) {
-    return encodeUnitRaw(player, holding, counter, age, factoryPos, mem.position, mem.freshness, mem.homesickTimer);
+vec4 encodeUnit(int player, bool holding, int counter, bool selected, float age, vec2 factoryPos, MemoryState mem) {
+    return encodeUnitRaw(player, holding, counter, selected, age, factoryPos, mem.position, mem.freshness, mem.homesickTimer);
 }
 
 #endif

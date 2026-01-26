@@ -93,9 +93,10 @@ vec4 encodeResource(float amount) {
 
 // ============================================================================
 // UNIT
-// G = holding (bit 0) + stationaryCounter * 2 + age * 32
+// G = holding (bit 0) + counter*2 (bits 1-4) + selected*32 (bit 5) + age*64 (bits 6+)
 //     holding: 0 or 1
 //     counter: 0-15 (4 bits)
+//     selected: 0 or 1 (1 bit) - UI selection state
 //     age: 0-∞ (hunger/starvation counter)
 // B = packed factory location
 // A = packed resource memory with freshness, OR negative homesick timer
@@ -111,8 +112,12 @@ int getUnitCounter(vec4 raw) {
     return int(mod(floor(raw.g / 2.0), 16.0));  // 4 bits for counter (0-15)
 }
 
+bool getUnitSelected(vec4 raw) {
+    return mod(floor(raw.g / SELECTED_PACK_BASE), 2.0) > 0.5;  // bit 5
+}
+
 float getUnitAge(vec4 raw) {
-    return floor(raw.g / AGE_PACK_BASE);
+    return floor(raw.g / AGE_PACK_BASE);  // bits 6+
 }
 
 vec2 getUnitFactory(vec4 raw) {
@@ -139,8 +144,8 @@ float getUnitHomesickTimer(vec4 raw) {
 // Forward declare MemoryState struct (defined in memory.glsl)
 // We use raw components here to avoid circular dependency
 // homesickTimer is only used when freshness <= 0
-vec4 encodeUnitRaw(int player, bool holding, int counter, float age, vec2 factoryPos, vec2 memoryPos, float freshness, float homesickTimer) {
-    float g = (holding ? 1.0 : 0.0) + float(counter) * 2.0 + age * AGE_PACK_BASE;
+vec4 encodeUnitRaw(int player, bool holding, int counter, bool selected, float age, vec2 factoryPos, vec2 memoryPos, float freshness, float homesickTimer) {
+    float g = (holding ? 1.0 : 0.0) + float(counter) * 2.0 + (selected ? SELECTED_PACK_BASE : 0.0) + age * AGE_PACK_BASE;
     float b = packCoords(factoryPos);
     float a;
     if (freshness > 0.0 && memoryPos.x >= 0.0) {
@@ -154,12 +159,24 @@ vec4 encodeUnitRaw(int player, bool holding, int counter, float age, vec2 factor
 }
 
 vec4 encodeUnitSimple(int player, bool holding, int counter, vec2 factoryPos) {
-    return encodeUnitRaw(player, holding, counter, 0.0, factoryPos, vec2(-1.0), 0.0, 0.0);
+    return encodeUnitRaw(player, holding, counter, false, 0.0, factoryPos, vec2(-1.0), 0.0, 0.0);
 }
 
 // Encode a newly spawned unit with negative age for "newborn glow" effect
 vec4 encodeNewbornUnit(int player, vec2 factoryPos) {
-    return encodeUnitRaw(player, false, 0, NEWBORN_AGE, factoryPos, vec2(-1.0), 0.0, 0.0);
+    return encodeUnitRaw(player, false, 0, false, NEWBORN_AGE, factoryPos, vec2(-1.0), 0.0, 0.0);
+}
+
+// Re-encode a unit preserving all state but changing selection
+vec4 encodeUnitWithSelection(vec4 existingUnit, int player, bool selected) {
+    bool holding = getUnitHolding(existingUnit);
+    int counter = getUnitCounter(existingUnit);
+    float age = getUnitAge(existingUnit);
+    vec2 factoryPos = getUnitFactory(existingUnit);
+    vec2 memoryPos = getUnitMemoryPos(existingUnit);
+    float freshness = getUnitMemoryFreshness(existingUnit);
+    float homesickTimer = getUnitHomesickTimer(existingUnit);
+    return encodeUnitRaw(player, holding, counter, selected, age, factoryPos, memoryPos, freshness, homesickTimer);
 }
 
 // ============================================================================

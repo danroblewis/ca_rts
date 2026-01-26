@@ -106,6 +106,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
                 getPlayer(myType),
                 false,  // no longer holding
                 0,      // reset counter
+                getUnitSelected(myRaw),  // preserve selection
                 0.0,    // reset age (just deposited successfully)
                 getUnitFactory(myRaw),
                 mem
@@ -144,6 +145,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
                 getPlayer(myType),
                 false,  // no longer holding
                 0,      // reset counter
+                getUnitSelected(myRaw),  // preserve selection
                 0.0,    // reset age (just built successfully)
                 getUnitFactory(myRaw),
                 mem
@@ -181,6 +183,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
                 getPlayer(myType),
                 true,   // now holding a resource
                 0,      // reset counter
+                getUnitSelected(myRaw),  // preserve selection
                 0.0,    // reset age
                 getUnitFactory(myRaw),
                 mem
@@ -210,6 +213,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
                 getPlayer(myType),
                 true,   // now holding a resource (plundered!)
                 0,      // reset counter
+                getUnitSelected(myRaw),  // preserve selection
                 0.0,    // reset age
                 getUnitFactory(myRaw),
                 mem
@@ -310,6 +314,7 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
             myPlayer,
             holding,
             newCounter,
+            getUnitSelected(myRaw),  // preserve selection
             newAge,
             factoryPos,
             mem
