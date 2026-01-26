@@ -45,6 +45,11 @@ const int DIR_RIGHT = 1;
 const int DIR_UP = 2;
 const int DIR_LEFT = 3;
 const int DIR_DOWN = 4;
+// Diagonal directions
+const int DIR_UP_RIGHT = 5;
+const int DIR_UP_LEFT = 6;
+const int DIR_DOWN_LEFT = 7;
+const int DIR_DOWN_RIGHT = 8;
 
 // ============================================================================
 // COORDINATE PACKING
@@ -87,7 +92,7 @@ const float HOMESICK_THRESHOLD = 1000.0;    // Steps before returning to factory
 // FACTORY / SPAWNING
 // ============================================================================
 
-const float SPAWN_COST = 25.0;  // Resources needed to spawn a unit
+const float SPAWN_COST = 50.0;  // Resources needed to spawn a unit
 
 // ============================================================================
 // FACTORY BUILDING (unbuilt factories need to be constructed)

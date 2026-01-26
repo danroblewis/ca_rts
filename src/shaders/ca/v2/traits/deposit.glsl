@@ -70,7 +70,8 @@ DepositResult evaluateDeposit(vec2 myPos, sampler2D state, vec2 resolution) {
         int myPlayer = getPlayer(myType);
         
         // Check neighbors for my factory (must be BUILT and same player)
-        for (int d = 1; d <= 4; d++) {
+        // Check all 8 directions since units can move diagonally
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
@@ -100,7 +101,8 @@ DepositResult evaluateDeposit(vec2 myPos, sampler2D state, vec2 resolution) {
             return result;
         }
         
-        for (int d = 1; d <= 4; d++) {
+        // Check all 8 directions since units can move diagonally
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
@@ -124,7 +126,8 @@ DepositResult evaluateDeposit(vec2 myPos, sampler2D state, vec2 resolution) {
 int countDeposits(vec2 factoryPos, vec2 factorySelfPos, int factoryPlayer, sampler2D state, vec2 resolution) {
     int count = 0;
     
-    for (int d = 1; d <= 4; d++) {
+    // Check all 8 directions since units can move diagonally
+    for (int d = 1; d <= 8; d++) {
         vec2 neighborPos = factoryPos + dirToOffset(d);
         vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
         int neighborType = getType(neighborRaw);
@@ -164,7 +167,8 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
         int myPlayer = getPlayer(myType);
         
         // First check if I would deposit to my own BUILT factory (that takes priority)
-        for (int d = 1; d <= 4; d++) {
+        // Check all 8 directions since units can move diagonally
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
@@ -181,7 +185,8 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
         
         // Check neighbors for ANY unbuilt factory cells that aren't at max build
         // Units can build ANY player's unbuilt factory
-        for (int d = 1; d <= 4; d++) {
+        // Check all 8 directions since units can move diagonally
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
@@ -218,7 +223,8 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
             return result;  // This cell is already at max
         }
         
-        for (int d = 1; d <= 4; d++) {
+        // Check all 8 directions since units can move diagonally
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
@@ -229,7 +235,7 @@ BuildResult evaluateBuild(vec2 myPos, sampler2D state, vec2 resolution) {
                 
                 // Check if they would deposit to their BUILT factory instead
                 bool wouldDeposit = false;
-                for (int d2 = 1; d2 <= 4; d2++) {
+                for (int d2 = 1; d2 <= 8; d2++) {
                     vec2 checkPos = neighborPos + dirToOffset(d2);
                     vec4 checkRaw = texture(state, (checkPos + 0.5) / resolution);
                     int checkType = getType(checkRaw);
@@ -280,7 +286,8 @@ int countBuilds(vec2 factoryCellPos, sampler2D state, vec2 resolution) {
         return 0;
     }
     
-    for (int d = 1; d <= 4; d++) {
+    // Check all 8 directions since units can move diagonally
+    for (int d = 1; d <= 8; d++) {
         vec2 neighborPos = factoryCellPos + dirToOffset(d);
         vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
         int neighborType = getType(neighborRaw);
@@ -291,7 +298,7 @@ int countBuilds(vec2 factoryCellPos, sampler2D state, vec2 resolution) {
             
             // Check if they would deposit to their BUILT factory instead
             bool wouldDeposit = false;
-            for (int d2 = 1; d2 <= 4; d2++) {
+            for (int d2 = 1; d2 <= 8; d2++) {
                 vec2 checkPos = neighborPos + dirToOffset(d2);
                 vec4 checkRaw = texture(state, (checkPos + 0.5) / resolution);
                 int checkType = getType(checkRaw);

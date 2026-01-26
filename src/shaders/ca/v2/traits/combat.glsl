@@ -53,8 +53,8 @@ CombatResult evaluateCombat(vec2 myPos, float time, sampler2D state, vec2 resolu
     
     int myPlayer = getPlayer(myType);
     
-    // Check all 4 cardinal neighbors for enemy units
-    for (int d = 1; d <= 4; d++) {
+    // Check all 8 neighbors (cardinal + diagonal) for enemy units
+    for (int d = 1; d <= 8; d++) {
         vec2 neighborPos = myPos + dirToOffset(d);
         vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
         int neighborType = getType(neighborRaw);

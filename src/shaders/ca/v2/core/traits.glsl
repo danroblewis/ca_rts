@@ -60,6 +60,11 @@ vec2 dirToOffset(int dir) {
     if (dir == DIR_UP) return vec2(0.0, 1.0);
     if (dir == DIR_LEFT) return vec2(-1.0, 0.0);
     if (dir == DIR_DOWN) return vec2(0.0, -1.0);
+    // Diagonal directions
+    if (dir == DIR_UP_RIGHT) return vec2(1.0, 1.0);
+    if (dir == DIR_UP_LEFT) return vec2(-1.0, 1.0);
+    if (dir == DIR_DOWN_LEFT) return vec2(-1.0, -1.0);
+    if (dir == DIR_DOWN_RIGHT) return vec2(1.0, -1.0);
     return vec2(0.0);
 }
 
@@ -68,6 +73,11 @@ int oppositeDir(int dir) {
     if (dir == DIR_UP) return DIR_DOWN;
     if (dir == DIR_LEFT) return DIR_RIGHT;
     if (dir == DIR_DOWN) return DIR_UP;
+    // Diagonal opposites
+    if (dir == DIR_UP_RIGHT) return DIR_DOWN_LEFT;
+    if (dir == DIR_UP_LEFT) return DIR_DOWN_RIGHT;
+    if (dir == DIR_DOWN_LEFT) return DIR_UP_RIGHT;
+    if (dir == DIR_DOWN_RIGHT) return DIR_UP_LEFT;
     return DIR_NONE;
 }
 

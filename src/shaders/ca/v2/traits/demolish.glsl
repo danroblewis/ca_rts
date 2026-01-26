@@ -41,8 +41,8 @@ DemolishResult evaluateDemolish(vec2 myPos, sampler2D state, vec2 resolution) {
     // CASE 1: I'm a non-holding unit - am I demolishing?
     // ========================================
     if (myType == TYPE_UNIT && !getUnitHolding(myRaw)) {
-        // Check neighbors for demolish cells
-        for (int d = 1; d <= 4; d++) {
+        // Check neighbors for demolish cells (all 8 directions)
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             
@@ -59,7 +59,8 @@ DemolishResult evaluateDemolish(vec2 myPos, sampler2D state, vec2 resolution) {
     // CASE 2: I'm a demolish cell - is a unit demolishing me?
     // ========================================
     if (myType == TYPE_DEMOLISH) {
-        for (int d = 1; d <= 4; d++) {
+        // Check all 8 directions since units can move diagonally
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             

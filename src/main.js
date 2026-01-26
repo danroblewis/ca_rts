@@ -461,100 +461,100 @@ function generateMap(seed) {
     console.log(`Generating map with seed: ${seed}`);
     mapSeed = seed;
     seededRandom = mulberry32(seed);
-    
-    // Fill with empty
-    data.fill(0);
-    
-    // Place resources in blobs/clusters (more realistic RTS style)
-    let totalResources = 0;
-    
-    for (let b = 0; b < NUM_BLOBS; b++) {
-        // Pick blob center randomly
+
+// Fill with empty
+data.fill(0);
+
+// Place resources in blobs/clusters (more realistic RTS style)
+let totalResources = 0;
+
+for (let b = 0; b < NUM_BLOBS; b++) {
+    // Pick blob center randomly
         const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
         const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-        
-        // Random radius for this blob
+    
+    // Random radius for this blob
         const radius = BLOB_MIN_RADIUS + seededRandom() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
-        
-        // Fill the blob with resources
-        for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
-            for (let dx = -Math.ceil(radius); dx <= Math.ceil(radius); dx++) {
-                const x = centerX + dx;
-                const y = centerY + dy;
-                
-                // Check bounds
-                if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
-                
-                // Check if within blob radius (with some noise for organic shape)
-                const dist = Math.sqrt(dx * dx + dy * dy);
+    
+    // Fill the blob with resources
+    for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
+        for (let dx = -Math.ceil(radius); dx <= Math.ceil(radius); dx++) {
+            const x = centerX + dx;
+            const y = centerY + dy;
+            
+            // Check bounds
+            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
+            
+            // Check if within blob radius (with some noise for organic shape)
+            const dist = Math.sqrt(dx * dx + dy * dy);
                 const noiseRadius = radius * (0.7 + seededRandom() * 0.6); // Irregular edges
-                if (dist > noiseRadius) continue;
-                
-                // Density check
+            if (dist > noiseRadius) continue;
+            
+            // Density check
                 if (seededRandom() > BLOB_DENSITY) continue;
-                
-                setCell(x, y, CELL_RESOURCE, 1.0);
-                totalResources++;
-            }
+            
+            setCell(x, y, CELL_RESOURCE, 1.0);
+            totalResources++;
         }
     }
-    
-    // Generate Walls - random barriers and obstacles
-    let totalWalls = 0;
-    
-    // Generate wall lines (horizontal or vertical)
-    for (let i = 0; i < NUM_WALL_LINES; i++) {
+}
+
+// Generate Walls - random barriers and obstacles
+let totalWalls = 0;
+
+// Generate wall lines (horizontal or vertical)
+for (let i = 0; i < NUM_WALL_LINES; i++) {
         const horizontal = seededRandom() > 0.5;
         const length = Math.floor(WALL_MIN_LENGTH + seededRandom() * (WALL_MAX_LENGTH - WALL_MIN_LENGTH));
-        
-        // Pick starting position (leave margin from edges)
+    
+    // Pick starting position (leave margin from edges)
         const startX = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
         const startY = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
+    
+    for (let j = 0; j < length; j++) {
+        const x = horizontal ? startX + j : startX;
+        const y = horizontal ? startY : startY + j;
         
-        for (let j = 0; j < length; j++) {
-            const x = horizontal ? startX + j : startX;
-            const y = horizontal ? startY : startY + j;
+        // Only place if cell is empty (don't overwrite resources)
+        if (x >= 1 && x < GRID_SIZE - 1 && y >= 1 && y < GRID_SIZE - 1 && isEmpty(x, y)) {
+            setCell(x, y, CELL_WALL);
+            totalWalls++;
+        }
+    }
+}
+
+// Generate small wall clusters
+for (let b = 0; b < NUM_WALL_BLOBS; b++) {
+        const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
+        const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
+    
+    for (let dy = -WALL_BLOB_RADIUS; dy <= WALL_BLOB_RADIUS; dy++) {
+        for (let dx = -WALL_BLOB_RADIUS; dx <= WALL_BLOB_RADIUS; dx++) {
+            const x = centerX + dx;
+            const y = centerY + dy;
             
-            // Only place if cell is empty (don't overwrite resources)
-            if (x >= 1 && x < GRID_SIZE - 1 && y >= 1 && y < GRID_SIZE - 1 && isEmpty(x, y)) {
+            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
+            
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > WALL_BLOB_RADIUS * 0.8) continue;
+            
+            // 70% density
+                if (seededRandom() > 0.7) continue;
+            
+            if (isEmpty(x, y)) {
                 setCell(x, y, CELL_WALL);
                 totalWalls++;
             }
         }
     }
-    
-    // Generate small wall clusters
-    for (let b = 0; b < NUM_WALL_BLOBS; b++) {
-        const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-        const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-        
-        for (let dy = -WALL_BLOB_RADIUS; dy <= WALL_BLOB_RADIUS; dy++) {
-            for (let dx = -WALL_BLOB_RADIUS; dx <= WALL_BLOB_RADIUS; dx++) {
-                const x = centerX + dx;
-                const y = centerY + dy;
-                
-                if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
-                
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist > WALL_BLOB_RADIUS * 0.8) continue;
-                
-                // 70% density
-                if (seededRandom() > 0.7) continue;
-                
-                if (isEmpty(x, y)) {
-                    setCell(x, y, CELL_WALL);
-                    totalWalls++;
-                }
-            }
-        }
-    }
-    
-    grid.upload(data);
-    
+}
+
+grid.upload(data);
+
     console.log(`Map generated:`);
-    console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
+console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
     console.log(`  ${totalResources} resources scattered`);
-    console.log(`  ${totalWalls} walls placed`);
+console.log(`  ${totalWalls} walls placed`);
     
     return { totalResources, totalWalls };
 }
@@ -607,7 +607,7 @@ function screenToGrid(screenX, screenY) {
 
 // Inverse of screenToGrid - convert grid coords to screen coords
 function gridToScreen(gridX, gridY) {
-    const rect = canvas.getBoundingClientRect();
+        const rect = canvas.getBoundingClientRect();
     const normalizedX = gridX / GRID_SIZE;
     const normalizedY = 1 - (gridY / GRID_SIZE);  // Y is inverted
     return {
@@ -866,11 +866,11 @@ canvas.addEventListener('click', async (event) => {
                         markedCount++;
                     } else {
                         // Unbuilt factory cell with 0 progress: delete immediately
-                        currentData[idx + 0] = CELL_EMPTY;
-                        currentData[idx + 1] = 0;
-                        currentData[idx + 2] = 0;
-                        currentData[idx + 3] = 0;
-                        deletedCount++;
+                    currentData[idx + 0] = CELL_EMPTY;
+                    currentData[idx + 1] = 0;
+                    currentData[idx + 2] = 0;
+                    currentData[idx + 3] = 0;
+                    deletedCount++;
                     }
                 }
             }
@@ -984,7 +984,7 @@ canvas.addEventListener('click', async (event) => {
                 currentData[idx + 0] = factoryType;
                 currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;
                 currentData[idx + 2] = centerX;
-                currentData[idx + 3] = centerY;
+                    currentData[idx + 3] = centerY;
             }
         }
         
@@ -1878,7 +1878,7 @@ function renderLoop() {
     // Run simulation step if synced mode
     if (SYNC_SIM_WITH_RENDER) {
         for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
-            simulationStep();
+        simulationStep();
         }
         logStats();
     }

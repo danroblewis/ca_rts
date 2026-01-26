@@ -32,7 +32,8 @@ struct MemoryState {
 // ============================================================================
 
 bool hasAdjacentResource(vec2 pos, sampler2D state, vec2 resolution) {
-    for (int d = 1; d <= 4; d++) {
+    // Check all 8 directions since units can move diagonally
+    for (int d = 1; d <= 8; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
@@ -132,7 +133,8 @@ vec2 findVisibleFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution
 // ============================================================================
 
 bool isAdjacentToOwnFactory(vec2 pos, vec2 factoryPos, sampler2D state, vec2 resolution) {
-    for (int d = 1; d <= 4; d++) {
+    // Check all 8 directions since units can move diagonally
+    for (int d = 1; d <= 8; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);

@@ -48,8 +48,8 @@ AttackResult evaluateAttack(vec2 myPos, sampler2D state, vec2 resolution) {
     if (isUnit(myType) && !getUnitHolding(myRaw)) {
         int myPlayer = getPlayer(myType);
         
-        // Check neighbors for enemy factories
-        for (int d = 1; d <= 4; d++) {
+        // Check neighbors for enemy factories (all 8 directions)
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
@@ -75,7 +75,8 @@ AttackResult evaluateAttack(vec2 myPos, sampler2D state, vec2 resolution) {
     if (isFactory(myType)) {
         int myPlayer = getPlayer(myType);
         
-        for (int d = 1; d <= 4; d++) {
+        // Check all 8 directions since units can move diagonally
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
@@ -102,7 +103,8 @@ AttackResult evaluateAttack(vec2 myPos, sampler2D state, vec2 resolution) {
 int countAttacks(vec2 factoryPos, int factoryPlayer, sampler2D state, vec2 resolution) {
     int attacks = 0;
     
-    for (int d = 1; d <= 4; d++) {
+    // Check all 8 directions since units can move diagonally
+    for (int d = 1; d <= 8; d++) {
         vec2 neighborPos = factoryPos + dirToOffset(d);
         vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
         int neighborType = getType(neighborRaw);

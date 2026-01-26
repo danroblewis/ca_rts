@@ -87,8 +87,9 @@ vec2 findResource(vec2 pos, sampler2D state, vec2 resolution) {
 // Note: findNearbyMemory is now in memory.glsl
 
 // Check if adjacent to own factory (by position match and player)
+// Checks all 8 directions since units can move diagonally
 bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, int myPlayer, sampler2D state, vec2 resolution) {
-    for (int d = 1; d <= 4; d++) {
+    for (int d = 1; d <= 8; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
@@ -106,8 +107,9 @@ bool isAdjacentToFactory(vec2 pos, vec2 factoryPos, int myPlayer, sampler2D stat
 }
 
 // Check if adjacent to a buildable (unbuilt) factory OF SAME PLAYER (for holding units to build instead of move)
+// Checks all 8 directions since units can move diagonally
 bool isAdjacentToBuildableFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
-    for (int d = 1; d <= 4; d++) {
+    for (int d = 1; d <= 8; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
@@ -214,8 +216,9 @@ vec2 findVisibleEnemyFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resol
 }
 
 // Check if adjacent to an enemy factory (for attacking)
+// Checks all 8 directions since units can move diagonally
 bool isAdjacentToEnemyFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
-    for (int d = 1; d <= 4; d++) {
+    for (int d = 1; d <= 8; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
@@ -360,6 +363,14 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
         
         if (myDir != DIR_NONE) {
             vec2 targetPos = myPos + dirToOffset(myDir);
+            
+            // CRITICAL: Check bounds - don't move off the map!
+            if (targetPos.x < 0.0 || targetPos.y < 0.0 || 
+                targetPos.x >= resolution.x || targetPos.y >= resolution.y) {
+                // Out of bounds, can't move there - stay in place
+                return result;
+            }
+            
             vec4 targetRaw = texture(state, (targetPos + 0.5) / resolution);
             int targetType = getType(targetRaw);
             
@@ -376,10 +387,16 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
                 bool iWin = true;
                 float myPriority = getPriority(myPos, resolution);
                 
-                // Check all cells that might also want to move to targetPos
-                for (int d = 1; d <= 4; d++) {
+                // Check all cells that might also want to move to targetPos (8 directions)
+                for (int d = 1; d <= 8; d++) {
                     vec2 competitorPos = targetPos + dirToOffset(d);
                     if (distance(competitorPos, myPos) < 0.5) continue;  // Skip self
+                    
+                    // Skip out-of-bounds competitors
+                    if (competitorPos.x < 0.0 || competitorPos.y < 0.0 || 
+                        competitorPos.x >= resolution.x || competitorPos.y >= resolution.y) {
+                        continue;
+                    }
                     
                     vec4 competitorRaw = texture(state, (competitorPos + 0.5) / resolution);
                     if (!isMobile(getType(competitorRaw))) continue;
@@ -412,9 +429,16 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
     // CASE 2: I'm empty/minable - is someone moving into me?
     // ========================================
     if (myType == TYPE_EMPTY || isMinable(myType)) {
-        // Check each neighbor
-        for (int d = 1; d <= 4; d++) {
+        // Check each neighbor (all 8 directions since units can move diagonally)
+        for (int d = 1; d <= 8; d++) {
             vec2 neighborPos = myPos + dirToOffset(d);
+            
+            // Skip out-of-bounds neighbors
+            if (neighborPos.x < 0.0 || neighborPos.y < 0.0 || 
+                neighborPos.x >= resolution.x || neighborPos.y >= resolution.y) {
+                continue;
+            }
+            
             vec4 neighborRaw = texture(state, (neighborPos + 0.5) / resolution);
             int neighborType = getType(neighborRaw);
             
@@ -435,9 +459,16 @@ MovementResult evaluateMovement(vec2 myPos, sampler2D state, vec2 resolution, fl
                 bool theyWin = true;
                 float theirPriority = getPriority(neighborPos, resolution);
                 
-                for (int d2 = 1; d2 <= 4; d2++) {
+                // Check all 8 directions
+                for (int d2 = 1; d2 <= 8; d2++) {
                     vec2 otherPos = myPos + dirToOffset(d2);
                     if (distance(otherPos, neighborPos) < 0.5) continue;
+                    
+                    // Skip out-of-bounds positions
+                    if (otherPos.x < 0.0 || otherPos.y < 0.0 || 
+                        otherPos.x >= resolution.x || otherPos.y >= resolution.y) {
+                        continue;
+                    }
                     
                     vec4 otherRaw = texture(state, (otherPos + 0.5) / resolution);
                     if (!isMobile(getType(otherRaw))) continue;
