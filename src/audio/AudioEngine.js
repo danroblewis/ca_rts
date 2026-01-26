@@ -402,7 +402,9 @@ export class AudioEngine {
                 ", explosion",
                 params.explosionRate !== undefined ? Math.floor(params.explosionRate * 100) / 100 : undefined,
                 ", depletion",
-                params.depletionRate !== undefined ? Math.floor(params.depletionRate * 100) / 100 : undefined
+                params.depletionRate !== undefined ? Math.floor(params.depletionRate * 100) / 100 : undefined,
+                ", islands",
+                params.islandDepletion !== undefined ? params.islandDepletion : 0
             );
         }
         // === END TEMPORARY DEBUG ===
@@ -441,8 +443,14 @@ export class AudioEngine {
             console.log(`[Audio] Explosion triggered: rate=${params.explosionRate.toFixed(2)}`);
             this.tryPlayOneShot('explosion', params.explosionRate);
         }
-        if (params.depletionRate > 0.3) {
-            console.log(`[Audio] Resource depleted! rate=${params.depletionRate.toFixed(2)}`);
+        // JFA-based accurate island depletion (preferred)
+        if (params.islandDepletion > 0) {
+            console.log(`[Audio] Island cleared! (JFA detected ${params.islandDepletion} islands)`);
+            this.tryPlayOneShot('depletion', params.islandDepletion);
+        }
+        // Fallback heuristic-based depletion (if JFA misses it)
+        else if (params.depletionRate > 0.3) {
+            console.log(`[Audio] Resource depleted (heuristic)! rate=${params.depletionRate.toFixed(2)}`);
             this.tryPlayOneShot('depletion', params.depletionRate);
         }
     }
