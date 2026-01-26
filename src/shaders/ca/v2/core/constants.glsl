@@ -85,7 +85,7 @@ const float HOMESICK_THRESHOLD = 1000.0;    // Steps before returning to factory
 // FACTORY / SPAWNING
 // ============================================================================
 
-const float SPAWN_COST = 50.0;  // Resources needed to spawn a unit
+const float SPAWN_COST = 25.0;  // Resources needed to spawn a unit
 
 // ============================================================================
 // FACTORY BUILDING (unbuilt factories need to be constructed)

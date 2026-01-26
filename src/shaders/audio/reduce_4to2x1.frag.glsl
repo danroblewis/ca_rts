@@ -7,7 +7,7 @@ precision highp float;
  * Final reduction that outputs sound parameters directly.
  * 
  * Input (4x4 with deltas):
- *   R: Δ World Resources    G: Δ Units    B: Combat    A: Factory Activity
+ *   R: Δ World Resources    G: Δ Units    B: Combat+Depletion*100    A: Factory Activity
  *   
  * Output (2x1 = 2 pixels):
  *   Pixel 0 (Continuous loop volumes, 0.0-1.0):
@@ -20,7 +20,7 @@ precision highp float;
  *     R: spawn_rate        - Number of spawns (0-5+)
  *     G: explosion_rate    - Number of factory cells destroyed (0-3+)
  *     B: ambient_intensity - Overall activity level
- *     A: reserved
+ *     A: depletion_rate    - Resource blobs fully depleted (0-5+)
  */
 
 uniform sampler2D u_deltas;         // 4x4 delta texture
@@ -47,13 +47,21 @@ void main() {
     float totalDeltaUnits = 0.0;
     float totalCombat = 0.0;
     float totalFactoryActivity = 0.0;
+    float totalDepletionEvents = 0.0;
     
     for (float y = 0.0; y < 4.0; y += 1.0) {
         for (float x = 0.0; x < 4.0; x += 1.0) {
             vec4 delta = texture(u_deltas, (vec2(x, y) + 0.5) / u_inputResolution);
             totalDeltaResources += delta.r;
             totalDeltaUnits += delta.g;
-            totalCombat += delta.b;
+            
+            // Unpack combat and depletion from B channel (combat + depletion*100)
+            float packedValue = delta.b;
+            float depletion = floor(packedValue / 100.0);
+            float combat = packedValue - depletion * 100.0;
+            totalCombat += combat;
+            totalDepletionEvents += depletion;
+            
             totalFactoryActivity += delta.a;  // Factory activity (deposits + spawning)
         }
     }
@@ -83,12 +91,15 @@ void main() {
         0.0, 1.0
     );
     
+    // Depletion rate (resource blob fully mined)
+    float depletionRate = clamp(totalDepletionEvents, 0.0, 5.0);
+    
     if (outX < 0.5) {
         // Pixel 0: Continuous loop volumes
         fragColor = vec4(miningVolume, combatVolume, factoryHum, swarmVolume);
     } else {
         // Pixel 1: Triggers and meta
-        fragColor = vec4(spawnRate, explosionRate, ambientIntensity, 0.0);
+        fragColor = vec4(spawnRate, explosionRate, ambientIntensity, depletionRate);
     }
 }
 

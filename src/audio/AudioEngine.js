@@ -28,7 +28,8 @@ export class AudioEngine {
         // One-shot pools
         this.oneShotPools = {
             spawn: { sounds: [], maxVoices: 3, lastPlayed: 0, cooldown: 100 },
-            explosion: { sounds: [], maxVoices: 2, lastPlayed: 0, cooldown: 200 }
+            explosion: { sounds: [], maxVoices: 2, lastPlayed: 0, cooldown: 200 },
+            depletion: { sounds: [], maxVoices: 2, lastPlayed: 0, cooldown: 300 }  // Resource blob depleted
         };
         
         // Current target volumes (for smooth transitions)
@@ -77,17 +78,17 @@ export class AudioEngine {
         // Ambient: Subtle base drone (always-on foundation)
         this.loops.ambient = this.createDroneLoop(55, 'sine', 0.08);  // Very subtle A1
         
-        // Mining: Crystalline shimmer (reduced volume to prevent constant tone)
-        this.loops.mining = this.createShimmerLoop(880, 0.05);  // High A, quieter
+        // Mining: Crystalline shimmer (very quiet to prevent constant noise)
+        this.loops.mining = this.createShimmerLoop(880, 0.02);  // High A, very quiet
         
-        // Combat: Aggressive pulse
-        this.loops.combat = this.createPulseLoop(110, 0.08);  // Low
+        // Combat: Aggressive pulse (reduced)
+        this.loops.combat = this.createPulseLoop(110, 0.05);  // Low, quieter
         
         // Factory: Warp-core style hum - only plays when there's activity
-        this.loops.factory = this.createWarpCoreHum(0.15);
+        this.loops.factory = this.createWarpCoreHum(0.12);
         
-        // Swarm: Buzzing
-        this.loops.swarm = this.createBuzzLoop(220, 0.06);
+        // Swarm: Buzzing (reduced)
+        this.loops.swarm = this.createBuzzLoop(220, 0.03);
         
         // Start all loops (but with zero volume)
         Object.values(this.loops).forEach(loop => {
@@ -387,15 +388,29 @@ export class AudioEngine {
         // === TEMPORARY DEBUG: Log raw params every 60 frames ===
         this.debugFrameCount = (this.debugFrameCount || 0) + 1;
         if (this.debugFrameCount % 60 === 0) {
-            // console.table([params]);
-            console.log(params);
+            console.log(
+                "[Audio] Params: mining",
+                params.miningVolume !== undefined ? Math.floor(params.miningVolume * 1000) / 1000 : undefined,
+                ", combat",
+                params.combatVolume !== undefined ? Math.floor(params.combatVolume * 1000) / 1000 : undefined,
+                ", factory",
+                params.factoryHum !== undefined ? Math.floor(params.factoryHum * 1000) / 1000 : undefined,
+                ", swarm",
+                params.swarmVolume !== undefined ? Math.floor(params.swarmVolume * 1000) / 1000 : undefined,
+                ", spawn",
+                params.spawnRate !== undefined ? Math.floor(params.spawnRate * 100) / 100 : undefined,
+                ", explosion",
+                params.explosionRate !== undefined ? Math.floor(params.explosionRate * 100) / 100 : undefined,
+                ", depletion",
+                params.depletionRate !== undefined ? Math.floor(params.depletionRate * 100) / 100 : undefined
+            );
         }
         // === END TEMPORARY DEBUG ===
         
         // Update target volumes for continuous loops
-        // Mining: reduce sensitivity and apply decay to prevent constant tone
+        // Mining: very aggressive reduction to prevent constant noise
         const rawMining = params.miningVolume || 0;
-        this.targetVolumes.mining = rawMining > 0.1 ? rawMining * 0.3 : 0;  // Higher threshold, lower volume
+        this.targetVolumes.mining = rawMining > 0.3 ? rawMining * 0.15 : 0;  // Much higher threshold, much lower volume
         
         this.targetVolumes.combat = params.combatVolume || 0;
         this.targetVolumes.factory = params.factoryHum || 0;
@@ -425,6 +440,10 @@ export class AudioEngine {
         if (params.explosionRate > 0.5) {
             console.log(`[Audio] Explosion triggered: rate=${params.explosionRate.toFixed(2)}`);
             this.tryPlayOneShot('explosion', params.explosionRate);
+        }
+        if (params.depletionRate > 0.3) {
+            console.log(`[Audio] Resource depleted! rate=${params.depletionRate.toFixed(2)}`);
+            this.tryPlayOneShot('depletion', params.depletionRate);
         }
     }
     
@@ -489,6 +508,22 @@ export class AudioEngine {
             // Quiet and quick
             gain.gain.value = volume * 0.08;
             gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.12);
+        } else if (type === 'depletion') {
+            // Noisy decaying "woosh" - resonant filtered wind, something cleared away
+            osc.type = 'sawtooth';  // Rich harmonics for noise-like quality
+            // Start at mid frequency, sweep down
+            osc.frequency.value = 400;
+            osc.frequency.exponentialRampToValueAtTime(80, this.audioContext.currentTime + 0.5);
+            
+            // Resonant bandpass filter that sweeps down - creates "woosh" character
+            filter.type = 'bandpass';
+            filter.Q.value = 8;  // High resonance for that filtered wind sound
+            filter.frequency.value = 1200;
+            filter.frequency.exponentialRampToValueAtTime(150, this.audioContext.currentTime + 0.6);
+            
+            // Volume envelope: quick attack, slow decay
+            gain.gain.value = volume * 0.15;
+            gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.7);
         } else if (type === 'explosion') {
             // Noise burst
             osc.type = 'sawtooth';

@@ -247,7 +247,7 @@ export class AudioReductionPipeline {
             spawnRate: this.soundParams[4],
             explosionRate: this.soundParams[5],
             ambientIntensity: this.soundParams[6],
-            reserved: this.soundParams[7]
+            depletionRate: this.soundParams[7]  // Resource blob fully mined
         };
     }
     

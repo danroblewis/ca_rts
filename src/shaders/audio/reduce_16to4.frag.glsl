@@ -13,8 +13,8 @@ precision highp float;
  * Output per pixel (includes deltas):
  *   R: Δ Resources (negative = mining happened)
  *   G: Δ Units (P1 + P2 combined, positive = spawns)
- *   B: Current combat score
- *   A: Δ Factories (negative = destruction)
+ *   B: Current combat score + depletion events (packed: combat + depletion*100)
+ *   A: Factory activity
  */
 
 uniform sampler2D u_current;        // Current frame 16x16 (pass 0 output)
@@ -48,7 +48,7 @@ void main() {
     float prevFactories = 0.0;
     float prevFactoryResources = 0.0;
     
-    // Sum all pixels in this 4x4 region
+    // Sum all pixels in this 4x4 region (each pixel = 16x16 game cells, so region = 64x64 cells)
     for (float dy = 0.0; dy < regionSize; dy += 1.0) {
         for (float dx = 0.0; dx < regionSize; dx += 1.0) {
             vec2 samplePos = (regionStart + vec2(dx, dy) + 0.5) / u_inputResolution;
@@ -72,13 +72,30 @@ void main() {
         }
     }
     
-    // Compute deltas
+    // Multi-scale depletion detection:
+    // Detect when a 64x64 region has been significantly depleted
+    // (lots of mining happened AND very few resources remain)
     float deltaResources = currResources - prevResources;  // Negative = mining
+    float significantMining = -deltaResources;  // Positive when mining happened
+    
+    // Depletion event: mined a decent amount AND remaining is low
+    // This catches "a blob was just finished" rather than "any region went empty"
+    // Thresholds: mined > 5 resources, remaining < 20 resources in 64x64 region
+    float depletionEvents = 0.0;
+    if (significantMining > 5.0 && currResources < 20.0) {
+        // Scale by how much was mined (more satisfying for bigger clearings)
+        depletionEvents = clamp(significantMining / 10.0, 0.5, 3.0);
+    }
+    
+    // Compute remaining deltas
     float deltaUnits = currUnits - prevUnits;              // Positive = spawns
     // Factory activity = absolute change in factory resources (deposits + spawning)
     float factoryActivity = abs(currFactoryResources - prevFactoryResources);
     
-    // Pack: R=world resource delta, G=unit delta, B=combat, A=factory activity
-    fragColor = vec4(deltaResources, deltaUnits, currCombat, factoryActivity);
+    // Pack combat and depletion into B channel (combat + depletion * 100)
+    float packedCombatDepletion = currCombat + depletionEvents * 100.0;
+    
+    // Pack: R=world resource delta, G=unit delta, B=combat+depletion, A=factory activity
+    fragColor = vec4(deltaResources, deltaUnits, packedCombatDepletion, factoryActivity);
 }
 
