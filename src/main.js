@@ -1649,13 +1649,14 @@ function checkWinCondition() {
     playerFactoryCounts[PLAYER_2] = actualCounts[PLAYER_2];
     updatePlayerIndicator();
     
-    // Check lose condition: placed all bases AND have none left
+    // Check lose condition: placed at least one base AND now have none left
+    // (Must have placed at least one base to lose - can't lose before placing anything)
     for (const player of [PLAYER_1, PLAYER_2]) {
-        if (playerTotalFactoriesPlaced[player] >= MAX_FACTORIES_PER_PLAYER && 
-            actualCounts[player] === 0) {
-            // This player loses
+        if (playerTotalFactoriesPlaced[player] >= 1 && actualCounts[player] === 0) {
+            // This player loses - all their bases were destroyed
             gameOver = true;
             winner = player === PLAYER_1 ? PLAYER_2 : PLAYER_1;
+            console.log(`Player ${player} lost - all bases destroyed!`);
             showGameOver();
             return;
         }
