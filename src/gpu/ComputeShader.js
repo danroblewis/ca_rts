@@ -33,15 +33,68 @@ export class ComputeShader {
         const vertexShader = gpu.compileShader(gl.VERTEX_SHADER, FULLSCREEN_VERT);
         const fragmentShader = gpu.compileShader(gl.FRAGMENT_SHADER, fragmentSource);
 
-        // Link program
-        this.program = gpu.linkProgram(vertexShader, fragmentShader);
+        // Store for cleanup
+        this._vertexShader = vertexShader;
+        this._fragmentShader = fragmentShader;
 
-        // Clean up individual shaders (they're now part of the program)
-        gl.deleteShader(vertexShader);
-        gl.deleteShader(fragmentShader);
+        // Link program (may be async with KHR_parallel_shader_compile)
+        this.program = gpu.linkProgram(vertexShader, fragmentShader);
+        this._ready = false;
 
         // Cache uniform locations
         this.uniforms = {};
+    }
+
+    /**
+     * Wait for shader to be ready (useful with KHR_parallel_shader_compile).
+     * Must be called before using the shader if parallel compile is enabled.
+     * @returns {Promise<void>}
+     */
+    async waitReady() {
+        if (this._ready) return;
+        
+        const gpu = GPU.get();
+        const gl = gpu.gl;
+        
+        await gpu.waitForProgram(this.program);
+        
+        // Now check for link errors (deferred until compilation complete)
+        if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) {
+            const info = gl.getProgramInfoLog(this.program);
+            gl.deleteProgram(this.program);
+            throw new Error(`Program linking error:\n${info}`);
+        }
+        
+        // Clean up individual shaders (they're now part of the program)
+        gl.deleteShader(this._vertexShader);
+        gl.deleteShader(this._fragmentShader);
+        this._vertexShader = null;
+        this._fragmentShader = null;
+        
+        this._ready = true;
+    }
+
+    /**
+     * Synchronous ready check (for backwards compatibility).
+     * Cleans up shaders if not done yet.
+     */
+    ensureReady() {
+        if (this._ready) return;
+        
+        const gpu = GPU.get();
+        const gl = gpu.gl;
+        
+        // Clean up individual shaders
+        if (this._vertexShader) {
+            gl.deleteShader(this._vertexShader);
+            this._vertexShader = null;
+        }
+        if (this._fragmentShader) {
+            gl.deleteShader(this._fragmentShader);
+            this._fragmentShader = null;
+        }
+        
+        this._ready = true;
     }
 
     /**

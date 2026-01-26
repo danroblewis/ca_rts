@@ -144,9 +144,17 @@ const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise
     loadShader('./src/shaders/ca/v2/render.frag.glsl')
 ]);
 
+// Create shaders (compilation starts in parallel with KHR_parallel_shader_compile if available)
 const simShader = new ComputeShader(simShaderSource);
 const metaballRenderShader = new ComputeShader(metaballShaderSource);
 const debugRenderShader = new ComputeShader(debugShaderSource);
+
+// Wait for all shaders to compile in parallel
+await Promise.all([
+    simShader.waitReady(),
+    metaballRenderShader.waitReady(),
+    debugRenderShader.waitReady()
+]);
 
 // Active render shader (switchable)
 let renderShader = currentShaderMode === 'debug' ? debugRenderShader : metaballRenderShader;
@@ -227,7 +235,7 @@ function updateAudioButton() {
     const btn = document.getElementById('audioToggle');
     if (btn) {
         if (!audioInitialized) {
-            btn.textContent = '🔇 Click for Sound';
+            btn.textContent = '🔊 Sound (click game to start)';
         } else if (audioEngine.muted) {
             btn.textContent = '🔇 Muted';
         } else {
@@ -235,6 +243,9 @@ function updateAudioButton() {
         }
     }
 }
+
+// Call once to set initial state
+updateAudioButton();
 
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 
@@ -420,7 +431,12 @@ window.addEventListener('keyup', (event) => {
     }
 });
 
-canvas.addEventListener('click', (event) => {
+canvas.addEventListener('click', async (event) => {
+    // Auto-initialize audio on first user interaction (browser requires user gesture)
+    if (!audioInitialized) {
+        initAudio(); // Don't await - let it init in background
+    }
+    
     const gridPos = screenToGrid(event.clientX, event.clientY);
     const currentData = grid.download();
     

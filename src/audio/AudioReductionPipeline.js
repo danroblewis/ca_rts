@@ -74,6 +74,13 @@ export class AudioReductionPipeline {
         this.reduce16to4Shader = new ComputeShader(reduce16to4Src);
         this.reduce4to2x1Shader = new ComputeShader(reduce4to2x1Src);
         
+        // Wait for all shaders to compile in parallel
+        await Promise.all([
+            this.reduce256to16Shader.waitReady(),
+            this.reduce16to4Shader.waitReady(),
+            this.reduce4to2x1Shader.waitReady()
+        ]);
+        
         // Create ring buffer textures (16x16)
         for (let i = 0; i < this.compareDistance; i++) {
             const tex = new DataTexture(this.size16, this.size16, { format: 'float' });

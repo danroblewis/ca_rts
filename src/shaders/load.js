@@ -87,14 +87,26 @@ async function processIncludes(source, filePath, included = new Set()) {
         });
     }
     
-    // Process includes in reverse order (so indices stay valid)
+    // If no includes, return early
+    if (matches.length === 0) {
+        return source;
+    }
+    
+    // Fetch ALL includes in parallel for better performance
+    const resolvedPaths = matches.map(m => resolvePath(filePath, m.path));
+    const fetchPromises = resolvedPaths.map(path => fetchShader(path));
+    const includeSources = await Promise.all(fetchPromises);
+    
+    // Process nested includes in parallel too
+    const processedPromises = includeSources.map((src, i) => 
+        processIncludes(src, resolvedPaths[i], new Set(included))
+    );
+    const processedSources = await Promise.all(processedPromises);
+    
+    // Replace includes in reverse order (so indices stay valid)
     for (let i = matches.length - 1; i >= 0; i--) {
         const m = matches[i];
-        const includePath = resolvePath(filePath, m.path);
-        
-        // Load and process the included file
-        let includeSource = await fetchShader(includePath);
-        includeSource = await processIncludes(includeSource, includePath, new Set(included));
+        const includeSource = processedSources[i];
         
         // Add markers for debugging
         const header = `\n// >>> BEGIN ${m.path}\n`;

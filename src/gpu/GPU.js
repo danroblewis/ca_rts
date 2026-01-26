@@ -63,10 +63,49 @@ export class GPU {
             console.warn('EXT_color_buffer_float not available - float textures may not work as render targets');
         }
 
+        // Check for parallel shader compile extension (for faster loading)
+        this.extParallelCompile = this.gl.getExtension('KHR_parallel_shader_compile');
+        if (this.extParallelCompile) {
+            console.log('KHR_parallel_shader_compile available - using parallel compilation');
+        }
+
         // Create the fullscreen quad geometry (used for all compute operations)
         this._createFullscreenQuad();
 
         console.log('WebGL2 context created successfully');
+    }
+
+    /**
+     * Check if a shader is ready (compiled). Only useful with KHR_parallel_shader_compile.
+     * @param {WebGLShader} shader
+     * @returns {boolean}
+     */
+    isShaderReady(shader) {
+        if (!this.extParallelCompile) return true;
+        return this.gl.getShaderParameter(shader, this.extParallelCompile.COMPLETION_STATUS_KHR);
+    }
+
+    /**
+     * Check if a program is ready (linked). Only useful with KHR_parallel_shader_compile.
+     * @param {WebGLProgram} program
+     * @returns {boolean}
+     */
+    isProgramReady(program) {
+        if (!this.extParallelCompile) return true;
+        return this.gl.getProgramParameter(program, this.extParallelCompile.COMPLETION_STATUS_KHR);
+    }
+
+    /**
+     * Wait for a program to be ready (linked). Uses requestAnimationFrame polling.
+     * @param {WebGLProgram} program
+     * @returns {Promise<void>}
+     */
+    async waitForProgram(program) {
+        if (!this.extParallelCompile) return;
+        
+        while (!this.isProgramReady(program)) {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+        }
     }
 
     /**
@@ -148,6 +187,8 @@ export class GPU {
 
     /**
      * Link a shader program from vertex and fragment shaders.
+     * Note: With KHR_parallel_shader_compile, this returns immediately.
+     * Call isProgramReady() or waitForProgram() before checking link status.
      * @param {WebGLShader} vertexShader 
      * @param {WebGLShader} fragmentShader 
      * @returns {WebGLProgram}
@@ -159,10 +200,14 @@ export class GPU {
         gl.attachShader(program, fragmentShader);
         gl.linkProgram(program);
 
-        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-            const info = gl.getProgramInfoLog(program);
-            gl.deleteProgram(program);
-            throw new Error(`Program linking error:\n${info}`);
+        // With parallel compile, don't check status yet - it will block
+        // Error checking is deferred to ComputeShader.waitReady()
+        if (!this.extParallelCompile) {
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                const info = gl.getProgramInfoLog(program);
+                gl.deleteProgram(program);
+                throw new Error(`Program linking error:\n${info}`);
+            }
         }
 
         return program;
