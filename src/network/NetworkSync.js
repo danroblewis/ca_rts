@@ -29,6 +29,7 @@ export class NetworkSync {
         this.onConnectionChange = null;
         this.onSpectating = null;  // Called when spectator joins
         this.onRestart = null;     // Called when game restarts
+        this.onSpeedSync = null;   // Called when server sends target simulation speed
     }
 
     // ========================================================================
@@ -366,6 +367,14 @@ export class NetworkSync {
                     this.onRestart(message.mapSeed, message.initiatedBy);
                 }
                 break;
+            
+            case 'speed_sync':
+                // Server telling us to sync to a specific simulation speed
+                console.log(`[NetworkSync] Speed sync: target ${message.targetTicksPerSecond.toFixed(1)} tps (slowest: Player ${message.slowestPlayer})`);
+                if (this.onSpeedSync) {
+                    this.onSpeedSync(message.targetTicksPerSecond, message.slowestPlayer);
+                }
+                break;
                 
             case 'error':
                 console.error('[NetworkSync] Server error:', message.message);
@@ -412,6 +421,21 @@ export class NetworkSync {
         this.send({
             type: 'restart',
             roomId: this.roomId
+        });
+    }
+    
+    /**
+     * Send heartbeat with current simulation speed
+     * @param {number} ticksPerSecond - Current effective simulation speed
+     */
+    sendHeartbeat(ticksPerSecond) {
+        if (!this.isConnected || this.isSpectator) return;
+        
+        this.send({
+            type: 'heartbeat',
+            roomId: this.roomId,
+            playerId: this.playerId,
+            ticksPerSecond: ticksPerSecond
         });
     }
 }

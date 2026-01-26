@@ -84,8 +84,9 @@ export class AudioEngine {
         // Combat: Aggressive pulse (reduced)
         this.loops.combat = this.createPulseLoop(110, 0.05);  // Low, quieter
         
-        // Factory: Warp-core style hum - only plays when there's activity
-        this.loops.factory = this.createWarpCoreHum(0.12);
+        // Factory: Subtle hum - only plays when there's activity
+        // Much quieter to avoid annoying drone
+        this.loops.factory = this.createWarpCoreHum(0.06);
         
         // Swarm: Buzzing (reduced)
         this.loops.swarm = this.createBuzzLoop(220, 0.03);
@@ -224,76 +225,96 @@ export class AudioEngine {
     }
     
     /**
-     * Create a warp-core style hum (for factory activity)
-     * Based on Star Trek warp core sound characteristics:
-     * - Low fundamental (~60 Hz, near AC power hum)
-     * - Slow pulsing/throbbing (amplitude modulation)
-     * - Layered detuned oscillators for richness
-     * - Filter sweep tied to activity level
+     * Create a subtle, non-annoying factory hum
+     * Key changes from previous version:
+     * - Much quieter base volume
+     * - Softer waveforms (sine instead of sawtooth)
+     * - Multiple LFOs at irrational ratios (never repeats exactly)
+     * - Random "breathing" variations
+     * - Lower frequencies for less fatiguing sound
      */
     createWarpCoreHum(baseVolume) {
-        // Multiple detuned oscillators for richness
-        const osc1 = this.audioContext.createOscillator();
-        const osc2 = this.audioContext.createOscillator();
-        const osc3 = this.audioContext.createOscillator();
+        const audioContext = this.audioContext;
         
-        // Fundamental and harmonics
-        osc1.type = 'sawtooth';
-        osc1.frequency.value = 60;  // Near AC power hum frequency
+        // Use softer sine waves instead of harsh sawtooth
+        const osc1 = audioContext.createOscillator();
+        const osc2 = audioContext.createOscillator();
         
-        osc2.type = 'triangle';
-        osc2.frequency.value = 120;  // First harmonic
+        // Lower frequencies, sine waves for gentleness
+        osc1.type = 'sine';
+        osc1.frequency.value = 55;  // Low A, below typical hearing focus
         
-        osc3.type = 'sine';
-        osc3.frequency.value = 180;  // Second harmonic
+        osc2.type = 'sine';
+        osc2.frequency.value = 82.5;  // Perfect fifth above (harmonic)
         
-        // Slow pitch wobble for organic feel
-        const pitchLFO = this.audioContext.createOscillator();
-        const pitchLFOGain = this.audioContext.createGain();
-        pitchLFO.type = 'sine';
-        pitchLFO.frequency.value = 0.3;  // Very slow wobble
-        pitchLFOGain.gain.value = 2;  // Subtle pitch variation
-        pitchLFO.connect(pitchLFOGain);
+        // Multiple LFOs at irrational ratios - never repeats exactly
+        // This prevents the "stuck in a pattern" feeling
+        const pitchLFO1 = audioContext.createOscillator();
+        const pitchLFO2 = audioContext.createOscillator();
+        const pitchLFOGain = audioContext.createGain();
+        
+        pitchLFO1.type = 'sine';
+        pitchLFO1.frequency.value = 0.13;  // Very slow
+        pitchLFO2.type = 'sine';
+        pitchLFO2.frequency.value = 0.089;  // Irrational ratio to first
+        pitchLFOGain.gain.value = 1.5;  // Subtle pitch variation
+        
+        pitchLFO1.connect(pitchLFOGain);
+        pitchLFO2.connect(pitchLFOGain);
         pitchLFOGain.connect(osc1.frequency);
         pitchLFOGain.connect(osc2.frequency);
         
-        // Amplitude pulsing (the "throb")
-        const ampLFO = this.audioContext.createOscillator();
-        const ampLFOGain = this.audioContext.createGain();
-        const pulseGain = this.audioContext.createGain();
-        ampLFO.type = 'sine';
-        ampLFO.frequency.value = 1.2;  // Slow pulse rate (~72 BPM)
-        ampLFOGain.gain.value = 0.3;  // Pulse depth
-        ampLFO.connect(ampLFOGain);
-        ampLFOGain.connect(pulseGain.gain);
-        pulseGain.gain.value = 0.7;  // Base level
+        // Amplitude modulation with multiple irrational-ratio LFOs
+        const ampLFO1 = audioContext.createOscillator();
+        const ampLFO2 = audioContext.createOscillator();
+        const ampLFO3 = audioContext.createOscillator();
+        const ampMixer = audioContext.createGain();
+        const pulseGain = audioContext.createGain();
         
-        // Mix oscillators
-        const oscMixer = this.audioContext.createGain();
-        oscMixer.gain.value = 0.5;
+        ampLFO1.type = 'sine';
+        ampLFO1.frequency.value = 0.7;   // Base pulse
+        ampLFO2.type = 'sine';
+        ampLFO2.frequency.value = 0.31;  // Slower "breathing"
+        ampLFO3.type = 'sine';  
+        ampLFO3.frequency.value = 0.071; // Very slow swell (14 second cycle)
         
-        const osc1Gain = this.audioContext.createGain();
-        const osc2Gain = this.audioContext.createGain();
-        const osc3Gain = this.audioContext.createGain();
-        osc1Gain.gain.value = 0.5;  // Fundamental loudest
-        osc2Gain.gain.value = 0.3;  // First harmonic
-        osc3Gain.gain.value = 0.2;  // Second harmonic softer
+        const amp1Gain = audioContext.createGain();
+        const amp2Gain = audioContext.createGain();
+        const amp3Gain = audioContext.createGain();
+        amp1Gain.gain.value = 0.1;   // Subtle fast pulse
+        amp2Gain.gain.value = 0.15;  // Medium breathing
+        amp3Gain.gain.value = 0.2;   // Larger slow swells
+        
+        ampLFO1.connect(amp1Gain);
+        ampLFO2.connect(amp2Gain);
+        ampLFO3.connect(amp3Gain);
+        amp1Gain.connect(pulseGain.gain);
+        amp2Gain.connect(pulseGain.gain);
+        amp3Gain.connect(pulseGain.gain);
+        pulseGain.gain.value = 0.55;  // Base level (will vary 0.1 to 1.0)
+        
+        // Mix oscillators with lower volume
+        const oscMixer = audioContext.createGain();
+        oscMixer.gain.value = 0.3;  // Much quieter overall
+        
+        const osc1Gain = audioContext.createGain();
+        const osc2Gain = audioContext.createGain();
+        osc1Gain.gain.value = 0.6;
+        osc2Gain.gain.value = 0.4;
         
         osc1.connect(osc1Gain);
         osc2.connect(osc2Gain);
-        osc3.connect(osc3Gain);
         osc1Gain.connect(oscMixer);
         osc2Gain.connect(oscMixer);
-        osc3Gain.connect(oscMixer);
         
-        // Lowpass filter for warmth
-        const filter = this.audioContext.createBiquadFilter();
+        // Gentle lowpass filter
+        const filter = audioContext.createBiquadFilter();
         filter.type = 'lowpass';
-        filter.frequency.value = 200;  // Start dark
-        filter.Q.value = 2;
+        filter.frequency.value = 150;  // Very dark, muffled
+        filter.Q.value = 0.7;  // No resonance peak
         
         // Final output gain
-        const outputGain = this.audioContext.createGain();
+        const outputGain = audioContext.createGain();
         outputGain.gain.value = 0;
         
         // Signal chain
@@ -303,35 +324,41 @@ export class AudioEngine {
         outputGain.connect(this.masterGain);
         
         // Start LFOs
-        pitchLFO.start();
-        ampLFO.start();
+        pitchLFO1.start();
+        pitchLFO2.start();
+        ampLFO1.start();
+        ampLFO2.start();
+        ampLFO3.start();
         
         return {
-            oscillators: [osc1, osc2, osc3],
+            oscillators: [osc1, osc2],
             gainNode: outputGain,
             filter: filter,
-            pitchLFO: pitchLFO,
-            ampLFO: ampLFO,
-            baseVolume: baseVolume,
+            pitchLFOs: [pitchLFO1, pitchLFO2],
+            ampLFOs: [ampLFO1, ampLFO2, ampLFO3],
+            baseVolume: baseVolume * 0.5,  // Reduce base volume by half
             start: () => {
                 osc1.start();
                 osc2.start();
-                osc3.start();
             },
             stop: () => {
                 osc1.stop();
                 osc2.stop();
-                osc3.stop();
-                pitchLFO.stop();
-                ampLFO.stop();
+                pitchLFO1.stop();
+                pitchLFO2.stop();
+                ampLFO1.stop();
+                ampLFO2.stop();
+                ampLFO3.stop();
             },
             // Method to modulate filter based on activity
             setActivity: (level) => {
-                // Higher activity = brighter sound (filter opens up)
-                const targetFreq = 200 + level * 600;  // 200-800 Hz
+                // Cap the level to prevent overwhelming sound
+                const cappedLevel = Math.min(level, 0.6);
+                // Higher activity = slightly brighter, but stay muffled
+                const targetFreq = 120 + cappedLevel * 180;  // 120-228 Hz (very muted range)
                 filter.frequency.linearRampToValueAtTime(
                     targetFreq, 
-                    this.audioContext.currentTime + 0.1
+                    audioContext.currentTime + 0.3  // Slower transition
                 );
             }
         };

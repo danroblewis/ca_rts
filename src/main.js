@@ -1183,6 +1183,54 @@ function updatePlayerIndicator() {
 // Initialize player indicator
 updatePlayerIndicator();
 
+// FPS/TPS display
+function updateFpsDisplay(currentTps, targetTps, potentialTps = null) {
+    let fpsDisplay = document.getElementById('fps-display');
+    if (!fpsDisplay) {
+        fpsDisplay = document.createElement('div');
+        fpsDisplay.id = 'fps-display';
+        fpsDisplay.style.cssText = `
+            position: fixed;
+            bottom: 8px;
+            left: 8px;
+            z-index: 200;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: 'SF Mono', monospace;
+            font-size: 11px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #aaa;
+            backdrop-filter: blur(4px);
+        `;
+        document.body.appendChild(fpsDisplay);
+    }
+    
+    // Show current TPS and target (if in multiplayer)
+    if (isMultiplayer) {
+        // In multiplayer, show actual/target/potential
+        const actual = Math.round(currentTps);
+        const target = Math.round(targetTps);
+        const potential = potentialTps ? Math.round(potentialTps) : actual;
+        
+        if (actual < target * 0.9) {
+            // Running slower than target - something is wrong
+            fpsDisplay.textContent = `${actual} TPS (target: ${target}, max: ${potential})`;
+            fpsDisplay.style.color = '#f99';
+        } else if (potential > target * 1.2) {
+            // Could run faster - being throttled
+            fpsDisplay.textContent = `${actual} TPS (synced, could do ${potential})`;
+            fpsDisplay.style.color = '#9f9';
+        } else {
+            // Running at potential
+            fpsDisplay.textContent = `${actual} TPS`;
+            fpsDisplay.style.color = '#9f9';
+        }
+    } else {
+        fpsDisplay.textContent = `${Math.round(currentTps)} TPS`;
+        fpsDisplay.style.color = currentTps < 30 ? '#f99' : currentTps < 50 ? '#ff9' : '#9f9';
+    }
+}
+
 // Listen for 1/2 keys to switch players
 document.addEventListener('keydown', (e) => {
     if (e.key === '1') {
@@ -1262,6 +1310,18 @@ networkSync.onRestart = (newMapSeed, initiatedBy) => {
     const url = new URL(window.location);
     url.searchParams.set('seed', newMapSeed);
     window.location.href = url.toString();
+};
+
+// Speed sync handler - adjust simulation speed to match slowest peer
+networkSync.onSpeedSync = (serverTargetTps, slowestPlayer) => {
+    const oldTarget = targetTicksPerSecond;
+    // Enforce minimum of 1 TPS to prevent stalling
+    targetTicksPerSecond = Math.max(1, serverTargetTps);
+    
+    // Only log if target changed significantly
+    if (Math.abs(oldTarget - serverTargetTps) > 1) {
+        console.log(`[Speed Sync] Adjusting to ${targetTicksPerSecond.toFixed(1)} TPS (slowest: Player ${slowestPlayer}, our TPS: ${effectiveTicksPerSecond.toFixed(1)})`);
+    }
 };
 
 networkSync.onPlayerJoined = (playerId, isHost, serverMapSeed, serverConnectedPlayers) => {
@@ -1766,6 +1826,18 @@ let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
 
+// Speed synchronization for multiplayer
+let effectiveTicksPerSecond = 60;  // Measured actual TPS (may be throttled)
+let potentialTicksPerSecond = 60;  // What we COULD run at (unthrottled)
+let targetTicksPerSecond = 60;     // Target TPS from server (slowest peer)
+let lastHeartbeatTime = 0;
+let lastTpsCalcTime = performance.now();
+let tpsCalcStepCount = 0;
+let tpsFrameTimeAccumulator = 0;   // Accumulate frame times to measure potential
+let tpsFrameCount = 0;             // Frame count for TPS calculation
+const HEARTBEAT_INTERVAL = 1000;   // Send heartbeat every second
+const TPS_MARGIN = 5;              // Add margin to target TPS to allow speedup
+
 // Toggle: true = sync with render (normal speed), false = fast as possible (super speed)
 // Default to normal speed, but allow toggle on localhost
 // Force sync mode (hide toggle) when not on localhost
@@ -1841,6 +1913,7 @@ function simulationStep() {
     grid.swap();
     
     simStepCount++;
+    tpsCalcStepCount++;
     simTime += 1.0;
 }
 
@@ -1854,6 +1927,39 @@ function logStats() {
         simStepCount = 0;
         renderFrameCount = 0;
         lastLogTime = now;
+    }
+    
+    // Calculate effective TPS and potential TPS for speed sync
+    const tpsElapsed = now - lastTpsCalcTime;
+    if (tpsElapsed >= 500) {  // Update TPS estimate every 500ms
+        // Actual TPS - how many steps we actually ran
+        const measuredTps = (tpsCalcStepCount / tpsElapsed) * 1000;
+        effectiveTicksPerSecond = Math.max(1, measuredTps);
+        tpsCalcStepCount = 0;
+        
+        // Potential TPS - based on render frame rate (how fast we COULD run)
+        if (tpsFrameCount > 0) {
+            const avgFrameTime = tpsFrameTimeAccumulator / tpsFrameCount;
+            potentialTicksPerSecond = Math.max(1, 1000 / avgFrameTime);
+        }
+        tpsFrameTimeAccumulator = 0;
+        tpsFrameCount = 0;
+        lastTpsCalcTime = now;
+        
+        // Update FPS display
+        updateFpsDisplay(effectiveTicksPerSecond, targetTicksPerSecond, potentialTicksPerSecond);
+    }
+    
+    // Send heartbeat periodically in multiplayer
+    if (isMultiplayer && networkSync.isConnected && !isSpectator) {
+        if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
+            // Send POTENTIAL TPS (what we could run at), not actual (throttled) TPS
+            // This allows the system to speed up when both peers can go faster
+            if (potentialTicksPerSecond > 1) {
+                networkSync.sendHeartbeat(potentialTicksPerSecond);
+            }
+            lastHeartbeatTime = now;
+        }
     }
 }
 
@@ -1993,11 +2099,34 @@ setInterval(checkWinCondition, 5000);
 // Render Loop (also runs synced simulation if enabled)
 // ============================================================================
 
+let lastSimStepTime = 0;  // Start at 0 so first step runs immediately
+let lastRenderTime = 0;   // For measuring potential TPS
+
 function renderLoop() {
+    const now = performance.now();
+    
+    // Measure potential TPS based on render frame rate
+    // This tells us how fast we COULD run, regardless of throttling
+    if (lastRenderTime > 0) {
+        const frameTime = now - lastRenderTime;
+        tpsFrameTimeAccumulator += frameTime;
+        tpsFrameCount++;
+    }
+    lastRenderTime = now;
+    
     // Run simulation step if synced mode
     if (SYNC_SIM_WITH_RENDER) {
-        for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
-        simulationStep();
+        // In multiplayer, throttle to match target TPS (with margin for speedup)
+        // But always ensure at least 1 TPS minimum
+        const effectiveTargetTps = isMultiplayer ? Math.max(1, targetTicksPerSecond + TPS_MARGIN) : 999;
+        const targetFrameTime = 1000 / effectiveTargetTps;
+        
+        // Run simulation if enough time has passed (or if in single-player, always run)
+        if (!isMultiplayer || lastSimStepTime === 0 || (now - lastSimStepTime) >= targetFrameTime) {
+            for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
+                simulationStep();
+            }
+            lastSimStepTime = now;
         }
         logStats();
     }

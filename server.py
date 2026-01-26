@@ -229,6 +229,7 @@ class Player:
     player_id: int
     room_id: str
     is_host: bool = False
+    ticks_per_second: float = 60.0  # Reported simulation speed
 
 
 @dataclass
@@ -394,6 +395,35 @@ class GameRoom:
         # Clean up disconnected spectators
         for spectator_id in disconnected_spectators:
             self.remove_spectator(spectator_id)
+    
+    def get_min_ticks_per_second(self) -> tuple[float, int]:
+        """Get the minimum ticks per second among all players.
+        Returns (min_tps, slowest_player_id)
+        """
+        if not self.players:
+            return (60.0, 0)
+        
+        min_tps = float('inf')
+        slowest_player = 0
+        for player_id, player in self.players.items():
+            if player.ticks_per_second < min_tps:
+                min_tps = player.ticks_per_second
+                slowest_player = player_id
+        
+        return (min_tps if min_tps != float('inf') else 60.0, slowest_player)
+    
+    async def broadcast_speed_sync(self):
+        """Broadcast the target simulation speed to all players."""
+        if len(self.players) < 2:
+            return  # No need to sync if only one player
+        
+        min_tps, slowest_player = self.get_min_ticks_per_second()
+        
+        await self.broadcast({
+            "type": "speed_sync",
+            "targetTicksPerSecond": min_tps,
+            "slowestPlayer": slowest_player
+        }, include_spectators=False)  # Only players need speed sync
 
 
 # Global room registry
@@ -566,6 +596,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         "playerId": player.player_id,
                         "message": data.get("message", "")
                     })
+            
+            elif msg_type == "heartbeat":
+                # Player reporting their simulation speed
+                if room and player:
+                    tps = data.get("ticksPerSecond", 60.0)
+                    player.ticks_per_second = tps
+                    # Broadcast the minimum speed to all players
+                    await room.broadcast_speed_sync()
             
             elif msg_type == "restart":
                 # Player requesting game restart (Play Again)
