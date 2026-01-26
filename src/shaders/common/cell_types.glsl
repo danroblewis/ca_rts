@@ -189,6 +189,7 @@ const float STATIONARY_THRESHOLD = 8.0;
 // Age/starvation settings
 const float AGE_PACK_BASE = 32.0;  // Age starts at bit 5
 const float MAX_AGE = 500.0;       // Steps before unit dies from starvation
+const float NEWBORN_AGE = -30.0;   // Starting age for newly spawned units (negative = newborn glow)
 
 // Memory freshness settings
 const float MEMORY_MAX_FRESHNESS = 30.0;  // Starts at this when mining

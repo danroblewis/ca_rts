@@ -46,6 +46,7 @@ void main() {
     float prevUnits = 0.0;
     float prevResources = 0.0;
     float prevFactories = 0.0;
+    float prevFactoryResources = 0.0;
     
     // Sum all pixels in this 4x4 region
     for (float dy = 0.0; dy < regionSize; dy += 1.0) {
@@ -67,14 +68,17 @@ void main() {
             prevUnits += prev.r + prev.g;
             prevResources += prev.b;
             prevFactories += prevF.r + prevF.g;
+            prevFactoryResources += prevF.b + prevF.a;
         }
     }
     
     // Compute deltas
     float deltaResources = currResources - prevResources;  // Negative = mining
     float deltaUnits = currUnits - prevUnits;              // Positive = spawns
-    float deltaFactories = currFactories - prevFactories;  // Negative = destruction
+    // Factory activity = absolute change in factory resources (deposits + spawning)
+    float factoryActivity = abs(currFactoryResources - prevFactoryResources);
     
-    fragColor = vec4(deltaResources, deltaUnits, currCombat, deltaFactories);
+    // Pack: R=world resource delta, G=unit delta, B=combat, A=factory activity
+    fragColor = vec4(deltaResources, deltaUnits, currCombat, factoryActivity);
 }
 

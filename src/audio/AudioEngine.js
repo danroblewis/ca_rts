@@ -74,17 +74,17 @@ export class AudioEngine {
      * These are placeholder sounds - can be replaced with real audio files.
      */
     async createGeneratedLoops() {
-        // Ambient: Low drone (warp core style)
-        this.loops.ambient = this.createDroneLoop(55, 'sawtooth', 0.15);  // A1
+        // Ambient: Subtle base drone (always-on foundation)
+        this.loops.ambient = this.createDroneLoop(55, 'sine', 0.08);  // Very subtle A1
         
-        // Mining: Crystalline shimmer
-        this.loops.mining = this.createShimmerLoop(880, 0.1);  // High A
+        // Mining: Crystalline shimmer (reduced volume to prevent constant tone)
+        this.loops.mining = this.createShimmerLoop(880, 0.05);  // High A, quieter
         
         // Combat: Aggressive pulse
         this.loops.combat = this.createPulseLoop(110, 0.08);  // Low
         
-        // Factory: Mechanical hum
-        this.loops.factory = this.createDroneLoop(82.5, 'triangle', 0.12);  // E2
+        // Factory: Warp-core style hum - only plays when there's activity
+        this.loops.factory = this.createWarpCoreHum(0.15);
         
         // Swarm: Buzzing
         this.loops.swarm = this.createBuzzLoop(220, 0.06);
@@ -223,6 +223,120 @@ export class AudioEngine {
     }
     
     /**
+     * Create a warp-core style hum (for factory activity)
+     * Based on Star Trek warp core sound characteristics:
+     * - Low fundamental (~60 Hz, near AC power hum)
+     * - Slow pulsing/throbbing (amplitude modulation)
+     * - Layered detuned oscillators for richness
+     * - Filter sweep tied to activity level
+     */
+    createWarpCoreHum(baseVolume) {
+        // Multiple detuned oscillators for richness
+        const osc1 = this.audioContext.createOscillator();
+        const osc2 = this.audioContext.createOscillator();
+        const osc3 = this.audioContext.createOscillator();
+        
+        // Fundamental and harmonics
+        osc1.type = 'sawtooth';
+        osc1.frequency.value = 60;  // Near AC power hum frequency
+        
+        osc2.type = 'triangle';
+        osc2.frequency.value = 120;  // First harmonic
+        
+        osc3.type = 'sine';
+        osc3.frequency.value = 180;  // Second harmonic
+        
+        // Slow pitch wobble for organic feel
+        const pitchLFO = this.audioContext.createOscillator();
+        const pitchLFOGain = this.audioContext.createGain();
+        pitchLFO.type = 'sine';
+        pitchLFO.frequency.value = 0.3;  // Very slow wobble
+        pitchLFOGain.gain.value = 2;  // Subtle pitch variation
+        pitchLFO.connect(pitchLFOGain);
+        pitchLFOGain.connect(osc1.frequency);
+        pitchLFOGain.connect(osc2.frequency);
+        
+        // Amplitude pulsing (the "throb")
+        const ampLFO = this.audioContext.createOscillator();
+        const ampLFOGain = this.audioContext.createGain();
+        const pulseGain = this.audioContext.createGain();
+        ampLFO.type = 'sine';
+        ampLFO.frequency.value = 1.2;  // Slow pulse rate (~72 BPM)
+        ampLFOGain.gain.value = 0.3;  // Pulse depth
+        ampLFO.connect(ampLFOGain);
+        ampLFOGain.connect(pulseGain.gain);
+        pulseGain.gain.value = 0.7;  // Base level
+        
+        // Mix oscillators
+        const oscMixer = this.audioContext.createGain();
+        oscMixer.gain.value = 0.5;
+        
+        const osc1Gain = this.audioContext.createGain();
+        const osc2Gain = this.audioContext.createGain();
+        const osc3Gain = this.audioContext.createGain();
+        osc1Gain.gain.value = 0.5;  // Fundamental loudest
+        osc2Gain.gain.value = 0.3;  // First harmonic
+        osc3Gain.gain.value = 0.2;  // Second harmonic softer
+        
+        osc1.connect(osc1Gain);
+        osc2.connect(osc2Gain);
+        osc3.connect(osc3Gain);
+        osc1Gain.connect(oscMixer);
+        osc2Gain.connect(oscMixer);
+        osc3Gain.connect(oscMixer);
+        
+        // Lowpass filter for warmth
+        const filter = this.audioContext.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 200;  // Start dark
+        filter.Q.value = 2;
+        
+        // Final output gain
+        const outputGain = this.audioContext.createGain();
+        outputGain.gain.value = 0;
+        
+        // Signal chain
+        oscMixer.connect(filter);
+        filter.connect(pulseGain);
+        pulseGain.connect(outputGain);
+        outputGain.connect(this.masterGain);
+        
+        // Start LFOs
+        pitchLFO.start();
+        ampLFO.start();
+        
+        return {
+            oscillators: [osc1, osc2, osc3],
+            gainNode: outputGain,
+            filter: filter,
+            pitchLFO: pitchLFO,
+            ampLFO: ampLFO,
+            baseVolume: baseVolume,
+            start: () => {
+                osc1.start();
+                osc2.start();
+                osc3.start();
+            },
+            stop: () => {
+                osc1.stop();
+                osc2.stop();
+                osc3.stop();
+                pitchLFO.stop();
+                ampLFO.stop();
+            },
+            // Method to modulate filter based on activity
+            setActivity: (level) => {
+                // Higher activity = brighter sound (filter opens up)
+                const targetFreq = 200 + level * 600;  // 200-800 Hz
+                filter.frequency.linearRampToValueAtTime(
+                    targetFreq, 
+                    this.audioContext.currentTime + 0.1
+                );
+            }
+        };
+    }
+    
+    /**
      * Create a buzzing loop (for swarm)
      */
     createBuzzLoop(frequency, baseVolume) {
@@ -270,21 +384,46 @@ export class AudioEngine {
     update(params) {
         if (!this.initialized || this.muted) return;
         
+        // === TEMPORARY DEBUG: Log raw params every 60 frames ===
+        this.debugFrameCount = (this.debugFrameCount || 0) + 1;
+        if (this.debugFrameCount % 60 === 0) {
+            // console.table([params]);
+            console.log(params);
+        }
+        // === END TEMPORARY DEBUG ===
+        
         // Update target volumes for continuous loops
-        this.targetVolumes.mining = params.miningVolume || 0;
+        // Mining: reduce sensitivity and apply decay to prevent constant tone
+        const rawMining = params.miningVolume || 0;
+        this.targetVolumes.mining = rawMining > 0.1 ? rawMining * 0.3 : 0;  // Higher threshold, lower volume
+        
         this.targetVolumes.combat = params.combatVolume || 0;
         this.targetVolumes.factory = params.factoryHum || 0;
         this.targetVolumes.swarm = params.swarmVolume || 0;
         this.targetVolumes.ambient = 0.3 + (params.ambientIntensity || 0) * 0.3;
+        
+        // === TEMPORARY LOGGING (except mining - too frequent) ===
+        if (this.targetVolumes.combat > 0.05) {
+            console.log(`[Audio] Combat: ${this.targetVolumes.combat.toFixed(2)}`);
+        }
+        if (this.targetVolumes.factory > 0.05) {
+            // console.log(`[Audio] Factory hum: ${this.targetVolumes.factory.toFixed(2)}`);
+        }
+        if (this.targetVolumes.swarm > 0.05) {
+            console.log(`[Audio] Swarm: ${this.targetVolumes.swarm.toFixed(2)}`);
+        }
+        // === END TEMPORARY LOGGING ===
         
         // Smoothly transition loop volumes
         this.smoothUpdateLoops();
         
         // Handle one-shot triggers
         if (params.spawnRate > 0.5) {
+            console.log(`[Audio] Spawn triggered: rate=${params.spawnRate.toFixed(2)}`);
             this.tryPlayOneShot('spawn', params.spawnRate);
         }
         if (params.explosionRate > 0.5) {
+            console.log(`[Audio] Explosion triggered: rate=${params.explosionRate.toFixed(2)}`);
             this.tryPlayOneShot('explosion', params.explosionRate);
         }
     }
@@ -301,6 +440,11 @@ export class AudioEngine {
             
             const target = this.targetVolumes[name] * loop.baseVolume;
             loop.gainNode.gain.linearRampToValueAtTime(target, now + rampTime);
+            
+            // Special handling for factory warp-core hum: modulate filter based on activity
+            if (name === 'factory' && loop.setActivity) {
+                loop.setActivity(this.targetVolumes.factory);
+            }
         }
     }
     
@@ -334,14 +478,17 @@ export class AudioEngine {
         const filter = this.audioContext.createBiquadFilter();
         
         if (type === 'spawn') {
-            // Rising tone
+            // Soft "pop" or "blip" - gentle birth sound
             osc.type = 'sine';
-            osc.frequency.value = 400;
-            osc.frequency.linearRampToValueAtTime(800, this.audioContext.currentTime + 0.1);
+            // Start high, quickly drop (like a bubble popping)
+            osc.frequency.value = 600;
+            osc.frequency.exponentialRampToValueAtTime(200, this.audioContext.currentTime + 0.08);
             filter.type = 'lowpass';
-            filter.frequency.value = 2000;
-            gain.gain.value = volume * 0.2;
-            gain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.15);
+            filter.frequency.value = 1200;
+            filter.frequency.exponentialRampToValueAtTime(400, this.audioContext.currentTime + 0.1);
+            // Quiet and quick
+            gain.gain.value = volume * 0.08;
+            gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.12);
         } else if (type === 'explosion') {
             // Noise burst
             osc.type = 'sawtooth';

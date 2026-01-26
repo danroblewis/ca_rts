@@ -61,6 +61,7 @@ const float INVALID_PACKED_COORDS = -1.0;
 const float AGE_PACK_BASE = 32.0;        // counter uses bits 1-4, age starts at bit 5
 const float MAX_AGE = 500.0;             // Steps before unit dies from starvation
 const float FACTORY_SAFE_ZONE = 10.0;    // Units within this distance of factory don't starve
+const float NEWBORN_AGE = -30.0;         // Starting age for newly spawned units (negative = newborn glow)
 
 // ============================================================================
 // MOVEMENT
@@ -78,7 +79,7 @@ const float MAX_WANDER_DISTANCE = 65.0;  // Max distance from factory before ret
 const float MEMORY_MAX_FRESHNESS = 200.0;  // How long memory lasts
 const float MEMORY_SHARE_PENALTY = 5.0;    // Freshness cost when sharing memory
 const int MEMORY_VISION_RANGE = 5;         // Range for memory sharing
-const float HOMESICK_THRESHOLD = 500.0;    // Steps before returning to factory
+const float HOMESICK_THRESHOLD = 1000.0;    // Steps before returning to factory
 
 // ============================================================================
 // FACTORY / SPAWNING

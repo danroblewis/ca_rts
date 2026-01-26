@@ -587,8 +587,15 @@ void main() {
         float p1AgeRatio = p1AvgAge / MAX_AGE;
         float ageBrightness = 1.0;
         vec3 ageColorMod = vec3(1.0);
+        float newbornScale = 1.0;  // Size multiplier for newborn units
         
-        if (p1AgeRatio >= fadeStart && p1AgeRatio < deathFlashStart) {
+        // Newborn glow effect (negative age)
+        if (p1AvgAge < 0.0) {
+            float newbornProgress = -p1AvgAge / (-NEWBORN_AGE);  // 1.0 at spawn, 0.0 when mature
+            ageBrightness = 1.0 + newbornProgress * 1.5;  // Extra bright
+            ageColorMod = vec3(1.0 + newbornProgress * 0.5);  // Whiter
+            newbornScale = 1.0 + newbornProgress * 0.5;  // 50% larger at spawn
+        } else if (p1AgeRatio >= fadeStart && p1AgeRatio < deathFlashStart) {
             float fadeFactor = (p1AgeRatio - fadeStart) / (deathFlashStart - fadeStart);
             ageBrightness = 1.0 - fadeFactor * 0.7;
         } else if (p1AgeRatio >= deathFlashStart) {
@@ -602,18 +609,20 @@ void main() {
             }
         }
         
+        // Apply newborn scale to make newborns appear larger
+        float scaledDensity = p1TotalUnitDensity * newbornScale;
         float holdingRatio = p1HoldingUnitDensity / max(p1TotalUnitDensity, 0.001);
-        float glowStrength = smoothstep(0.0, unitThreshold, p1TotalUnitDensity);
+        float glowStrength = smoothstep(0.0, unitThreshold, scaledDensity);
         vec3 glowColor = mix(vec3(0.05, 0.25, 0.4), vec3(0.1, 0.35, 0.1), holdingRatio);
         glowColor *= ageBrightness * ageColorMod;
         color = color + glowColor * glowStrength * 0.6;
         
-        if (p1TotalUnitDensity > unitThreshold) {
-            float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, p1TotalUnitDensity);
+        if (scaledDensity > unitThreshold) {
+            float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, scaledDensity);
             vec3 cyanColor = vec3(0.3, 0.8, 1.0) * ageBrightness * ageColorMod;
             vec3 greenColor = vec3(0.4, 0.95, 0.4) * ageBrightness * ageColorMod;
             vec3 unitColor = mix(cyanColor, greenColor, holdingRatio);
-            float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, p1TotalUnitDensity);
+            float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, scaledDensity);
             unitColor += vec3(0.2) * coreGlow * ageBrightness;
             color = mix(color, unitColor, blobStrength);
         }
@@ -625,8 +634,15 @@ void main() {
         float p2AgeRatio = p2AvgAge / MAX_AGE;
         float ageBrightness = 1.0;
         vec3 ageColorMod = vec3(1.0);
+        float newbornScale = 1.0;  // Size multiplier for newborn units
         
-        if (p2AgeRatio >= fadeStart && p2AgeRatio < deathFlashStart) {
+        // Newborn glow effect (negative age)
+        if (p2AvgAge < 0.0) {
+            float newbornProgress = -p2AvgAge / (-NEWBORN_AGE);  // 1.0 at spawn, 0.0 when mature
+            ageBrightness = 1.0 + newbornProgress * 1.5;  // Extra bright
+            ageColorMod = vec3(1.0 + newbornProgress * 0.5);  // Whiter
+            newbornScale = 1.0 + newbornProgress * 0.5;  // 50% larger at spawn
+        } else if (p2AgeRatio >= fadeStart && p2AgeRatio < deathFlashStart) {
             float fadeFactor = (p2AgeRatio - fadeStart) / (deathFlashStart - fadeStart);
             ageBrightness = 1.0 - fadeFactor * 0.7;
         } else if (p2AgeRatio >= deathFlashStart) {
@@ -640,20 +656,22 @@ void main() {
             }
         }
         
+        // Apply newborn scale to make newborns appear larger
+        float scaledDensity = p2TotalUnitDensity * newbornScale;
         float holdingRatio = p2HoldingUnitDensity / max(p2TotalUnitDensity, 0.001);
-        float glowStrength = smoothstep(0.0, unitThreshold, p2TotalUnitDensity);
+        float glowStrength = smoothstep(0.0, unitThreshold, scaledDensity);
         // Orange/red glow for player 2
         vec3 glowColor = mix(vec3(0.4, 0.2, 0.05), vec3(0.35, 0.1, 0.1), holdingRatio);
         glowColor *= ageBrightness * ageColorMod;
         color = color + glowColor * glowStrength * 0.6;
         
-        if (p2TotalUnitDensity > unitThreshold) {
-            float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, p2TotalUnitDensity);
+        if (scaledDensity > unitThreshold) {
+            float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, scaledDensity);
             // Orange (empty) to red (holding) for player 2
             vec3 orangeColor = vec3(1.0, 0.6, 0.2) * ageBrightness * ageColorMod;
             vec3 redColor = vec3(0.95, 0.3, 0.3) * ageBrightness * ageColorMod;
             vec3 unitColor = mix(orangeColor, redColor, holdingRatio);
-            float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, p2TotalUnitDensity);
+            float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, scaledDensity);
             unitColor += vec3(0.2) * coreGlow * ageBrightness;
             color = mix(color, unitColor, blobStrength);
         }

@@ -23,7 +23,7 @@ const TEMPORAL_BLEND = 1.0;           // Temporal AA blend (0 = off, 1 = full). 
 // Simulation speed settings
 const LOG_INTERVAL = 1000;            // Stats logging interval in ms
 const SIM_BATCH_SIZE = 10;            // Simulation steps per batch in fast mode
-const SYNC_SIM_BATCH_SIZE = 4;        // Simulation steps per batch in synced (normal) mode
+const SYNC_SIM_BATCH_SIZE = 1;        // Simulation steps per batch in synced (normal) mode
 const DEFAULT_SYNC_MODE = true;       // true = sync with render (normal), false = fast as possible
 
 // Map generation - Resource blobs
@@ -870,7 +870,7 @@ function logStats() {
     if (elapsed >= LOG_INTERVAL) {
         const simFps = (simStepCount / elapsed) * 1000;
         const renderFps = (renderFrameCount / elapsed) * 1000;
-        console.log(`Sim: ${simFps.toFixed(0)} steps/sec | Render: ${renderFps.toFixed(0)} fps | Step: ${Math.floor(simTime)}`);
+        // console.log(`Sim: ${simFps.toFixed(0)} steps/sec | Render: ${renderFps.toFixed(0)} fps | Step: ${Math.floor(simTime)}`);
         simStepCount = 0;
         renderFrameCount = 0;
         lastLogTime = now;

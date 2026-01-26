@@ -7,18 +7,18 @@ precision highp float;
  * Final reduction that outputs sound parameters directly.
  * 
  * Input (4x4 with deltas):
- *   R: Δ Resources    G: Δ Units    B: Combat    A: Δ Factories
+ *   R: Δ World Resources    G: Δ Units    B: Combat    A: Factory Activity
  *   
  * Output (2x1 = 2 pixels):
  *   Pixel 0 (Continuous loop volumes, 0.0-1.0):
  *     R: mining_volume     - Driven by resource depletion rate
  *     G: combat_volume     - Driven by combat score
- *     B: factory_hum       - Driven by factory activity
- *     A: swarm_volume      - Driven by unit density
+ *     B: factory_hum       - Driven by factory activity (deposits + spawning)
+ *     A: swarm_volume      - Driven by unit count changes
  *     
  *   Pixel 1 (Triggers and meta):
  *     R: spawn_rate        - Number of spawns (0-5+)
- *     G: explosion_rate    - Number of destructions (0-3+)
+ *     G: explosion_rate    - Number of factory cells destroyed (0-3+)
  *     B: ambient_intensity - Overall activity level
  *     A: reserved
  */
@@ -46,7 +46,7 @@ void main() {
     float totalDeltaResources = 0.0;
     float totalDeltaUnits = 0.0;
     float totalCombat = 0.0;
-    float totalDeltaFactories = 0.0;
+    float totalFactoryActivity = 0.0;
     
     for (float y = 0.0; y < 4.0; y += 1.0) {
         for (float x = 0.0; x < 4.0; x += 1.0) {
@@ -54,30 +54,32 @@ void main() {
             totalDeltaResources += delta.r;
             totalDeltaUnits += delta.g;
             totalCombat += delta.b;
-            totalDeltaFactories += delta.a;
+            totalFactoryActivity += delta.a;  // Factory activity (deposits + spawning)
         }
     }
     
-    // Also sum factory resources from the 16x16 texture
-    float totalFactoryResources = 0.0;
-    float totalUnits = 0.0;
+    // Count total factories for explosion detection (factory cells destroyed)
+    float totalFactoryCells = 0.0;
+    float prevTotalFactoryCells = 0.0;
     for (float y = 0.0; y < 16.0; y += 1.0) {
         for (float x = 0.0; x < 16.0; x += 1.0) {
             vec4 fac = texture(u_currentFac, (vec2(x, y) + 0.5) / u_facResolution);
-            totalFactoryResources += fac.b + fac.a;  // P1 + P2 resources
+            totalFactoryCells += fac.r + fac.g;  // P1 + P2 factory cell counts
         }
     }
     
     // Compute sound parameters
     float miningVolume = clamp(-totalDeltaResources / MINING_DIVISOR, 0.0, 1.0);
     float combatVolume = clamp(totalCombat / COMBAT_DIVISOR, 0.0, 1.0);
-    float factoryHum = clamp(totalFactoryResources / FACTORY_DIVISOR, 0.0, 1.0);
-    float swarmVolume = clamp(totalDeltaUnits / SWARM_DIVISOR, 0.0, 1.0);  // Using delta as proxy
+    // Factory hum based on ACTIVITY (deposits + spawning), not static resources
+    float factoryHum = clamp(totalFactoryActivity / 10.0, 0.0, 1.0);
+    float swarmVolume = clamp(abs(totalDeltaUnits) / SWARM_DIVISOR, 0.0, 1.0);
     
-    float spawnRate = clamp(totalDeltaUnits, 0.0, 5.0);
-    float explosionRate = clamp(-totalDeltaFactories, 0.0, 3.0);
+    float spawnRate = clamp(max(0.0, totalDeltaUnits), 0.0, 5.0);
+    // For explosions, we'd need factory cell delta - approximate from combat
+    float explosionRate = clamp(totalCombat / 5.0, 0.0, 3.0);
     float ambientIntensity = clamp(
-        (abs(totalDeltaResources) + abs(totalDeltaUnits) + totalCombat) / ACTIVITY_DIVISOR,
+        (abs(totalDeltaResources) + abs(totalDeltaUnits) + totalCombat + totalFactoryActivity) / ACTIVITY_DIVISOR,
         0.0, 1.0
     );
     

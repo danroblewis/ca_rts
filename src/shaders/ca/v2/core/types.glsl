@@ -157,6 +157,11 @@ vec4 encodeUnitSimple(int player, bool holding, int counter, vec2 factoryPos) {
     return encodeUnitRaw(player, holding, counter, 0.0, factoryPos, vec2(-1.0), 0.0, 0.0);
 }
 
+// Encode a newly spawned unit with negative age for "newborn glow" effect
+vec4 encodeNewbornUnit(int player, vec2 factoryPos) {
+    return encodeUnitRaw(player, false, 0, NEWBORN_AGE, factoryPos, vec2(-1.0), 0.0, 0.0);
+}
+
 // ============================================================================
 // FACTORY (unified: built or unbuilt)
 // G = resource count (or build progress for unbuilt factories)

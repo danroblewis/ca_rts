@@ -149,9 +149,8 @@ SpawnResult evaluateSpawning(vec2 myPos, sampler2D state, vec2 resolution) {
                     result.happened = true;
                     result.spawnerPos = belowPos;
                     result.spawnPos = myPos;
-                    // Spawn unit with the correct player type
-                    // Use proper unit encoding - factory pos goes in channel B (packed)
-                    result.spawnedCell = encodeUnitSimple(player, false, 0, center);
+                    // Spawn unit with newborn age (negative) for glow effect
+                    result.spawnedCell = encodeNewbornUnit(player, center);
                     result.factoryCenter = center;
                     result.player = player;
                     return result;
@@ -173,9 +172,8 @@ SpawnResult evaluateSpawning(vec2 myPos, sampler2D state, vec2 resolution) {
             result.happened = true;
             result.spawnerPos = topMiddle;
             result.spawnPos = spawnPos;
-            // Spawn unit with the correct player type
-            // Use proper unit encoding - factory pos goes in channel B (packed)
-            result.spawnedCell = encodeUnitSimple(player, false, 0, center);
+            // Spawn unit with newborn age (negative) for glow effect
+            result.spawnedCell = encodeNewbornUnit(player, center);
             result.factoryCenter = center;
             result.player = player;
             return result;
