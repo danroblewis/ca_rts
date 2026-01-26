@@ -388,7 +388,14 @@ console.log(`  Click to place a mining factory!`);
 // Click to Place Factory / Shift+Click to Delete
 // ============================================================================
 
+const MAX_FACTORIES_PER_PLAYER = 7;
 let factoriesPlaced = 0;
+
+// Track factory count per player (bases marked for demolition don't count)
+const playerFactoryCounts = {
+    [PLAYER_1]: 0,
+    [PLAYER_2]: 0
+};
 
 // Cursor overlay for delete mode
 const cursorOverlay = document.getElementById('cursor-overlay');
@@ -465,6 +472,9 @@ canvas.addEventListener('click', async (event) => {
         let markedCount = 0;
         let deletedCount = 0;
         
+        // Track unique factory centers being demolished (key: "player,x,y")
+        const factoriesAffected = new Set();
+        
         for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
             for (let dx = -DELETE_RADIUS; dx <= DELETE_RADIUS; dx++) {
                 const x = gridPos.x + dx;
@@ -477,12 +487,17 @@ canvas.addEventListener('click', async (event) => {
                 const buildCount = currentData[idx + 1];
                 
                 if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
+                    const owner = cellType === CELL_MINING_FACTORY_P2 ? PLAYER_2 : PLAYER_1;
+                    const centerX = currentData[idx + 2];
+                    const centerY = currentData[idx + 3];
+                    
+                    // Track this factory (by center position and owner)
+                    factoriesAffected.add(`${owner},${centerX},${centerY}`);
+                    
                     // Check if this factory cell has any build progress or resources
                     // buildCount here represents either resources (built) or build progress (unbuilt)
                     if (buildCount > 0) {
                         // Has resources or build progress: mark for demolition (units salvage)
-                        const centerX = currentData[idx + 2];
-                        const centerY = currentData[idx + 3];
                         currentData[idx + 0] = CELL_DEMOLISH;
                         currentData[idx + 1] = 0;
                         currentData[idx + 2] = centerX;
@@ -500,12 +515,29 @@ canvas.addEventListener('click', async (event) => {
             }
         }
         
+        // Decrement factory count for each unique factory affected
+        for (const key of factoriesAffected) {
+            const [owner] = key.split(',').map(Number);
+            playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - 1);
+        }
+        if (factoriesAffected.size > 0) {
+            updatePlayerIndicator();  // Update base count display
+        }
+        
         grid.upload(currentData);
         if (markedCount > 0 || deletedCount > 0) {
             const parts = [];
             if (deletedCount > 0) parts.push(`deleted ${deletedCount} unbuilt`);
             if (markedCount > 0) parts.push(`marked ${markedCount} for demolition`);
+            if (factoriesAffected.size > 0) parts.push(`${factoriesAffected.size} base(s) freed`);
             console.log(`${parts.join(', ')} around (${gridPos.x}, ${gridPos.y})`);
+            
+            // Calculate factories freed per player for network sync
+            const factoriesFreed = {};
+            for (const key of factoriesAffected) {
+                const [owner] = key.split(',').map(Number);
+                factoriesFreed[owner] = (factoriesFreed[owner] || 0) + 1;
+            }
             
             // Sync with network
             syncAction({
@@ -513,7 +545,8 @@ canvas.addEventListener('click', async (event) => {
                 x: gridPos.x,
                 y: gridPos.y,
                 deleted: deletedCount,
-                marked: markedCount
+                marked: markedCount,
+                factoriesFreed: factoriesFreed
             });
         }
     } else {
@@ -525,6 +558,12 @@ canvas.addEventListener('click', async (event) => {
         // Check bounds for 3x3
         if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
             console.log('Too close to edge for 3x3 structure');
+            return;
+        }
+        
+        // Check factory limit
+        if (playerFactoryCounts[currentPlayer] >= MAX_FACTORIES_PER_PLAYER) {
+            console.log(`Cannot place factory - Player ${currentPlayer} already has ${MAX_FACTORIES_PER_PLAYER} bases (delete some to place more)`);
             return;
         }
         
@@ -580,11 +619,13 @@ canvas.addEventListener('click', async (event) => {
         
         grid.upload(currentData);
         factoriesPlaced++;
+        playerFactoryCounts[currentPlayer]++;
+        updatePlayerIndicator();  // Update base count display
         
         if (isUnbuilt) {
-            console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) - needs 8 build points to activate`);
+            console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY})`);
         } else {
-            console.log(`Placed 3x3 factory #${factoriesPlaced} centered at (${centerX}, ${centerY}) with ${totalResources} total resources`);
+            console.log(`Placed 3x3 factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY}) with ${totalResources} total resources`);
         }
         
         // Sync with network
@@ -640,13 +681,16 @@ function updatePlayerIndicator() {
         indicator.onclick = () => window.switchPlayer();
         document.body.appendChild(indicator);
     }
+    const baseCount = playerFactoryCounts[currentPlayer];
+    const baseText = `Bases: ${baseCount}/${MAX_FACTORIES_PER_PLAYER}`;
+    
     if (currentPlayer === PLAYER_1) {
-        indicator.textContent = 'Player 1 (Purple)';
+        indicator.textContent = `Player 1 (Purple) • ${baseText}`;
         indicator.style.background = 'rgba(112, 51, 204, 0.8)';
         indicator.style.color = 'white';
         indicator.style.border = '2px solid rgba(160, 100, 255, 0.8)';
     } else {
-        indicator.textContent = 'Player 2 (Green)';
+        indicator.textContent = `Player 2 (Green) • ${baseText}`;
         indicator.style.background = 'rgba(51, 179, 102, 0.8)';
         indicator.style.color = 'white';
         indicator.style.border = '2px solid rgba(100, 220, 150, 0.8)';
@@ -719,7 +763,25 @@ networkSync.onStateReceived = (syncData) => {
     // Sync simulation time
     simTime = syncData.simTime;
     
-    console.log(`[Multiplayer] State applied. Action: ${syncData.action?.type || 'unknown'}`);
+    // Update factory counts based on action
+    const action = syncData.action;
+    if (action) {
+        if (action.type === 'place_factory' && action.player) {
+            playerFactoryCounts[action.player]++;
+            factoriesPlaced++;
+            console.log(`[Multiplayer] Player ${action.player} placed factory (${playerFactoryCounts[action.player]}/${MAX_FACTORIES_PER_PLAYER})`);
+            updatePlayerIndicator();
+        } else if (action.type === 'demolish' && action.factoriesFreed) {
+            // Decrement counts for freed factories
+            for (const [player, count] of Object.entries(action.factoriesFreed)) {
+                playerFactoryCounts[player] = Math.max(0, playerFactoryCounts[player] - count);
+            }
+            console.log(`[Multiplayer] Factories demolished, counts: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
+            updatePlayerIndicator();
+        }
+    }
+    
+    console.log(`[Multiplayer] State applied. Action: ${action?.type || 'unknown'}`);
 };
 
 // Network indicator UI
