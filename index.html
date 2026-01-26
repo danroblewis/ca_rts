@@ -18,8 +18,12 @@
         }
         canvas {
             display: block;
-            width: 100%;
-            height: 100%;
+            /* Size is set dynamically by JavaScript to maintain square aspect ratio */
+            /* Center the canvas */
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
         }
         #cursor-overlay {
             position: fixed;

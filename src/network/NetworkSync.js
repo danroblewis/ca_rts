@@ -84,8 +84,11 @@ export class NetworkSync {
 
     /**
      * Connect to the game server
+     * @param {string} serverUrl - WebSocket server URL
+     * @param {string} roomId - Room to join
+     * @param {number|null} requestedPlayerId - Optional: request a specific player ID (for rejoining)
      */
-    connect(serverUrl, roomId) {
+    connect(serverUrl, roomId, requestedPlayerId = null) {
         return new Promise((resolve, reject) => {
             this.roomId = roomId;
             
@@ -96,11 +99,19 @@ export class NetworkSync {
                     console.log('[NetworkSync] Connected to server');
                     this.isConnected = true;
                     
-                    // Join the room
-                    this.send({
+                    // Join the room, optionally requesting a specific player ID
+                    const joinMessage = {
                         type: 'join',
                         roomId: this.roomId
-                    });
+                    };
+                    if (requestedPlayerId !== null && requestedPlayerId !== undefined && !isNaN(requestedPlayerId)) {
+                        joinMessage.requestedPlayerId = requestedPlayerId;
+                        console.log(`[NetworkSync] Requesting player ID: ${requestedPlayerId}`);
+                    } else {
+                        console.log(`[NetworkSync] No valid requestedPlayerId (value: ${requestedPlayerId})`);
+                    }
+                    console.log(`[NetworkSync] Sending join message:`, JSON.stringify(joinMessage));
+                    this.send(joinMessage);
                     
                     if (this.onConnectionChange) {
                         this.onConnectionChange(true);

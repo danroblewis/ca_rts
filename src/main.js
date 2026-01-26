@@ -126,8 +126,13 @@ const gl = gpu.gl;
 
 function resize() {
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = window.innerWidth * dpr;
-    canvas.height = window.innerHeight * dpr;
+    // Use the minimum of width/height to keep canvas square
+    const size = Math.min(window.innerWidth, window.innerHeight);
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    // Also set CSS size to match
+    canvas.style.width = size + 'px';
+    canvas.style.height = size + 'px';
 }
 window.addEventListener('resize', resize);
 resize();
@@ -594,8 +599,8 @@ canvas.addEventListener('click', async (event) => {
             return;
         }
         
-        // First factory is built (has resources), subsequent are unbuilt (need construction)
-        const isUnbuilt = factoriesPlaced > 0;
+        // First factory FOR EACH PLAYER is built (has resources), subsequent are unbuilt (need construction)
+        const isUnbuilt = playerFactoryCounts[currentPlayer] > 0;
         const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
         const resourcesPerCell = totalResources / 8.0;  // 8 cells (center is empty)
         
@@ -725,6 +730,11 @@ let isMultiplayer = false;
 const roomParam = urlParams.get('room');
 const roomId = roomParam || `game-${mapSeed}`;
 
+// Get player ID from URL (for rejoining after refresh)
+const playerParam = urlParams.get('player');
+const requestedPlayerId = playerParam ? parseInt(playerParam) : null;
+console.log(`[URL Params] playerParam: "${playerParam}", requestedPlayerId: ${requestedPlayerId}`);
+
 // Network event handlers
 networkSync.onConnectionChange = (connected) => {
     isMultiplayer = connected;
@@ -745,8 +755,27 @@ networkSync.onPlayerJoined = (playerId, isHost) => {
         }
         console.log(`[Multiplayer] currentPlayer is now: ${currentPlayer} (PLAYER_1=${PLAYER_1}, PLAYER_2=${PLAYER_2})`);
         updatePlayerIndicator();
+        
+        // Update URL with room and player ID (for refresh/rejoin)
+        const url = new URL(window.location);
+        url.searchParams.set('room', roomId);
+        url.searchParams.set('player', playerId);
+        window.history.replaceState({}, '', url);
+        console.log(`[Multiplayer] URL updated: ${url.toString()}`);
     } else {
-        console.log(`[Multiplayer] This is another player's join, not updating currentPlayer. Current: ${currentPlayer}`);
+        console.log(`[Multiplayer] Another player joined: ${playerId}`);
+        
+        // If we're Player 1 (the host), sync our state to the new player
+        if (networkSync.playerId === 1) {
+            console.log(`[Multiplayer] We are the host - syncing game state to new player`);
+            syncAction({
+                type: 'player_sync',
+                reason: 'new_player_joined',
+                newPlayerId: playerId,
+                factoryCounts: { ...playerFactoryCounts },
+                factoriesPlaced: factoriesPlaced
+            });
+        }
     }
     updateNetworkIndicator();
 };
@@ -769,7 +798,18 @@ networkSync.onStateReceived = (syncData) => {
     // Update factory counts based on action
     const action = syncData.action;
     if (action) {
-        if (action.type === 'place_factory' && action.player) {
+        if (action.type === 'player_sync') {
+            // Full state sync from host - replace our factory counts entirely
+            if (action.factoryCounts) {
+                playerFactoryCounts[PLAYER_1] = action.factoryCounts[PLAYER_1] || 0;
+                playerFactoryCounts[PLAYER_2] = action.factoryCounts[PLAYER_2] || 0;
+            }
+            if (action.factoriesPlaced !== undefined) {
+                factoriesPlaced = action.factoriesPlaced;
+            }
+            console.log(`[Multiplayer] Full state sync received. Factories: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}, total placed: ${factoriesPlaced}`);
+            updatePlayerIndicator();
+        } else if (action.type === 'place_factory' && action.player) {
             playerFactoryCounts[action.player]++;
             factoriesPlaced++;
             console.log(`[Multiplayer] Player ${action.player} placed factory (${playerFactoryCounts[action.player]}/${MAX_FACTORIES_PER_PLAYER})`);
@@ -848,12 +888,8 @@ async function toggleMultiplayer() {
     } else {
         try {
             const wsUrl = `ws://${window.location.host}/ws`;
-            await networkSync.connect(wsUrl, roomId);
-            
-            // Update URL with room
-            const url = new URL(window.location);
-            url.searchParams.set('room', roomId);
-            window.history.replaceState({}, '', url);
+            console.log(`[Multiplayer] Connecting with requestedPlayerId: ${requestedPlayerId} (type: ${typeof requestedPlayerId})`);
+            await networkSync.connect(wsUrl, roomId, requestedPlayerId);
             
             console.log(`[Multiplayer] Connected to room: ${roomId}`);
         } catch (error) {
@@ -877,6 +913,12 @@ updateNetworkIndicator();
 window.toggleMultiplayer = toggleMultiplayer;
 window.networkSync = networkSync;
 console.log(`Room ID: ${roomId} - Click network indicator or call toggleMultiplayer() to connect`);
+
+// Auto-connect if both room and player URL params are present (for rejoining after refresh)
+if (roomParam && playerParam && !isOnGitHub) {
+    console.log(`[Multiplayer] Auto-connecting to room ${roomId} as player ${requestedPlayerId}...`);
+    toggleMultiplayer();
+}
 
 // ============================================================================
 // Simulation Loop

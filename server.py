@@ -43,10 +43,30 @@ class GameRoom:
     next_player_id: int = 1
     host_id: Optional[int] = None
     
-    def add_player(self, websocket: WebSocket) -> Player:
-        """Add a new player to the room."""
-        player_id = self.next_player_id
-        self.next_player_id += 1
+    async def add_player(self, websocket: WebSocket, requested_player_id: Optional[int] = None) -> Player:
+        """Add a new player to the room.
+        
+        If requested_player_id is provided, use that ID (kicking any existing player with that ID).
+        Otherwise, assign the next available ID.
+        """
+        # Try to use requested ID
+        if requested_player_id is not None:
+            player_id = requested_player_id
+            # If this player ID is already taken, kick the old connection (handles refresh)
+            if player_id in self.players:
+                old_player = self.players[player_id]
+                try:
+                    await old_player.websocket.close()
+                except Exception:
+                    pass
+                del self.players[player_id]
+                print(f"Kicked old player {player_id} to allow rejoin")
+            # Update next_player_id if needed to avoid conflicts
+            if player_id >= self.next_player_id:
+                self.next_player_id = player_id + 1
+        else:
+            player_id = self.next_player_id
+            self.next_player_id += 1
         
         is_host = len(self.players) == 0
         if is_host:
@@ -117,8 +137,11 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg_type == "join":
                 # Player joining a room
                 room_id = data.get("roomId", "default")
+                requested_player_id = data.get("requestedPlayerId")
+                print(f"Join request: room={room_id}, requestedPlayerId={requested_player_id} (type: {type(requested_player_id)})")
                 room = get_or_create_room(room_id)
-                player = room.add_player(websocket)
+                player = await room.add_player(websocket, requested_player_id)
+                print(f"Assigned player_id={player.player_id}")
                 
                 # Send join confirmation
                 await websocket.send_json({
