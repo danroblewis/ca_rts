@@ -261,11 +261,11 @@ function updateAudioButton() {
     const btn = document.getElementById('audioToggle');
     if (btn) {
         if (!audioInitialized) {
-            btn.textContent = '🔊 Sound (click game to start)';
+            btn.textContent = '🔊';
         } else if (audioEngine.muted) {
-            btn.textContent = '🔇 Muted';
+            btn.textContent = '🔇';
         } else {
-            btn.textContent = '🔊 Sound On';
+            btn.textContent = '🔊';
         }
     }
 }
@@ -284,110 +284,117 @@ function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
     data[idx + 3] = dataC;
 }
 
-// Fill with empty
-data.fill(0);
-
-// Place resources in blobs/clusters (more realistic RTS style)
-let totalResources = 0;
-
-for (let b = 0; b < NUM_BLOBS; b++) {
-    // Pick blob center randomly
-    const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-    const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-    
-    // Random radius for this blob
-    const radius = BLOB_MIN_RADIUS + seededRandom() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
-    
-    // Fill the blob with resources
-    for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
-        for (let dx = -Math.ceil(radius); dx <= Math.ceil(radius); dx++) {
-            const x = centerX + dx;
-            const y = centerY + dy;
-            
-            // Check bounds
-            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
-            
-            // Check if within blob radius (with some noise for organic shape)
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const noiseRadius = radius * (0.7 + seededRandom() * 0.6); // Irregular edges
-            if (dist > noiseRadius) continue;
-            
-            // Density check
-            if (seededRandom() > BLOB_DENSITY) continue;
-            
-            setCell(x, y, CELL_RESOURCE, 1.0);
-            totalResources++;
-        }
-    }
-}
-
-const NUM_RESOURCES = totalResources;
-
-// ============================================================================
-// Generate Walls - random barriers and obstacles
-// ============================================================================
-
-let totalWalls = 0;
-
 // Helper to check if a cell is empty (don't overwrite resources)
 function isEmpty(x, y) {
     const idx = (y * GRID_SIZE + x) * 4;
     return data[idx] === CELL_EMPTY;
 }
 
-// Generate wall lines (horizontal or vertical)
-for (let i = 0; i < NUM_WALL_LINES; i++) {
-    const horizontal = seededRandom() > 0.5;
-    const length = Math.floor(WALL_MIN_LENGTH + seededRandom() * (WALL_MAX_LENGTH - WALL_MIN_LENGTH));
+// Generate map with a specific seed
+function generateMap(seed) {
+    console.log(`Generating map with seed: ${seed}`);
+    mapSeed = seed;
+    seededRandom = mulberry32(seed);
     
-    // Pick starting position (leave margin from edges)
-    const startX = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
-    const startY = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
+    // Fill with empty
+    data.fill(0);
     
-    for (let j = 0; j < length; j++) {
-        const x = horizontal ? startX + j : startX;
-        const y = horizontal ? startY : startY + j;
+    // Place resources in blobs/clusters (more realistic RTS style)
+    let totalResources = 0;
+    
+    for (let b = 0; b < NUM_BLOBS; b++) {
+        // Pick blob center randomly
+        const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
+        const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
         
-        // Only place if cell is empty (don't overwrite resources)
-        if (x >= 1 && x < GRID_SIZE - 1 && y >= 1 && y < GRID_SIZE - 1 && isEmpty(x, y)) {
-            setCell(x, y, CELL_WALL);
-            totalWalls++;
+        // Random radius for this blob
+        const radius = BLOB_MIN_RADIUS + seededRandom() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
+        
+        // Fill the blob with resources
+        for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
+            for (let dx = -Math.ceil(radius); dx <= Math.ceil(radius); dx++) {
+                const x = centerX + dx;
+                const y = centerY + dy;
+                
+                // Check bounds
+                if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
+                
+                // Check if within blob radius (with some noise for organic shape)
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const noiseRadius = radius * (0.7 + seededRandom() * 0.6); // Irregular edges
+                if (dist > noiseRadius) continue;
+                
+                // Density check
+                if (seededRandom() > BLOB_DENSITY) continue;
+                
+                setCell(x, y, CELL_RESOURCE, 1.0);
+                totalResources++;
+            }
         }
     }
-}
-
-// Generate small wall clusters
-for (let b = 0; b < NUM_WALL_BLOBS; b++) {
-    const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-    const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
     
-    for (let dy = -WALL_BLOB_RADIUS; dy <= WALL_BLOB_RADIUS; dy++) {
-        for (let dx = -WALL_BLOB_RADIUS; dx <= WALL_BLOB_RADIUS; dx++) {
-            const x = centerX + dx;
-            const y = centerY + dy;
+    // Generate Walls - random barriers and obstacles
+    let totalWalls = 0;
+    
+    // Generate wall lines (horizontal or vertical)
+    for (let i = 0; i < NUM_WALL_LINES; i++) {
+        const horizontal = seededRandom() > 0.5;
+        const length = Math.floor(WALL_MIN_LENGTH + seededRandom() * (WALL_MAX_LENGTH - WALL_MIN_LENGTH));
+        
+        // Pick starting position (leave margin from edges)
+        const startX = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
+        const startY = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
+        
+        for (let j = 0; j < length; j++) {
+            const x = horizontal ? startX + j : startX;
+            const y = horizontal ? startY : startY + j;
             
-            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
-            
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > WALL_BLOB_RADIUS * 0.8) continue;
-            
-            // 70% density
-            if (seededRandom() > 0.7) continue;
-            
-            if (isEmpty(x, y)) {
+            // Only place if cell is empty (don't overwrite resources)
+            if (x >= 1 && x < GRID_SIZE - 1 && y >= 1 && y < GRID_SIZE - 1 && isEmpty(x, y)) {
                 setCell(x, y, CELL_WALL);
                 totalWalls++;
             }
         }
     }
+    
+    // Generate small wall clusters
+    for (let b = 0; b < NUM_WALL_BLOBS; b++) {
+        const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
+        const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
+        
+        for (let dy = -WALL_BLOB_RADIUS; dy <= WALL_BLOB_RADIUS; dy++) {
+            for (let dx = -WALL_BLOB_RADIUS; dx <= WALL_BLOB_RADIUS; dx++) {
+                const x = centerX + dx;
+                const y = centerY + dy;
+                
+                if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
+                
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > WALL_BLOB_RADIUS * 0.8) continue;
+                
+                // 70% density
+                if (seededRandom() > 0.7) continue;
+                
+                if (isEmpty(x, y)) {
+                    setCell(x, y, CELL_WALL);
+                    totalWalls++;
+                }
+            }
+        }
+    }
+    
+    grid.upload(data);
+    
+    console.log(`Map generated:`);
+    console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
+    console.log(`  ${totalResources} resources scattered`);
+    console.log(`  ${totalWalls} walls placed`);
+    
+    return { totalResources, totalWalls };
 }
 
-grid.upload(data);
-
-console.log(`Mining Game initialized:`);
-console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
-console.log(`  ${NUM_RESOURCES} resources scattered`);
-console.log(`  ${totalWalls} walls placed`);
+// Generate initial map
+generateMap(mapSeed);
 console.log(`  Click to place a mining factory!`);
 
 // ============================================================================
@@ -402,6 +409,16 @@ const playerFactoryCounts = {
     [PLAYER_1]: 0,
     [PLAYER_2]: 0
 };
+
+// Track total factories ever placed per player (for win/lose condition)
+const playerTotalFactoriesPlaced = {
+    [PLAYER_1]: 0,
+    [PLAYER_2]: 0
+};
+
+// Game over state
+let gameOver = false;
+let winner = null;
 
 // Cursor overlay for delete mode
 const cursorOverlay = document.getElementById('cursor-overlay');
@@ -561,6 +578,13 @@ canvas.addEventListener('click', async (event) => {
         const centerX = gridPos.x;
         const centerY = gridPos.y;
         
+        // Check if in multiplayer waiting for opponent
+        if (isMultiplayer && connectedPlayers.size < 2) {
+            console.log('Waiting for opponent to join before placing factories');
+            audioEngine.playReject();
+            return;
+        }
+        
         // Check bounds for 3x3
         if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
             console.log('Too close to edge for 3x3 structure');
@@ -629,6 +653,7 @@ canvas.addEventListener('click', async (event) => {
         grid.upload(currentData);
         factoriesPlaced++;
         playerFactoryCounts[currentPlayer]++;
+        playerTotalFactoriesPlaced[currentPlayer]++;
         updatePlayerIndicator();  // Update base count display
         
         if (isUnbuilt) {
@@ -676,13 +701,13 @@ function updatePlayerIndicator() {
         indicator.id = 'player-indicator';
         indicator.style.cssText = `
             position: fixed;
-            top: 16px;
-            left: 16px;
+            top: 8px;
+            left: 8px;
             z-index: 200;
-            padding: 8px 16px;
-            border-radius: 8px;
+            padding: 4px 8px;
+            border-radius: 4px;
             font-family: 'SF Mono', monospace;
-            font-size: 14px;
+            font-size: 11px;
             font-weight: bold;
             backdrop-filter: blur(8px);
             cursor: pointer;
@@ -726,9 +751,12 @@ console.log('Press 1 or 2 to switch players, or click the player indicator');
 const networkSync = getNetworkSync(GRID_SIZE);
 let isMultiplayer = false;
 
+// Track connected players in multiplayer
+const connectedPlayers = new Set();
+
 // Get room from URL or generate one
 const roomParam = urlParams.get('room');
-const roomId = roomParam || `game-${mapSeed}`;
+let roomId = roomParam || `game-${mapSeed}`;
 
 // Get player ID from URL (for rejoining after refresh)
 const playerParam = urlParams.get('player');
@@ -738,11 +766,21 @@ console.log(`[URL Params] playerParam: "${playerParam}", requestedPlayerId: ${re
 // Network event handlers
 networkSync.onConnectionChange = (connected) => {
     isMultiplayer = connected;
+    if (!connected) {
+        connectedPlayers.clear();
+    }
     updateNetworkIndicator();
 };
 
-networkSync.onPlayerJoined = (playerId, isHost) => {
-    console.log(`[Multiplayer] ${isHost ? 'You are the host' : 'Player joined'}: ${playerId}, networkSync.playerId: ${networkSync.playerId}`);
+networkSync.onPlayerJoined = (playerId, isHost, serverMapSeed, serverConnectedPlayers) => {
+    console.log(`[Multiplayer] ${isHost ? 'You are the host' : 'Player joined'}: ${playerId}, networkSync.playerId: ${networkSync.playerId}, mapSeed: ${serverMapSeed}, connectedPlayers: ${serverConnectedPlayers}`);
+    
+    // Track connected players - add all from server list if provided, otherwise just this one
+    if (serverConnectedPlayers && Array.isArray(serverConnectedPlayers)) {
+        serverConnectedPlayers.forEach(pid => connectedPlayers.add(pid));
+    } else {
+        connectedPlayers.add(playerId);
+    }
     
     // Only assign our player number when WE join, not when others join
     // networkSync.playerId is set before this callback, so we can check if this is our own join
@@ -756,10 +794,25 @@ networkSync.onPlayerJoined = (playerId, isHost) => {
         console.log(`[Multiplayer] currentPlayer is now: ${currentPlayer} (PLAYER_1=${PLAYER_1}, PLAYER_2=${PLAYER_2})`);
         updatePlayerIndicator();
         
-        // Update URL with room and player ID (for refresh/rejoin)
+        // If server provided a map seed different from ours, regenerate the map
+        if (serverMapSeed !== undefined && serverMapSeed !== mapSeed) {
+            console.log(`[Multiplayer] Server has different map seed (${serverMapSeed}), regenerating map...`);
+            generateMap(serverMapSeed);
+            // Reset factory counters since we have a fresh map
+            playerFactoryCounts[PLAYER_1] = 0;
+            playerFactoryCounts[PLAYER_2] = 0;
+            playerTotalFactoriesPlaced[PLAYER_1] = 0;
+            playerTotalFactoriesPlaced[PLAYER_2] = 0;
+            factoriesPlaced = 0;
+        }
+        
+        // Update URL with room, player ID, and seed (for refresh/rejoin)
         const url = new URL(window.location);
         url.searchParams.set('room', roomId);
         url.searchParams.set('player', playerId);
+        if (serverMapSeed !== undefined) {
+            url.searchParams.set('seed', serverMapSeed);
+        }
         window.history.replaceState({}, '', url);
         console.log(`[Multiplayer] URL updated: ${url.toString()}`);
     } else {
@@ -773,6 +826,7 @@ networkSync.onPlayerJoined = (playerId, isHost) => {
                 reason: 'new_player_joined',
                 newPlayerId: playerId,
                 factoryCounts: { ...playerFactoryCounts },
+                totalPlaced: { ...playerTotalFactoriesPlaced },
                 factoriesPlaced: factoriesPlaced
             });
         }
@@ -782,6 +836,7 @@ networkSync.onPlayerJoined = (playerId, isHost) => {
 
 networkSync.onPlayerLeft = (playerId) => {
     console.log(`[Multiplayer] Player ${playerId} left`);
+    connectedPlayers.delete(playerId);
     updateNetworkIndicator();
 };
 
@@ -804,6 +859,10 @@ networkSync.onStateReceived = (syncData) => {
                 playerFactoryCounts[PLAYER_1] = action.factoryCounts[PLAYER_1] || 0;
                 playerFactoryCounts[PLAYER_2] = action.factoryCounts[PLAYER_2] || 0;
             }
+            if (action.totalPlaced) {
+                playerTotalFactoriesPlaced[PLAYER_1] = action.totalPlaced[PLAYER_1] || 0;
+                playerTotalFactoriesPlaced[PLAYER_2] = action.totalPlaced[PLAYER_2] || 0;
+            }
             if (action.factoriesPlaced !== undefined) {
                 factoriesPlaced = action.factoriesPlaced;
             }
@@ -811,6 +870,7 @@ networkSync.onStateReceived = (syncData) => {
             updatePlayerIndicator();
         } else if (action.type === 'place_factory' && action.player) {
             playerFactoryCounts[action.player]++;
+            playerTotalFactoriesPlaced[action.player]++;
             factoriesPlaced++;
             console.log(`[Multiplayer] Player ${action.player} placed factory (${playerFactoryCounts[action.player]}/${MAX_FACTORIES_PER_PLAYER})`);
             updatePlayerIndicator();
@@ -821,6 +881,12 @@ networkSync.onStateReceived = (syncData) => {
             }
             console.log(`[Multiplayer] Factories demolished, counts: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
             updatePlayerIndicator();
+        } else if (action.type === 'restart') {
+            // Other player clicked Play Again - reload to restart
+            console.log(`[Multiplayer] Restart requested by other player`);
+            const url = new URL(window.location);
+            url.searchParams.delete('player');
+            window.location.href = url.toString();
         }
     }
     
@@ -838,13 +904,13 @@ function updateNetworkIndicator() {
         indicator.id = 'network-indicator';
         indicator.style.cssText = `
             position: fixed;
-            top: 16px;
-            left: 200px;
+            top: 38px;
+            left: 8px;
             z-index: 200;
-            padding: 8px 16px;
-            border-radius: 8px;
+            padding: 4px 8px;
+            border-radius: 4px;
             font-family: 'SF Mono', monospace;
-            font-size: 12px;
+            font-size: 10px;
             backdrop-filter: blur(8px);
             cursor: pointer;
         `;
@@ -853,10 +919,16 @@ function updateNetworkIndicator() {
     }
     
     if (isMultiplayer) {
-        indicator.textContent = `🟢 Room: ${roomId}`;
-        indicator.style.background = 'rgba(51, 179, 51, 0.8)';
+        // Show player connection status
+        const p1Connected = connectedPlayers.has(1);
+        const p2Connected = connectedPlayers.has(2);
+        const p1Status = p1Connected ? '🟣' : '⚫';
+        const p2Status = p2Connected ? '🟢' : '⚫';
+        
+        indicator.innerHTML = `<span style="opacity: ${p1Connected ? 1 : 0.4}">${p1Status} P1</span> <span style="opacity: ${p2Connected ? 1 : 0.4}">${p2Status} P2</span>`;
+        indicator.style.background = 'rgba(40, 40, 40, 0.9)';
         indicator.style.color = 'white';
-        indicator.style.border = '2px solid rgba(100, 220, 100, 0.8)';
+        indicator.style.border = '1px solid rgba(100, 100, 100, 0.8)';
     } else {
         indicator.textContent = '⚪ Click to Connect';
         indicator.style.background = 'rgba(80, 80, 80, 0.8)';
@@ -882,19 +954,170 @@ function updateNetworkIndicator() {
     }
 }
 
+// Format seconds to human-readable duration
+function formatDuration(seconds) {
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+// Create matchmaking dialog
+async function showMatchmakingDialog() {
+    // Remove existing dialog if any
+    const existing = document.getElementById('matchmaking-dialog');
+    if (existing) existing.remove();
+    
+    // Create dialog overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'matchmaking-dialog';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.85);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+    `;
+    
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+        background: #1a1a2e;
+        border-radius: 12px;
+        padding: 24px;
+        min-width: 400px;
+        max-width: 500px;
+        max-height: 70vh;
+        overflow-y: auto;
+        border: 2px solid #4a4a6a;
+        font-family: 'SF Mono', monospace;
+    `;
+    
+    dialog.innerHTML = `
+        <h2 style="color: #fff; margin: 0 0 16px 0; font-size: 1.5rem;">🎮 Matchmaking</h2>
+        <div id="rooms-list" style="color: #888; margin-bottom: 16px;">Loading games...</div>
+        <div style="display: flex; gap: 12px;">
+            <button id="new-game-btn" style="
+                flex: 1;
+                padding: 12px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: bold;
+            ">✨ New Game</button>
+            <button id="close-matchmaking-btn" style="
+                padding: 12px 20px;
+                background: #333;
+                color: #888;
+                border: 1px solid #555;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 14px;
+            ">Cancel</button>
+        </div>
+    `;
+    
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    
+    // Close button handler
+    document.getElementById('close-matchmaking-btn').onclick = () => overlay.remove();
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    
+    // New game button handler
+    document.getElementById('new-game-btn').onclick = async () => {
+        try {
+            const resp = await fetch('/api/rooms/create', { method: 'POST' });
+            const data = await resp.json();
+            overlay.remove();
+            await joinRoom(data.roomId);
+        } catch (error) {
+            console.error('Failed to create room:', error);
+        }
+    };
+    
+    // Fetch and display rooms
+    await refreshRoomsList();
+}
+
+async function refreshRoomsList() {
+    const roomsList = document.getElementById('rooms-list');
+    if (!roomsList) return;
+    
+    try {
+        const resp = await fetch('/api/rooms');
+        const data = await resp.json();
+        
+        if (data.rooms.length === 0) {
+            roomsList.innerHTML = `
+                <p style="color: #888; text-align: center; padding: 20px;">
+                    No games available.<br>Create a new one!
+                </p>
+            `;
+            return;
+        }
+        
+        roomsList.innerHTML = data.rooms.map(room => `
+            <div class="room-card" data-room-id="${room.roomId}" style="
+                background: #252540;
+                border-radius: 8px;
+                padding: 12px;
+                margin-bottom: 8px;
+                cursor: pointer;
+                border: 1px solid #3a3a5a;
+                transition: border-color 0.2s;
+            " onmouseover="this.style.borderColor='#667eea'" onmouseout="this.style.borderColor='#3a3a5a'">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #fff; font-weight: bold;">${room.displayName}</span>
+                    <span style="color: ${room.playerCount >= room.maxPlayers ? '#e74c3c' : '#2ecc71'}; font-size: 12px;">
+                        ${room.playerCount}/${room.maxPlayers} players
+                    </span>
+                </div>
+                <div style="color: #888; font-size: 11px; margin-top: 4px;">
+                    Running for ${formatDuration(room.ageSeconds)} • Seed: ${room.mapSeed}
+                </div>
+            </div>
+        `).join('');
+        
+        // Add click handlers to room cards
+        document.querySelectorAll('.room-card').forEach(card => {
+            card.onclick = async () => {
+                const roomIdToJoin = card.dataset.roomId;
+                document.getElementById('matchmaking-dialog')?.remove();
+                await joinRoom(roomIdToJoin);
+            };
+        });
+        
+    } catch (error) {
+        roomsList.innerHTML = `<p style="color: #e74c3c;">Failed to load games</p>`;
+    }
+}
+
+async function joinRoom(roomIdToJoin) {
+    try {
+        const wsUrl = `ws://${window.location.host}/ws`;
+        console.log(`[Multiplayer] Joining room: ${roomIdToJoin}`);
+        // Update the global roomId so URL updates correctly
+        roomId = roomIdToJoin;
+        await networkSync.connect(wsUrl, roomIdToJoin, null);
+        console.log(`[Multiplayer] Connected to room: ${roomIdToJoin}`);
+    } catch (error) {
+        console.error('[Multiplayer] Connection failed:', error);
+    }
+}
+
 async function toggleMultiplayer() {
     if (isMultiplayer) {
         networkSync.disconnect();
     } else {
-        try {
-            const wsUrl = `ws://${window.location.host}/ws`;
-            console.log(`[Multiplayer] Connecting with requestedPlayerId: ${requestedPlayerId} (type: ${typeof requestedPlayerId})`);
-            await networkSync.connect(wsUrl, roomId, requestedPlayerId);
-            
-            console.log(`[Multiplayer] Connected to room: ${roomId}`);
-        } catch (error) {
-            console.error('[Multiplayer] Connection failed:', error);
-        }
+        // Show matchmaking dialog instead of direct connect
+        await showMatchmakingDialog();
     }
 }
 
@@ -917,7 +1140,16 @@ console.log(`Room ID: ${roomId} - Click network indicator or call toggleMultipla
 // Auto-connect if both room and player URL params are present (for rejoining after refresh)
 if (roomParam && playerParam && !isOnGitHub) {
     console.log(`[Multiplayer] Auto-connecting to room ${roomId} as player ${requestedPlayerId}...`);
-    toggleMultiplayer();
+    // Direct connect with the saved player ID
+    (async () => {
+        try {
+            const wsUrl = `ws://${window.location.host}/ws`;
+            await networkSync.connect(wsUrl, roomId, requestedPlayerId);
+            console.log(`[Multiplayer] Reconnected to room: ${roomId}`);
+        } catch (error) {
+            console.error('[Multiplayer] Reconnection failed:', error);
+        }
+    })();
 }
 
 // ============================================================================
@@ -1032,6 +1264,125 @@ function fastSimulationLoop() {
     
     setTimeout(fastSimulationLoop, 0);
 }
+
+// ============================================================================
+// Win/Lose Condition Check
+// ============================================================================
+
+// Scan the grid to count actual factories per player
+function countFactoriesOnMap() {
+    const data = grid.download();
+    const counts = { [PLAYER_1]: 0, [PLAYER_2]: 0 };
+    const factoryCenters = { [PLAYER_1]: new Set(), [PLAYER_2]: new Set() };
+    
+    for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+            const idx = (y * GRID_SIZE + x) * 4;
+            const cellType = data[idx];
+            
+            if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
+                const owner = cellType === CELL_MINING_FACTORY_P2 ? PLAYER_2 : PLAYER_1;
+                const centerX = data[idx + 2];
+                const centerY = data[idx + 3];
+                const key = `${centerX},${centerY}`;
+                factoryCenters[owner].add(key);
+            }
+        }
+    }
+    
+    counts[PLAYER_1] = factoryCenters[PLAYER_1].size;
+    counts[PLAYER_2] = factoryCenters[PLAYER_2].size;
+    
+    return counts;
+}
+
+// Check for win/lose condition
+function checkWinCondition() {
+    if (gameOver) return;
+    
+    // Count actual factories on map
+    const actualCounts = countFactoriesOnMap();
+    
+    // Update our tracked counts to match reality (GPU might have destroyed some)
+    playerFactoryCounts[PLAYER_1] = actualCounts[PLAYER_1];
+    playerFactoryCounts[PLAYER_2] = actualCounts[PLAYER_2];
+    updatePlayerIndicator();
+    
+    // Check lose condition: placed all bases AND have none left
+    for (const player of [PLAYER_1, PLAYER_2]) {
+        if (playerTotalFactoriesPlaced[player] >= MAX_FACTORIES_PER_PLAYER && 
+            actualCounts[player] === 0) {
+            // This player loses
+            gameOver = true;
+            winner = player === PLAYER_1 ? PLAYER_2 : PLAYER_1;
+            showGameOver();
+            return;
+        }
+    }
+}
+
+// Display game over screen
+function showGameOver() {
+    const overlay = document.createElement('div');
+    overlay.id = 'game-over-overlay';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.85);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+    `;
+    
+    const winnerName = winner === PLAYER_1 ? 'Player 1 (Purple)' : 'Player 2 (Green)';
+    const winnerColor = winner === PLAYER_1 ? '#a855f7' : '#22c55e';
+    
+    overlay.innerHTML = `
+        <h1 style="color: ${winnerColor}; font-size: 4rem; margin-bottom: 1rem; font-family: sans-serif;">
+            ${winnerName} Wins!
+        </h1>
+        <p style="color: #888; font-size: 1.5rem; font-family: sans-serif;">
+            The opponent has lost all their bases.
+        </p>
+        <button id="play-again-btn" style="
+            margin-top: 2rem;
+            padding: 1rem 2rem;
+            font-size: 1.2rem;
+            background: ${winnerColor};
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: sans-serif;
+        ">Play Again</button>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    document.getElementById('play-again-btn').onclick = () => {
+        // Send restart message to other player(s) before reloading
+        if (isMultiplayer) {
+            syncAction({ type: 'restart' });
+        }
+        // Small delay to ensure message is sent
+        setTimeout(() => {
+            // Reload without player param to get fresh assignment
+            const url = new URL(window.location);
+            url.searchParams.delete('player');
+            window.location.href = url.toString();
+        }, 100);
+    };
+    
+    console.log(`[Game Over] ${winnerName} wins!`);
+}
+
+// Check win condition every 5 seconds
+setInterval(checkWinCondition, 5000);
 
 // ============================================================================
 // Render Loop (also runs synced simulation if enabled)

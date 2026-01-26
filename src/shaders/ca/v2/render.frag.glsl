@@ -47,18 +47,18 @@ void main() {
         
         vec3 baseColor;
         if (player == PLAYER_1) {
-            // Player 1: Cyan (empty) / Green (holding)
+            // Player 1: Purple/magenta theme (matches factories)
             if (getUnitHolding(raw)) {
-                baseColor = vec3(0.3, 0.9, 0.4);  // Green = carrying
+                baseColor = vec3(0.95, 0.4, 0.8);  // Magenta = carrying
             } else {
-                baseColor = vec3(0.2, 0.7, 0.9);  // Cyan = searching
+                baseColor = vec3(0.6, 0.4, 1.0);  // Purple = searching
             }
         } else {
-            // Player 2: Orange (empty) / Red (holding)
+            // Player 2: Green theme (matches factories)
             if (getUnitHolding(raw)) {
-                baseColor = vec3(0.95, 0.3, 0.3);  // Red = carrying
+                baseColor = vec3(0.4, 0.95, 0.35);  // Bright green = carrying
             } else {
-                baseColor = vec3(1.0, 0.6, 0.2);  // Orange = searching
+                baseColor = vec3(0.3, 0.85, 0.7);  // Teal = searching
             }
         }
         

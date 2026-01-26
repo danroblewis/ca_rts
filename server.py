@@ -6,14 +6,17 @@ Handles:
 - Static file serving
 - WebSocket connections for game rooms
 - State synchronization between players
+- LRU cache for game state storage
 """
 
 import os
 import json
 import asyncio
+import random
 from pathlib import Path
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, Any
 from dataclasses import dataclass, field
+from collections import OrderedDict
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +24,46 @@ from fastapi.responses import FileResponse
 import uvicorn
 
 app = FastAPI(title="CA RTS Server")
+
+# ============================================================================
+# LRU Cache for Game State
+# ============================================================================
+
+class GameStateCache:
+    """LRU cache for storing game states per room."""
+    
+    def __init__(self, max_size: int = 100):
+        self.max_size = max_size
+        self.cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+    
+    def get(self, room_id: str) -> Optional[Dict[str, Any]]:
+        """Get cached state for a room, moving it to end (most recently used)."""
+        if room_id in self.cache:
+            self.cache.move_to_end(room_id)
+            return self.cache[room_id]
+        return None
+    
+    def set(self, room_id: str, state: Dict[str, Any]):
+        """Store state for a room, evicting oldest if at capacity."""
+        if room_id in self.cache:
+            self.cache.move_to_end(room_id)
+        else:
+            if len(self.cache) >= self.max_size:
+                # Evict oldest (first) item
+                evicted_room, _ = self.cache.popitem(last=False)
+                print(f"[Cache] Evicted old game state for room: {evicted_room}")
+        self.cache[room_id] = state
+    
+    def delete(self, room_id: str):
+        """Remove a room's state from cache."""
+        if room_id in self.cache:
+            del self.cache[room_id]
+    
+    def __len__(self):
+        return len(self.cache)
+
+# Global game state cache (stores up to 100 room states)
+game_state_cache = GameStateCache(max_size=100)
 
 # ============================================================================
 # Game Room Management
@@ -35,6 +78,30 @@ class Player:
     is_host: bool = False
 
 
+import time
+
+# Fun name generator words
+ADJECTIVES = [
+    "Swift", "Cosmic", "Blazing", "Shadow", "Crystal", "Thunder", "Iron", "Golden",
+    "Mystic", "Frozen", "Electric", "Phantom", "Crimson", "Emerald", "Atomic", "Stellar",
+    "Raging", "Silent", "Ancient", "Cyber", "Neon", "Turbo", "Ultra", "Mega",
+    "Vortex", "Plasma", "Quantum", "Feral", "Savage", "Noble", "Dark", "Bright"
+]
+
+NOUNS = [
+    "Dragons", "Warriors", "Knights", "Wolves", "Phoenix", "Titans", "Storm", "Fortress",
+    "Legion", "Empire", "Realm", "Crusade", "Dynasty", "Alliance", "Hunters", "Raiders",
+    "Guardians", "Sentinels", "Champions", "Vikings", "Spartans", "Ninjas", "Pirates", "Robots",
+    "Comets", "Nebula", "Galaxy", "Thunder", "Inferno", "Blizzard", "Cyclone", "Avalanche"
+]
+
+def generate_room_name() -> str:
+    """Generate a fun memorable room name."""
+    adj = random.choice(ADJECTIVES)
+    noun = random.choice(NOUNS)
+    return f"{adj} {noun}"
+
+
 @dataclass
 class GameRoom:
     """Represents a game room with connected players."""
@@ -42,6 +109,9 @@ class GameRoom:
     players: Dict[int, Player] = field(default_factory=dict)
     next_player_id: int = 1
     host_id: Optional[int] = None
+    map_seed: int = field(default_factory=lambda: random.randint(1, 999999))
+    created_at: float = field(default_factory=time.time)
+    display_name: str = field(default_factory=generate_room_name)
     
     async def add_player(self, websocket: WebSocket, requested_player_id: Optional[int] = None) -> Player:
         """Add a new player to the room.
@@ -143,13 +213,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 player = await room.add_player(websocket, requested_player_id)
                 print(f"Assigned player_id={player.player_id}")
                 
-                # Send join confirmation
+                # Get list of all connected players (including the new one)
+                connected_player_ids = list(room.players.keys())
+                
+                # Send join confirmation with list of existing players
                 await websocket.send_json({
                     "type": "joined",
                     "playerId": player.player_id,
                     "isHost": player.is_host,
                     "roomId": room_id,
-                    "playerCount": len(room.players)
+                    "displayName": room.display_name,
+                    "playerCount": len(room.players),
+                    "mapSeed": room.map_seed,
+                    "connectedPlayers": connected_player_ids
                 })
                 
                 # Notify other players
@@ -161,9 +237,26 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 print(f"Player {player.player_id} joined room '{room_id}' (total: {len(room.players)})")
                 
+                # Send cached game state to late joiner (if available)
+                cached_state = game_state_cache.get(room_id)
+                if cached_state and not player.is_host:
+                    await websocket.send_json({
+                        "type": "sync",
+                        **cached_state
+                    })
+                    print(f"Sent cached game state to Player {player.player_id}")
+                
             elif msg_type == "sync":
                 # Player syncing their state
                 if room and player:
+                    # Store state in cache for late joiners
+                    game_state_cache.set(room.room_id, {
+                        "gridState": data.get("gridState"),
+                        "simTime": data.get("simTime"),
+                        "action": data.get("action"),
+                        "playerId": player.player_id
+                    })
+                    
                     # Forward sync message to all other players
                     await room.broadcast(data, exclude_player_id=player.player_id)
                     
@@ -206,7 +299,8 @@ async def websocket_endpoint(websocket: WebSocket):
             # Clean up empty rooms
             if not room.players:
                 del rooms[room.room_id]
-                print(f"Room '{room.room_id}' removed (empty)")
+                game_state_cache.delete(room.room_id)
+                print(f"Room '{room.room_id}' removed (empty, cache cleared)")
 
 
 # ============================================================================
@@ -245,15 +339,47 @@ async def serve_html(filename: str):
 @app.get("/api/rooms")
 async def list_rooms():
     """List all active game rooms."""
+    current_time = time.time()
     return {
         "rooms": [
             {
                 "roomId": room.room_id,
+                "displayName": room.display_name,
                 "playerCount": len(room.players),
-                "hostId": room.host_id
+                "maxPlayers": 2,
+                "hostId": room.host_id,
+                "mapSeed": room.map_seed,
+                "createdAt": room.created_at,
+                "ageSeconds": int(current_time - room.created_at),
+                "hasState": game_state_cache.get(room.room_id) is not None
             }
             for room in rooms.values()
         ]
+    }
+
+
+@app.post("/api/rooms/create")
+async def create_room():
+    """Create a new game room and return its details."""
+    # Generate the display name first, then use it as room ID (URL-safe)
+    display_name = generate_room_name()
+    room_id = display_name.lower().replace(" ", "-")
+    
+    # If this room already exists, add a number
+    if room_id in rooms:
+        suffix = 2
+        while f"{room_id}-{suffix}" in rooms:
+            suffix += 1
+        room_id = f"{room_id}-{suffix}"
+        display_name = f"{display_name} {suffix}"
+    
+    room = get_or_create_room(room_id)
+    room.display_name = display_name  # Override with our generated name
+    
+    return {
+        "roomId": room.room_id,
+        "displayName": room.display_name,
+        "mapSeed": room.map_seed
     }
 
 

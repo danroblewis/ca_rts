@@ -170,9 +170,9 @@ export class NetworkSync {
         switch (message.type) {
             case 'joined':
                 this.playerId = message.playerId;
-                console.log(`[NetworkSync] Joined as Player ${this.playerId}`);
+                console.log(`[NetworkSync] Joined as Player ${this.playerId}, mapSeed: ${message.mapSeed}, connectedPlayers: ${message.connectedPlayers}`);
                 if (this.onPlayerJoined) {
-                    this.onPlayerJoined(message.playerId, message.isHost);
+                    this.onPlayerJoined(message.playerId, message.isHost, message.mapSeed, message.connectedPlayers);
                 }
                 break;
                 

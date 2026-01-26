@@ -511,13 +511,13 @@ void main() {
     float unbuiltFactoryDensity = p1UnbuiltFactoryDensity + p2UnbuiltFactoryDensity;
     float buildProgress = max(p1BuildProgress, p2BuildProgress);
     
-    // Player 1 units (cyan/green)
+    // Player 1 units (purple/magenta)
     vec3 p1UnitInfo = calcUnitDensityForPlayer(v_uv, PLAYER_1);
     float p1EmptyUnitDensity = p1UnitInfo.x;
     float p1HoldingUnitDensity = p1UnitInfo.y;
     float p1AvgAge = p1UnitInfo.z;
     
-    // Player 2 units (orange/red)
+    // Player 2 units (teal/green)
     vec3 p2UnitInfo = calcUnitDensityForPlayer(v_uv, PLAYER_2);
     float p2EmptyUnitDensity = p2UnitInfo.x;
     float p2HoldingUnitDensity = p2UnitInfo.y;
@@ -581,7 +581,7 @@ void main() {
     float fadeStart = 0.3;  // Start fading at 30% age
     float deathFlashStart = 0.9;  // Flash starts at 90% age
     
-    // Player 1 units - cyan (empty) or green (holding)
+    // Player 1 units - purple/magenta theme (matches their factories)
     float p1TotalUnitDensity = p1EmptyUnitDensity + p1HoldingUnitDensity;
     if (p1TotalUnitDensity > unitThreshold * 0.3) {
         float p1AgeRatio = p1AvgAge / MAX_AGE;
@@ -613,22 +613,24 @@ void main() {
         float scaledDensity = p1TotalUnitDensity * newbornScale;
         float holdingRatio = p1HoldingUnitDensity / max(p1TotalUnitDensity, 0.001);
         float glowStrength = smoothstep(0.0, unitThreshold, scaledDensity);
-        vec3 glowColor = mix(vec3(0.05, 0.25, 0.4), vec3(0.1, 0.35, 0.1), holdingRatio);
+        // Purple glow tones matching P1 factory
+        vec3 glowColor = mix(vec3(0.25, 0.1, 0.35), vec3(0.4, 0.15, 0.5), holdingRatio);
         glowColor *= ageBrightness * ageColorMod;
         color = color + glowColor * glowStrength * 0.6;
         
         if (scaledDensity > unitThreshold) {
             float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, scaledDensity);
-            vec3 cyanColor = vec3(0.3, 0.8, 1.0) * ageBrightness * ageColorMod;
-            vec3 greenColor = vec3(0.4, 0.95, 0.4) * ageBrightness * ageColorMod;
-            vec3 unitColor = mix(cyanColor, greenColor, holdingRatio);
+            // Light purple (empty) to bright magenta (holding) for player 1
+            vec3 purpleColor = vec3(0.6, 0.4, 1.0) * ageBrightness * ageColorMod;
+            vec3 magentaColor = vec3(0.95, 0.4, 0.8) * ageBrightness * ageColorMod;
+            vec3 unitColor = mix(purpleColor, magentaColor, holdingRatio);
             float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, scaledDensity);
             unitColor += vec3(0.2) * coreGlow * ageBrightness;
             color = mix(color, unitColor, blobStrength);
         }
     }
     
-    // Player 2 units - orange (empty) or red (holding)
+    // Player 2 units - green theme (matches their factories)
     float p2TotalUnitDensity = p2EmptyUnitDensity + p2HoldingUnitDensity;
     if (p2TotalUnitDensity > unitThreshold * 0.3) {
         float p2AgeRatio = p2AvgAge / MAX_AGE;
@@ -660,17 +662,17 @@ void main() {
         float scaledDensity = p2TotalUnitDensity * newbornScale;
         float holdingRatio = p2HoldingUnitDensity / max(p2TotalUnitDensity, 0.001);
         float glowStrength = smoothstep(0.0, unitThreshold, scaledDensity);
-        // Orange/red glow for player 2
-        vec3 glowColor = mix(vec3(0.4, 0.2, 0.05), vec3(0.35, 0.1, 0.1), holdingRatio);
+        // Green glow tones matching P2 factory
+        vec3 glowColor = mix(vec3(0.1, 0.3, 0.15), vec3(0.15, 0.4, 0.1), holdingRatio);
         glowColor *= ageBrightness * ageColorMod;
         color = color + glowColor * glowStrength * 0.6;
         
         if (scaledDensity > unitThreshold) {
             float blobStrength = smoothstep(unitThreshold, unitThreshold + 1.5, scaledDensity);
-            // Orange (empty) to red (holding) for player 2
-            vec3 orangeColor = vec3(1.0, 0.6, 0.2) * ageBrightness * ageColorMod;
-            vec3 redColor = vec3(0.95, 0.3, 0.3) * ageBrightness * ageColorMod;
-            vec3 unitColor = mix(orangeColor, redColor, holdingRatio);
+            // Teal (empty) to bright green (holding) for player 2
+            vec3 tealColor = vec3(0.3, 0.85, 0.7) * ageBrightness * ageColorMod;
+            vec3 greenColor = vec3(0.4, 0.95, 0.35) * ageBrightness * ageColorMod;
+            vec3 unitColor = mix(tealColor, greenColor, holdingRatio);
             float coreGlow = smoothstep(unitThreshold + 1.0, unitThreshold + 4.0, scaledDensity);
             unitColor += vec3(0.2) * coreGlow * ageBrightness;
             color = mix(color, unitColor, blobStrength);
