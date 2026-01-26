@@ -223,12 +223,32 @@ async function initAudio() {
     }
 }
 
-// Expose audio controls
+// Expose audio controls and debug utilities
 window.initAudio = initAudio;
 window.toggleMute = () => {
     const muted = audioEngine.toggleMute();
     updateAudioButton();
     return muted;
+};
+
+// Debug: expose audio engine for console testing
+window.audio = {
+    engine: audioEngine,
+    // Test individual sounds
+    testSpawn: () => audioEngine.tryPlayOneShot('spawn', 1.0),
+    testExplosion: () => audioEngine.tryPlayOneShot('explosion', 1.0),
+    testDepletion: () => audioEngine.tryPlayOneShot('depletion', 1.0),
+    // Set loop volumes (0-1)
+    setMining: (v) => audioEngine.loops.mining?.gain.gain.setValueAtTime(v * 0.15, audioEngine.audioContext.currentTime),
+    setCombat: (v) => audioEngine.loops.combat?.gain.gain.setValueAtTime(v * 0.2, audioEngine.audioContext.currentTime),
+    setFactory: (v) => audioEngine.loops.factory?.setActivity?.(v),
+    setSwarm: (v) => audioEngine.loops.swarm?.gain.gain.setValueAtTime(v * 0.1, audioEngine.audioContext.currentTime),
+    // Stop all sounds
+    stopAll: () => {
+        Object.values(audioEngine.loops).forEach(l => l?.gain?.gain.setValueAtTime(0, audioEngine.audioContext.currentTime));
+    },
+    // Show current state
+    status: () => console.log('Loops:', audioEngine.loops, 'One-shots:', audioEngine.oneShotPools)
 };
 
 function updateAudioButton() {
