@@ -49,12 +49,14 @@ uniform float u_temporalBlend;   // Temporal blend strength (0 = no blend, 1 = f
 // Selection is now stored directly in unit data (G channel bit 5), no separate texture needed
 uniform float u_currentPlayer;   // Current player (1.0 or 2.0) - only their selected units are shown
 
-// Selection UI (rendered in shader instead of DOM)
+// User interaction UI (rendered in shader instead of DOM)
 uniform float u_isSelecting;     // 1.0 if currently dragging a selection box
 uniform vec2 u_selectionStart;   // Selection box start corner (UV coords, 0-1)
 uniform vec2 u_selectionEnd;     // Selection box end corner (UV coords, 0-1)
 uniform float u_hasActiveSelection; // 1.0 if there's an active selection awaiting command
-uniform vec2 u_commandPos;       // Command indicator position (UV coords, 0-1)
+uniform vec2 u_mousePos;         // Mouse position (UV coords, 0-1)
+uniform float u_shiftHeld;       // 1.0 if shift key is held (delete mode)
+uniform float u_deleteRadius;    // Delete radius in grid cells
 
 // Sample from a specific frame by index
 vec4 sampleFrame(int frame, vec2 uv) {
@@ -950,7 +952,7 @@ void main() {
     
     // Command indicator (crosshair at cursor when selection is active)
     if (u_hasActiveSelection > 0.5) {
-        vec2 cursorDist = abs(v_uv - u_commandPos);
+        vec2 cursorDist = abs(v_uv - u_mousePos);
         float pixelSize = 1.0 / u_canvasResolution.x;
         
         // Crosshair parameters
@@ -976,6 +978,35 @@ void main() {
         float centerDist = length(cursorDist);
         if (centerDist < 3.0 * pixelSize) {
             color = vec3(1.0, 0.85, 0.3);  // Golden yellow
+        }
+    }
+    
+    // Delete mode indicator (red box showing delete radius when shift is held)
+    if (u_shiftHeld > 0.5) {
+        // Calculate the box in UV coords
+        float radiusUV = u_deleteRadius / u_resolution.x;
+        vec2 boxMin = u_mousePos - vec2(radiusUV);
+        vec2 boxMax = u_mousePos + vec2(radiusUV);
+        
+        float borderWidth = 2.0 / u_canvasResolution.x;
+        
+        bool inBox = v_uv.x >= boxMin.x && v_uv.x <= boxMax.x && 
+                     v_uv.y >= boxMin.y && v_uv.y <= boxMax.y;
+        bool inInnerBox = v_uv.x >= boxMin.x + borderWidth && v_uv.x <= boxMax.x - borderWidth && 
+                          v_uv.y >= boxMin.y + borderWidth && v_uv.y <= boxMax.y - borderWidth;
+        
+        if (inBox) {
+            // Pulsing red effect
+            float pulse = sin(u_time * 3.0) * 0.15 + 0.85;
+            vec3 deleteColor = vec3(1.0, 0.3, 0.3);
+            
+            if (!inInnerBox) {
+                // Border - solid red
+                color = mix(color, deleteColor * pulse, 0.8);
+            } else {
+                // Interior - slight red tint
+                color = mix(color, deleteColor, 0.15);
+            }
         }
     }
     

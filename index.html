@@ -25,15 +25,7 @@
             top: 50%;
             transform: translate(-50%, -50%);
         }
-        #cursor-overlay {
-            position: fixed;
-            pointer-events: none;
-            border: 2px solid rgba(255, 80, 80, 0.8);
-            background: rgba(255, 50, 50, 0.15);
-            box-shadow: 0 0 10px rgba(255, 80, 80, 0.5);
-            display: none;
-            z-index: 100;
-        }
+        /* Cursor overlay is now rendered in shader (u_shiftHeld, u_deleteRadius) */
         
         /* Shader Toggle UI */
         #shader-toggle-container {
@@ -235,7 +227,7 @@
 </head>
 <body>
     <canvas id="canvas"></canvas>
-    <div id="cursor-overlay"></div>
+    <!-- Cursor overlay now rendered in shader -->
     
     <!-- Shader Toggle -->
     <div id="shader-toggle-container">

@@ -572,11 +572,11 @@ const playerTotalFactoriesPlaced = {
 let gameOver = false;
 let winner = null;
 
-// Cursor overlay for delete mode
-const cursorOverlay = document.getElementById('cursor-overlay');
+// Mouse and key state (used for shader-based UI rendering)
 let mouseX = 0;
 let mouseY = 0;
 let shiftHeld = false;
+// Cursor overlay is now rendered in shader (see u_shiftHeld, u_deleteRadius, u_mousePos)
 
 // Convert screen coords to grid coords
 function screenToGrid(screenX, screenY) {
@@ -602,25 +602,7 @@ function gridToScreen(gridX, gridY) {
     };
 }
 
-// Update cursor overlay position and visibility
-function updateCursorOverlay() {
-    if (shiftHeld) {
-        const rect = canvas.getBoundingClientRect();
-        // Calculate the size of the delete area in screen pixels
-        const cellSizeX = rect.width / GRID_SIZE;
-        const cellSizeY = rect.height / GRID_SIZE;
-        const sizeX = DELETE_RADIUS * 2 * cellSizeX;
-        const sizeY = DELETE_RADIUS * 2 * cellSizeY;
-        
-        cursorOverlay.style.display = 'block';
-        cursorOverlay.style.left = `${mouseX - sizeX / 2}px`;
-        cursorOverlay.style.top = `${mouseY - sizeY / 2}px`;
-        cursorOverlay.style.width = `${sizeX}px`;
-        cursorOverlay.style.height = `${sizeY}px`;
-    } else {
-        cursorOverlay.style.display = 'none';
-    }
-}
+// updateCursorOverlay removed - cursor overlay is now rendered in shader
 
 // ============================================================================
 // Unit Selection and Command System
@@ -682,15 +664,14 @@ function clearSelection() {
 canvas.addEventListener('mousemove', (event) => {
     mouseX = event.clientX;
     mouseY = event.clientY;
-    updateCursorOverlay();
-    // Selection box and command indicator are now rendered in shader
+    // All cursor UI is rendered in shader (selection box, command indicator, delete overlay)
 });
 
 // Track shift key
 window.addEventListener('keydown', (event) => {
     if (event.key === 'Shift') {
         shiftHeld = true;
-        updateCursorOverlay();
+        // Delete overlay rendered in shader via u_shiftHeld
     }
     // Escape clears selection and syncs to other players
     if (event.key === 'Escape') {
@@ -707,7 +688,7 @@ window.addEventListener('keydown', (event) => {
 window.addEventListener('keyup', (event) => {
     if (event.key === 'Shift') {
         shiftHeld = false;
-        updateCursorOverlay();
+        // Delete overlay rendered in shader via u_shiftHeld
     }
 });
 
@@ -1782,9 +1763,11 @@ function renderLoop() {
     // Note: Selection is now stored in unit data (G channel bit 5), no separate texture needed
     renderShader.setFloat('u_currentPlayer', currentPlayer);  // 1.0 or 2.0
     
-    // Selection UI uniforms (rendered in shader instead of DOM)
+    // User interaction UI uniforms (rendered in shader instead of DOM)
     renderShader.setFloat('u_isSelecting', isSelecting ? 1.0 : 0.0);
     renderShader.setFloat('u_hasActiveSelection', hasActiveSelection ? 1.0 : 0.0);
+    renderShader.setFloat('u_shiftHeld', shiftHeld ? 1.0 : 0.0);
+    renderShader.setFloat('u_deleteRadius', DELETE_RADIUS);
     
     // Convert screen coordinates to UV (0-1) for shader
     const rect = canvas.getBoundingClientRect();
@@ -1792,6 +1775,10 @@ function renderLoop() {
         x: (x - rect.left) / rect.width,
         y: 1.0 - (y - rect.top) / rect.height  // Flip Y for shader
     });
+    
+    // Mouse position (used for crosshair and delete indicator)
+    const mouseUV = screenToUV(mouseX, mouseY);
+    renderShader.setVec2('u_mousePos', mouseUV.x, mouseUV.y);
     
     if (isSelecting && selectionStart) {
         const startUV = screenToUV(selectionStart.x, selectionStart.y);
@@ -1802,10 +1789,6 @@ function renderLoop() {
         renderShader.setVec2('u_selectionStart', 0.0, 0.0);
         renderShader.setVec2('u_selectionEnd', 0.0, 0.0);
     }
-    
-    // Command indicator position (cursor when selection is active)
-    const cursorUV = screenToUV(mouseX, mouseY);
-    renderShader.setVec2('u_commandPos', cursorUV.x, cursorUV.y);
     
     renderShader.dispatch();
 
