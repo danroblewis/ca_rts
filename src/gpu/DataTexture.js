@@ -104,6 +104,10 @@ export class DataTexture {
         const gpu = GPU.get();
         const gl = gpu.gl;
 
+        // Force GPU to complete all pending work before reading
+        // This prevents unpredictable stalls during readPixels
+        gl.finish();
+
         const data = new this.ArrayType(this.width * this.height * 4);
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);

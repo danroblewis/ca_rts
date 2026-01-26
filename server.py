@@ -350,7 +350,7 @@ class GameRoom:
         print(f"[Room {self.room_id}] Reset with new seed: {self.map_seed}")
     
     async def broadcast(self, message: dict, exclude_player_id: Optional[int] = None, include_spectators: bool = True):
-        """Broadcast a message to all players (and optionally spectators) in the room."""
+        """Broadcast a JSON message to all players (and optionally spectators) in the room."""
         disconnected_players = []
         for player_id, player in self.players.items():
             if player_id != exclude_player_id:
@@ -365,6 +365,25 @@ class GameRoom:
             for spectator_id, spectator in self.spectators.items():
                 try:
                     await spectator.websocket.send_json(message)
+                except Exception:
+                    disconnected_spectators.append(spectator_id)
+    
+    async def broadcast_binary(self, data: bytes, exclude_player_id: Optional[int] = None, include_spectators: bool = True):
+        """Broadcast a binary message to all players (and optionally spectators) in the room."""
+        disconnected_players = []
+        for player_id, player in self.players.items():
+            if player_id != exclude_player_id:
+                try:
+                    await player.websocket.send_bytes(data)
+                except Exception:
+                    disconnected_players.append(player_id)
+        
+        # Also send to spectators if requested
+        disconnected_spectators = []
+        if include_spectators:
+            for spectator_id, spectator in self.spectators.items():
+                try:
+                    await spectator.websocket.send_bytes(data)
                 except Exception:
                     disconnected_spectators.append(spectator_id)
         
@@ -392,6 +411,19 @@ def get_or_create_room(room_id: str) -> GameRoom:
 # WebSocket Endpoint
 # ============================================================================
 
+def parse_binary_sync(data: bytes) -> tuple[dict, bytes]:
+    """
+    Parse a binary sync message.
+    Format: [4-byte header length (little endian)][JSON header][raw grid bytes]
+    Returns: (header_dict, grid_bytes)
+    """
+    header_length = struct.unpack('<I', data[:4])[0]
+    header_json = data[4:4+header_length].decode('utf-8')
+    header = json.loads(header_json)
+    grid_bytes = data[4+header_length:]
+    return header, grid_bytes
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """Handle WebSocket connections for multiplayer sync."""
@@ -403,7 +435,32 @@ async def websocket_endpoint(websocket: WebSocket):
     
     try:
         while True:
-            data = await websocket.receive_json()
+            # Receive either text or binary message
+            message = await websocket.receive()
+            
+            # Handle binary messages (sync messages)
+            if "bytes" in message:
+                binary_data = message["bytes"]
+                header, grid_bytes = parse_binary_sync(binary_data)
+                
+                if header.get("type") == "sync" and room and player:
+                    # Store raw binary message in cache for late joiners
+                    # This preserves compression and allows us to send binary to late joiners
+                    game_state_cache.set(room.room_id, {
+                        "binary": binary_data,  # Store full binary message
+                        "simTime": header.get("simTime"),
+                        "playerId": player.player_id
+                    })
+                    
+                    # Forward binary message to all other players
+                    await room.broadcast_binary(binary_data, exclude_player_id=player.player_id)
+                continue
+            
+            # Handle text messages (JSON control messages)
+            if "text" not in message:
+                continue
+                
+            data = json.loads(message["text"])
             msg_type = data.get("type")
             
             if msg_type == "spectate":
@@ -432,12 +489,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # Send cached game state to spectator (if available)
                 cached_state = game_state_cache.get(room_id)
-                if cached_state:
-                    await websocket.send_json({
-                        "type": "sync",
-                        **cached_state
-                    })
-                    print(f"Sent cached game state to Spectator {spectator.spectator_id}")
+                if cached_state and "binary" in cached_state:
+                    # Send as binary (compressed)
+                    await websocket.send_bytes(cached_state["binary"])
+                    print(f"Sent cached binary game state to Spectator {spectator.spectator_id}")
             
             elif msg_type == "join":
                 # Player joining a room
@@ -474,15 +529,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # Send cached game state to late joiner (if available)
                 cached_state = game_state_cache.get(room_id)
-                if cached_state and not player.is_host:
-                    await websocket.send_json({
-                        "type": "sync",
-                        **cached_state
-                    })
-                    print(f"Sent cached game state to Player {player.player_id}")
+                if cached_state and "binary" in cached_state and not player.is_host:
+                    # Send as binary (compressed)
+                    await websocket.send_bytes(cached_state["binary"])
+                    print(f"Sent cached binary game state to Player {player.player_id}")
                 
             elif msg_type == "sync":
-                # Player syncing their state
+                # Legacy JSON sync (from older clients or internal messages)
+                # Binary sync is now preferred
                 if room and player:
                     # Store state in cache for late joiners
                     game_state_cache.set(room.room_id, {
@@ -649,23 +703,39 @@ async def get_room_minimap(room_id: str):
     """Get a minimap image for a room's current game state."""
     cached_state = game_state_cache.get(room_id)
     
-    if not cached_state or not cached_state.get("gridState"):
-        # Return a placeholder "no state" image (dark with question mark pattern)
-        # For now, return 404
+    if not cached_state or "binary" not in cached_state:
+        # Return 404 if no cached state
         return Response(
             content=b'',
             status_code=404,
             media_type="image/png"
         )
     
-    grid_state_b64 = cached_state["gridState"]
-    png_data = generate_minimap_png(grid_state_b64)
-    
-    return Response(
-        content=png_data,
-        media_type="image/png",
-        headers={"Cache-Control": "no-cache"}
-    )
+    try:
+        # Parse binary message to extract grid bytes
+        binary_data = cached_state["binary"]
+        header, grid_bytes = parse_binary_sync(binary_data)
+        
+        # Decompress if compressed
+        if header.get("compressed"):
+            grid_bytes = zlib.decompress(grid_bytes)
+        
+        # Convert to base64 for minimap generator
+        grid_state_b64 = base64.b64encode(grid_bytes).decode('ascii')
+        png_data = generate_minimap_png(grid_state_b64)
+        
+        return Response(
+            content=png_data,
+            media_type="image/png",
+            headers={"Cache-Control": "no-cache"}
+        )
+    except Exception as e:
+        print(f"Error generating minimap: {e}")
+        return Response(
+            content=b'',
+            status_code=500,
+            media_type="image/png"
+        )
 
 
 # ============================================================================

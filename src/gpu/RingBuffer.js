@@ -111,13 +111,19 @@ export class RingBuffer {
 
     /**
      * Upload initial data to ALL frames (fills history with same state).
-     * Use this for initialization or when syncing network state.
+     * Use this for initialization only - slow (8x upload)!
      * @param {Float32Array|Uint8Array} data 
+     * @param {boolean} allFrames - If true, upload to all frames (default: false, only current)
      */
-    upload(data) {
-        // Upload to all frames so we don't have garbage in history
-        for (let i = 0; i < this.frameCount; i++) {
-            this.textures[i].upload(data);
+    upload(data, allFrames = false) {
+        if (allFrames) {
+            // Upload to all frames - only for initial map generation
+            for (let i = 0; i < this.frameCount; i++) {
+                this.textures[i].upload(data);
+            }
+        } else {
+            // Upload to just the current read frame - for network sync
+            this.textures[this.getCurrentIndex()].upload(data);
         }
     }
 

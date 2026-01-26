@@ -427,7 +427,7 @@ export class AudioEngine {
             // // console.log(`[Audio] Factory hum: ${this.targetVolumes.factory.toFixed(2)}`);
         }
         if (this.targetVolumes.swarm > 0.05) {
-            console.log(`[Audio] Swarm: ${this.targetVolumes.swarm.toFixed(2)}`);
+            // console.log(`[Audio] Swarm: ${this.targetVolumes.swarm.toFixed(2)}`);
         }
         // === END TEMPORARY LOGGING ===
         
@@ -436,21 +436,21 @@ export class AudioEngine {
         
         // Handle one-shot triggers
         if (params.spawnRate > 0.5) {
-            console.log(`[Audio] Spawn triggered: rate=${params.spawnRate.toFixed(2)}`);
+            // console.log(`[Audio] Spawn triggered: rate=${params.spawnRate.toFixed(2)}`);
             this.tryPlayOneShot('spawn', params.spawnRate);
         }
         if (params.explosionRate > 0.5) {
-            console.log(`[Audio] Explosion triggered: rate=${params.explosionRate.toFixed(2)}`);
+            // console.log(`[Audio] Explosion triggered: rate=${params.explosionRate.toFixed(2)}`);
             this.tryPlayOneShot('explosion', params.explosionRate);
         }
         // JFA-based accurate island depletion (preferred)
         if (params.islandDepletion > 0) {
-            console.log(`[Audio] Island cleared! (JFA detected ${params.islandDepletion} islands)`);
+            // console.log(`[Audio] Island cleared! (JFA detected ${params.islandDepletion} islands)`);
             this.tryPlayOneShot('depletion', params.islandDepletion);
         }
         // Fallback heuristic-based depletion (if JFA misses it)
         else if (params.depletionRate > 0.3) {
-            console.log(`[Audio] Resource depleted (heuristic)! rate=${params.depletionRate.toFixed(2)}`);
+            // console.log(`[Audio] Resource depleted (heuristic)! rate=${params.depletionRate.toFixed(2)}`);
             this.tryPlayOneShot('depletion', params.depletionRate);
         }
     }

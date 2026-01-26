@@ -556,7 +556,7 @@ for (let b = 0; b < NUM_WALL_BLOBS; b++) {
     }
 }
 
-grid.upload(data);
+grid.upload(data, true);  // allFrames=true for initial map generation
 
     console.log(`Map generated:`);
 console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
@@ -1334,10 +1334,14 @@ networkSync.onPlayerLeft = (playerId) => {
 
 networkSync.onStateReceived = (syncData) => {
     // Received state from another player - apply it
+    const receiveTime = performance.now();
     console.log(`[Multiplayer] Applying state from Player ${syncData.playerId} at tick ${syncData.simTime}`);
     
     // Update local grid with received state
+    const uploadStart = performance.now();
     grid.upload(syncData.gridState);
+    const uploadEnd = performance.now();
+    console.log(`[Multiplayer] grid.upload() took ${(uploadEnd - uploadStart).toFixed(2)} ms`);
     
     // Sync simulation time
     simTime = syncData.simTime;
@@ -1701,11 +1705,20 @@ async function toggleMultiplayer() {
 // Sync state after an action
 function syncAction(action) {
     if (isMultiplayer) {
-        const start = performance.now();
+        const totalStart = performance.now();
+        
+        // Time the download
+        const downloadStart = performance.now();
         const gridData = grid.download();
-        const elapsed = performance.now() - start;
-        console.log(`[syncAction] grid.download() took ${elapsed.toFixed(2)} ms`);
+        const downloadEnd = performance.now();
+        
+        // Time the network send
+        const sendStart = performance.now();
         networkSync.syncState(gridData, action, simTime);
+        const sendEnd = performance.now();
+        
+        const totalEnd = performance.now();
+        console.log(`[syncAction] download: ${(downloadEnd - downloadStart).toFixed(2)} ms, send: ${(sendEnd - sendStart).toFixed(2)} ms, total: ${(totalEnd - totalStart).toFixed(2)} ms`);
     }
 }
 
