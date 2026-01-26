@@ -238,6 +238,7 @@ window.audio = {
     testSpawn: () => audioEngine.tryPlayOneShot('spawn', 1.0),
     testExplosion: () => audioEngine.tryPlayOneShot('explosion', 1.0),
     testDepletion: () => audioEngine.tryPlayOneShot('depletion', 1.0),
+    testReject: () => audioEngine.playReject(),
     // Set loop volumes (0-1)
     setMining: (v) => audioEngine.loops.mining?.gain.gain.setValueAtTime(v * 0.15, audioEngine.audioContext.currentTime),
     setCombat: (v) => audioEngine.loops.combat?.gain.gain.setValueAtTime(v * 0.2, audioEngine.audioContext.currentTime),
@@ -558,12 +559,14 @@ canvas.addEventListener('click', async (event) => {
         // Check bounds for 3x3
         if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
             console.log('Too close to edge for 3x3 structure');
+            audioEngine.playReject();
             return;
         }
         
         // Check factory limit
         if (playerFactoryCounts[currentPlayer] >= MAX_FACTORIES_PER_PLAYER) {
             console.log(`Cannot place factory - Player ${currentPlayer} already has ${MAX_FACTORIES_PER_PLAYER} bases (delete some to place more)`);
+            audioEngine.playReject();
             return;
         }
         
@@ -587,6 +590,7 @@ canvas.addEventListener('click', async (event) => {
         
         if (!canPlace) {
             console.log('Cannot place factory - some cells are not empty');
+            audioEngine.playReject();
             return;
         }
         
@@ -682,15 +686,14 @@ function updatePlayerIndicator() {
         document.body.appendChild(indicator);
     }
     const baseCount = playerFactoryCounts[currentPlayer];
-    const baseText = `Bases: ${baseCount}/${MAX_FACTORIES_PER_PLAYER}`;
     
     if (currentPlayer === PLAYER_1) {
-        indicator.textContent = `Player 1 (Purple) • ${baseText}`;
+        indicator.textContent = `Player 1 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
         indicator.style.background = 'rgba(112, 51, 204, 0.8)';
         indicator.style.color = 'white';
         indicator.style.border = '2px solid rgba(160, 100, 255, 0.8)';
     } else {
-        indicator.textContent = `Player 2 (Green) • ${baseText}`;
+        indicator.textContent = `Player 2 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
         indicator.style.background = 'rgba(51, 179, 102, 0.8)';
         indicator.style.color = 'white';
         indicator.style.border = '2px solid rgba(100, 220, 150, 0.8)';

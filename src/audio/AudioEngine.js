@@ -589,6 +589,31 @@ export class AudioEngine {
     }
     
     /**
+     * Play a rejection/error sound (when action is blocked)
+     */
+    playReject() {
+        if (!this.initialized || this.muted || !this.audioContext) return;
+        
+        const osc = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        const now = this.audioContext.currentTime;
+        
+        // Quick descending buzz - sounds like "nope"
+        osc.type = 'square';
+        osc.frequency.value = 200;
+        osc.frequency.exponentialRampToValueAtTime(100, now + 0.15);
+        
+        gain.gain.value = 0.15;
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+        
+        osc.start(now);
+        osc.stop(now + 0.15);
+    }
+    
+    /**
      * Check if audio is ready
      */
     isReady() {
