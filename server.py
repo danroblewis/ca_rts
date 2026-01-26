@@ -270,7 +270,6 @@ class GameRoom:
     room_id: str
     players: Dict[int, Player] = field(default_factory=dict)
     spectators: Dict[int, Spectator] = field(default_factory=dict)
-    next_player_id: int = 1
     next_spectator_id: int = 1
     host_id: Optional[int] = None
     map_seed: int = field(default_factory=lambda: random.randint(1, 999999))
@@ -281,7 +280,7 @@ class GameRoom:
         """Add a new player to the room.
         
         If requested_player_id is provided, use that ID (kicking any existing player with that ID).
-        Otherwise, assign the next available ID.
+        Otherwise, assign the first available ID (1 or 2 preferred, then higher).
         """
         # Try to use requested ID
         if requested_player_id is not None:
@@ -295,12 +294,12 @@ class GameRoom:
                     pass
                 del self.players[player_id]
                 print(f"Kicked old player {player_id} to allow rejoin")
-            # Update next_player_id if needed to avoid conflicts
-            if player_id >= self.next_player_id:
-                self.next_player_id = player_id + 1
         else:
-            player_id = self.next_player_id
-            self.next_player_id += 1
+            # Find the first available player ID (prefer 1, then 2, then higher)
+            player_id = 1
+            while player_id in self.players:
+                player_id += 1
+            print(f"Auto-assigned player_id={player_id} (available slots: {[i for i in range(1, 4) if i not in self.players]})")
         
         is_host = len(self.players) == 0
         if is_host:

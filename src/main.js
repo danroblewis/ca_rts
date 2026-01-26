@@ -739,27 +739,35 @@ canvas.addEventListener('mousemove', (event) => {
     // All cursor UI is rendered in shader (selection box, command indicator, delete overlay)
 });
 
-// Zoom with mouse wheel
+// Pan with mouse wheel/trackpad scroll, zoom with Alt/Option + wheel
 canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
     
-    // Get mouse position in grid coords before zoom
-    const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
-    
-    // Adjust zoom
-    const zoomDelta = event.deltaY > 0 ? -ZOOM_SPEED : ZOOM_SPEED;
-    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
-    
-    if (newZoom !== cameraZoom) {
-        cameraZoom = newZoom;
+    // Alt/Option + wheel = zoom
+    if (event.altKey) {
+        // Get mouse position in grid coords before zoom
+        const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
         
-        // Adjust camera position to keep mouse position stable
+        // Zoom based on deltaY
+        const zoomDelta = -event.deltaY * ZOOM_SPEED * 0.01;
+        cameraZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
+        
+        // Adjust camera to keep mouse position stable
         const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
         cameraX += mouseGridBefore.x - mouseGridAfter.x;
         cameraY += mouseGridBefore.y - mouseGridAfter.y;
         clampCamera();
+        return;
     }
-}, { passive: false });
+    
+    // Regular scroll = pan (for trackpad users)
+    const visibleSize = getVisibleGridSize();
+    const panScale = visibleSize / 500;  // Adjust sensitivity
+    
+    cameraX += event.deltaX * panScale;
+    cameraY -= event.deltaY * panScale;  // Y is inverted
+    clampCamera();
+});
 
 // Track shift key
 window.addEventListener('keydown', (event) => {
