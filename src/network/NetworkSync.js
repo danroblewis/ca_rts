@@ -15,12 +15,16 @@ export class NetworkSync {
         this.gridSize = gridSize;
         this.ws = null;
         this.playerId = null;
+        this.spectatorId = null;
         this.roomId = null;
         this.isConnected = false;
+        this.isSpectator = false;
         this.onStateReceived = null;
         this.onPlayerJoined = null;
         this.onPlayerLeft = null;
         this.onConnectionChange = null;
+        this.onSpectating = null;  // Called when spectator joins
+        this.onRestart = null;     // Called when game restarts
     }
 
     // ========================================================================
@@ -87,10 +91,12 @@ export class NetworkSync {
      * @param {string} serverUrl - WebSocket server URL
      * @param {string} roomId - Room to join
      * @param {number|null} requestedPlayerId - Optional: request a specific player ID (for rejoining)
+     * @param {boolean} asSpectator - If true, join as spectator instead of player
      */
-    connect(serverUrl, roomId, requestedPlayerId = null) {
+    connect(serverUrl, roomId, requestedPlayerId = null, asSpectator = false) {
         return new Promise((resolve, reject) => {
             this.roomId = roomId;
+            this.isSpectator = asSpectator;
             
             try {
                 this.ws = new WebSocket(serverUrl);
@@ -99,19 +105,29 @@ export class NetworkSync {
                     console.log('[NetworkSync] Connected to server');
                     this.isConnected = true;
                     
-                    // Join the room, optionally requesting a specific player ID
-                    const joinMessage = {
-                        type: 'join',
-                        roomId: this.roomId
-                    };
-                    if (requestedPlayerId !== null && requestedPlayerId !== undefined && !isNaN(requestedPlayerId)) {
-                        joinMessage.requestedPlayerId = requestedPlayerId;
-                        console.log(`[NetworkSync] Requesting player ID: ${requestedPlayerId}`);
+                    if (asSpectator) {
+                        // Join as spectator
+                        const spectateMessage = {
+                            type: 'spectate',
+                            roomId: this.roomId
+                        };
+                        console.log(`[NetworkSync] Joining as spectator:`, JSON.stringify(spectateMessage));
+                        this.send(spectateMessage);
                     } else {
-                        console.log(`[NetworkSync] No valid requestedPlayerId (value: ${requestedPlayerId})`);
+                        // Join as player, optionally requesting a specific player ID
+                        const joinMessage = {
+                            type: 'join',
+                            roomId: this.roomId
+                        };
+                        if (requestedPlayerId !== null && requestedPlayerId !== undefined && !isNaN(requestedPlayerId)) {
+                            joinMessage.requestedPlayerId = requestedPlayerId;
+                            console.log(`[NetworkSync] Requesting player ID: ${requestedPlayerId}`);
+                        } else {
+                            console.log(`[NetworkSync] No valid requestedPlayerId (value: ${requestedPlayerId})`);
+                        }
+                        console.log(`[NetworkSync] Sending join message:`, JSON.stringify(joinMessage));
+                        this.send(joinMessage);
                     }
-                    console.log(`[NetworkSync] Sending join message:`, JSON.stringify(joinMessage));
-                    this.send(joinMessage);
                     
                     if (this.onConnectionChange) {
                         this.onConnectionChange(true);
@@ -175,6 +191,15 @@ export class NetworkSync {
                     this.onPlayerJoined(message.playerId, message.isHost, message.mapSeed, message.connectedPlayers);
                 }
                 break;
+            
+            case 'spectating':
+                this.spectatorId = message.spectatorId;
+                this.isSpectator = true;
+                console.log(`[NetworkSync] Spectating as Spectator ${this.spectatorId}, mapSeed: ${message.mapSeed}`);
+                if (this.onSpectating) {
+                    this.onSpectating(message.spectatorId, message.mapSeed, message.connectedPlayers);
+                }
+                break;
                 
             case 'player_joined':
                 console.log(`[NetworkSync] Player ${message.playerId} joined`);
@@ -191,13 +216,20 @@ export class NetworkSync {
                 break;
                 
             case 'sync':
-                // Another player synced their state
-                if (message.playerId !== this.playerId) {
+                // Another player synced their state (or for spectators, any player)
+                if (this.isSpectator || message.playerId !== this.playerId) {
                     console.log(`[NetworkSync] Received sync from Player ${message.playerId} at tick ${message.simTime}`);
                     const parsed = this.parseSyncMessage(message);
                     if (this.onStateReceived) {
                         this.onStateReceived(parsed);
                     }
+                }
+                break;
+            
+            case 'restart':
+                console.log(`[NetworkSync] Game restart initiated by Player ${message.initiatedBy}, new seed: ${message.mapSeed}`);
+                if (this.onRestart) {
+                    this.onRestart(message.mapSeed, message.initiatedBy);
                 }
                 break;
                 
@@ -233,6 +265,18 @@ export class NetworkSync {
         
         this.send({
             type: 'request_state',
+            roomId: this.roomId
+        });
+    }
+    
+    /**
+     * Request game restart (Play Again)
+     */
+    requestRestart() {
+        if (!this.isConnected || this.isSpectator) return;
+        
+        this.send({
+            type: 'restart',
             roomId: this.roomId
         });
     }

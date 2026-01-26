@@ -62,6 +62,9 @@ const PLAYER_2 = 2;
 // Current player (for multiplayer - default to player 1)
 let currentPlayer = PLAYER_1;
 
+// Spectator mode flag (set later when URL is parsed)
+let isSpectator = false;
+
 // ============================================================================
 // Seeded PRNG for Deterministic Map Generation
 // ============================================================================
@@ -705,6 +708,9 @@ window.addEventListener('keyup', (event) => {
 
 // Mouse down - start selection or set command destination
 canvas.addEventListener('mousedown', (event) => {
+    // Spectators cannot interact
+    if (isSpectator) return;
+    
     // Right click or ctrl+click - start selection
     if (event.button === 2 || event.ctrlKey) {
         event.preventDefault();
@@ -803,6 +809,12 @@ canvas.addEventListener('contextmenu', (event) => {
 });
 
 canvas.addEventListener('click', async (event) => {
+    // Spectators cannot interact with the game
+    if (isSpectator) {
+        console.log('[Spectator] Cannot interact - spectator mode');
+        return;
+    }
+    
     // If we're in selection mode or have active selection, don't do normal click
     if (isSelecting || hasActiveSelection) {
         return;
@@ -1041,18 +1053,27 @@ function updatePlayerIndicator() {
         indicator.onclick = () => window.switchPlayer();
         document.body.appendChild(indicator);
     }
-    const baseCount = playerFactoryCounts[currentPlayer];
-    
-    if (currentPlayer === PLAYER_1) {
-        indicator.textContent = `Player 1 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
-        indicator.style.background = 'rgba(112, 51, 204, 0.8)';
+    if (isSpectator) {
+        indicator.textContent = '👁 Spectator';
+        indicator.style.background = 'rgba(80, 80, 100, 0.8)';
         indicator.style.color = 'white';
-        indicator.style.border = '2px solid rgba(160, 100, 255, 0.8)';
+        indicator.style.border = '2px solid rgba(120, 120, 150, 0.8)';
+        indicator.style.cursor = 'default';
     } else {
-        indicator.textContent = `Player 2 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
-        indicator.style.background = 'rgba(51, 179, 102, 0.8)';
-        indicator.style.color = 'white';
-        indicator.style.border = '2px solid rgba(100, 220, 150, 0.8)';
+        const baseCount = playerFactoryCounts[currentPlayer];
+        
+        if (currentPlayer === PLAYER_1) {
+            indicator.textContent = `Player 1 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
+            indicator.style.background = 'rgba(112, 51, 204, 0.8)';
+            indicator.style.color = 'white';
+            indicator.style.border = '2px solid rgba(160, 100, 255, 0.8)';
+        } else {
+            indicator.textContent = `Player 2 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
+            indicator.style.background = 'rgba(51, 179, 102, 0.8)';
+            indicator.style.color = 'white';
+            indicator.style.border = '2px solid rgba(100, 220, 150, 0.8)';
+        }
+        indicator.style.cursor = 'pointer';
     }
 }
 
@@ -1089,6 +1110,11 @@ const playerParam = urlParams.get('player');
 const requestedPlayerId = playerParam ? parseInt(playerParam) : null;
 console.log(`[URL Params] playerParam: "${playerParam}", requestedPlayerId: ${requestedPlayerId}`);
 
+// Check if spectator mode
+const spectatorParam = urlParams.get('spectator');
+isSpectator = spectatorParam === 'true' || spectatorParam === '1';
+console.log(`[URL Params] spectatorParam: "${spectatorParam}", isSpectator: ${isSpectator}`);
+
 // Network event handlers
 networkSync.onConnectionChange = (connected) => {
     isMultiplayer = connected;
@@ -1096,6 +1122,43 @@ networkSync.onConnectionChange = (connected) => {
         connectedPlayers.clear();
     }
     updateNetworkIndicator();
+};
+
+// Spectator mode handler
+networkSync.onSpectating = (spectatorId, serverMapSeed, serverConnectedPlayers) => {
+    console.log(`[Spectator] Joined as Spectator ${spectatorId}, mapSeed: ${serverMapSeed}`);
+    isSpectator = true;
+    
+    // Track connected players
+    if (serverConnectedPlayers && Array.isArray(serverConnectedPlayers)) {
+        serverConnectedPlayers.forEach(pid => connectedPlayers.add(pid));
+    }
+    
+    // Update to server's map seed if different
+    if (serverMapSeed !== undefined && serverMapSeed !== mapSeed) {
+        console.log(`[Spectator] Server has map seed ${serverMapSeed}, regenerating map...`);
+        generateMap(serverMapSeed);
+    }
+    
+    // Update URL with room and spectator flag
+    const url = new URL(window.location);
+    url.searchParams.set('room', roomId);
+    url.searchParams.set('spectator', 'true');
+    url.searchParams.delete('player');
+    window.history.replaceState({}, '', url);
+    
+    updateNetworkIndicator();
+    updatePlayerIndicator();
+};
+
+// Restart handler (for Play Again)
+networkSync.onRestart = (newMapSeed, initiatedBy) => {
+    console.log(`[Multiplayer] Game restarting with new seed ${newMapSeed}`);
+    
+    // Keep room and player params, just reload with new seed
+    const url = new URL(window.location);
+    url.searchParams.set('seed', newMapSeed);
+    window.location.href = url.toString();
 };
 
 networkSync.onPlayerJoined = (playerId, isHost, serverMapSeed, serverConnectedPlayers) => {
@@ -1207,12 +1270,6 @@ networkSync.onStateReceived = (syncData) => {
             }
             console.log(`[Multiplayer] Factories demolished, counts: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
             updatePlayerIndicator();
-        } else if (action.type === 'restart') {
-            // Other player clicked Play Again - reload to restart
-            console.log(`[Multiplayer] Restart requested by other player`);
-            const url = new URL(window.location);
-            url.searchParams.delete('player');
-            window.location.href = url.toString();
         } else if (action.type === 'unit_command') {
             // Other player issued a unit command
             console.log(`[Multiplayer] Player ${syncData.playerId} issued unit command`);
@@ -1266,8 +1323,13 @@ function updateNetworkIndicator() {
         const p1Status = p1Connected ? '🟣' : '⚫';
         const p2Status = p2Connected ? '🟢' : '⚫';
         
-        indicator.innerHTML = `<span style="opacity: ${p1Connected ? 1 : 0.4}">${p1Status} P1</span> <span style="opacity: ${p2Connected ? 1 : 0.4}">${p2Status} P2</span>`;
-        indicator.style.background = 'rgba(40, 40, 40, 0.9)';
+        if (isSpectator) {
+            indicator.innerHTML = `👁 Spectating <span style="opacity: ${p1Connected ? 1 : 0.4}">${p1Status}</span> <span style="opacity: ${p2Connected ? 1 : 0.4}">${p2Status}</span>`;
+            indicator.style.background = 'rgba(60, 60, 80, 0.9)';
+        } else {
+            indicator.innerHTML = `<span style="opacity: ${p1Connected ? 1 : 0.4}">${p1Status} P1</span> <span style="opacity: ${p2Connected ? 1 : 0.4}">${p2Status} P2</span>`;
+            indicator.style.background = 'rgba(40, 40, 40, 0.9)';
+        }
         indicator.style.color = 'white';
         indicator.style.border = '1px solid rgba(100, 100, 100, 0.8)';
     } else {
@@ -1410,28 +1472,85 @@ async function refreshRoomsList() {
                 border-radius: 8px;
                 padding: 12px;
                 margin-bottom: 8px;
-                cursor: pointer;
                 border: 1px solid #3a3a5a;
-                transition: border-color 0.2s;
-            " onmouseover="this.style.borderColor='#667eea'" onmouseout="this.style.borderColor='#3a3a5a'">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="color: #fff; font-weight: bold;">${room.displayName}</span>
-                    <span style="color: ${room.playerCount >= room.maxPlayers ? '#e74c3c' : '#2ecc71'}; font-size: 12px;">
-                        ${room.playerCount}/${room.maxPlayers} players
-                    </span>
+                display: flex;
+                gap: 12px;
+                align-items: center;
+            ">
+                <div style="
+                    width: 64px;
+                    height: 64px;
+                    background: #1a1a2e;
+                    border-radius: 4px;
+                    flex-shrink: 0;
+                    overflow: hidden;
+                ">
+                    ${room.hasState 
+                        ? `<img src="/api/rooms/${room.roomId}/minimap" 
+                             style="width: 64px; height: 64px; image-rendering: pixelated;"
+                             onerror="this.style.display='none'"
+                           />`
+                        : `<div style="
+                             width: 100%; height: 100%;
+                             display: flex; align-items: center; justify-content: center;
+                             color: #444; font-size: 24px;
+                           ">?</div>`
+                    }
                 </div>
-                <div style="color: #888; font-size: 11px; margin-top: 4px;">
-                    Running for ${formatDuration(room.ageSeconds)} • Seed: ${room.mapSeed}
+                <div style="flex: 1; min-width: 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #fff; font-weight: bold;">${room.displayName}</span>
+                        <span style="color: ${room.playerCount >= room.maxPlayers ? '#e74c3c' : '#2ecc71'}; font-size: 12px;">
+                            ${room.playerCount}/${room.maxPlayers} players${room.spectatorCount > 0 ? ` • 👁 ${room.spectatorCount}` : ''}
+                        </span>
+                    </div>
+                    <div style="color: #888; font-size: 11px; margin-top: 4px;">
+                        Running for ${formatDuration(room.ageSeconds)} • Seed: ${room.mapSeed}
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-top: 8px;">
+                        <button class="join-btn" data-room="${room.roomId}" style="
+                            flex: 1;
+                            padding: 6px 12px;
+                            background: ${room.playerCount >= room.maxPlayers ? '#555' : '#4a7c59'};
+                            color: white;
+                            border: none;
+                            border-radius: 4px;
+                            cursor: ${room.playerCount >= room.maxPlayers ? 'not-allowed' : 'pointer'};
+                            font-size: 12px;
+                        " ${room.playerCount >= room.maxPlayers ? 'disabled' : ''}>
+                            ${room.playerCount >= room.maxPlayers ? 'Full' : '🎮 Join'}
+                        </button>
+                        <button class="watch-btn" data-room="${room.roomId}" style="
+                            padding: 6px 12px;
+                            background: #4a5568;
+                            color: white;
+                            border: none;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 12px;
+                        ">👁 Watch</button>
+                    </div>
                 </div>
             </div>
         `).join('');
         
-        // Add click handlers to room cards
-        document.querySelectorAll('.room-card').forEach(card => {
-            card.onclick = async () => {
-                const roomIdToJoin = card.dataset.roomId;
+        // Add click handlers for join buttons
+        document.querySelectorAll('.join-btn:not([disabled])').forEach(btn => {
+            btn.onclick = async (e) => {
+                e.stopPropagation();
+                const roomIdToJoin = btn.dataset.room;
                 document.getElementById('matchmaking-dialog')?.remove();
                 await joinRoom(roomIdToJoin);
+            };
+        });
+        
+        // Add click handlers for watch buttons
+        document.querySelectorAll('.watch-btn').forEach(btn => {
+            btn.onclick = async (e) => {
+                e.stopPropagation();
+                const roomIdToWatch = btn.dataset.room;
+                document.getElementById('matchmaking-dialog')?.remove();
+                await watchRoom(roomIdToWatch);
             };
         });
         
@@ -1446,10 +1565,24 @@ async function joinRoom(roomIdToJoin) {
         console.log(`[Multiplayer] Joining room: ${roomIdToJoin}`);
         // Update the global roomId so URL updates correctly
         roomId = roomIdToJoin;
-        await networkSync.connect(wsUrl, roomIdToJoin, null);
+        await networkSync.connect(wsUrl, roomIdToJoin, null, false);
         console.log(`[Multiplayer] Connected to room: ${roomIdToJoin}`);
     } catch (error) {
         console.error('[Multiplayer] Connection failed:', error);
+    }
+}
+
+async function watchRoom(roomIdToWatch) {
+    try {
+        const wsUrl = `ws://${window.location.host}/ws`;
+        console.log(`[Spectator] Watching room: ${roomIdToWatch}`);
+        // Update the global roomId
+        roomId = roomIdToWatch;
+        isSpectator = true;
+        await networkSync.connect(wsUrl, roomIdToWatch, null, true);
+        console.log(`[Spectator] Connected to room: ${roomIdToWatch}`);
+    } catch (error) {
+        console.error('[Spectator] Failed to watch room:', error);
     }
 }
 
@@ -1478,19 +1611,31 @@ window.toggleMultiplayer = toggleMultiplayer;
 window.networkSync = networkSync;
 console.log(`Room ID: ${roomId} - Click network indicator or call toggleMultiplayer() to connect`);
 
-// Auto-connect if both room and player URL params are present (for rejoining after refresh)
-if (roomParam && playerParam && !isOnGitHub) {
-    console.log(`[Multiplayer] Auto-connecting to room ${roomId} as player ${requestedPlayerId}...`);
-    // Direct connect with the saved player ID
-    (async () => {
-        try {
-            const wsUrl = `ws://${window.location.host}/ws`;
-            await networkSync.connect(wsUrl, roomId, requestedPlayerId);
-            console.log(`[Multiplayer] Reconnected to room: ${roomId}`);
-        } catch (error) {
-            console.error('[Multiplayer] Reconnection failed:', error);
-        }
-    })();
+// Auto-connect if room URL param is present (for rejoining after refresh or spectator mode)
+if (roomParam && !isOnGitHub) {
+    if (spectatorParam) {
+        // Auto-connect as spectator
+        console.log(`[Spectator] Auto-connecting to room ${roomId} as spectator...`);
+        (async () => {
+            try {
+                await watchRoom(roomId);
+            } catch (error) {
+                console.error('[Spectator] Reconnection failed:', error);
+            }
+        })();
+    } else if (playerParam) {
+        // Auto-connect as player with saved player ID
+        console.log(`[Multiplayer] Auto-connecting to room ${roomId} as player ${requestedPlayerId}...`);
+        (async () => {
+            try {
+                const wsUrl = `ws://${window.location.host}/ws`;
+                await networkSync.connect(wsUrl, roomId, requestedPlayerId, false);
+                console.log(`[Multiplayer] Reconnected to room: ${roomId}`);
+            } catch (error) {
+                console.error('[Multiplayer] Reconnection failed:', error);
+            }
+        })();
+    }
 }
 
 // ============================================================================
@@ -1707,17 +1852,16 @@ function showGameOver() {
     document.body.appendChild(overlay);
     
     document.getElementById('play-again-btn').onclick = () => {
-        // Send restart message to other player(s) before reloading
-        if (isMultiplayer) {
-            syncAction({ type: 'restart' });
-        }
-        // Small delay to ensure message is sent
-        setTimeout(() => {
-            // Reload without player param to get fresh assignment
+        if (isMultiplayer && !isSpectator) {
+            // Send restart request via WebSocket - server will assign new seed and broadcast
+            networkSync.requestRestart();
+            // The onRestart handler will reload the page with new seed
+        } else {
+            // Single player - just reload with new random seed
             const url = new URL(window.location);
-            url.searchParams.delete('player');
+            url.searchParams.set('seed', Math.floor(Math.random() * 999999));
             window.location.href = url.toString();
-        }, 100);
+        }
     };
     
     console.log(`[Game Over] ${winnerName} wins!`);
