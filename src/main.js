@@ -24,6 +24,8 @@ import {
 
 import { initGameState, getGameState } from './game/GameState.js';
 import { initCamera, getCamera } from './game/Camera.js';
+import { MatchmakingDialog } from './ui/MatchmakingDialog.js';
+import { MapGenerator } from './game/MapGenerator.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -101,9 +103,6 @@ const seedParam = urlParams.get('seed');
 if (seedParam) {
     mapSeed = parseInt(seedParam) || DEFAULT_MAP_SEED;
 }
-
-// Create seeded random function
-let seededRandom = createSeededRandom(mapSeed);
 
 console.log(`Map seed: ${mapSeed}`);
 
@@ -504,115 +503,25 @@ function applyUnitCommand(command) {
     // Selection is only cleared when user presses Escape
 }
 
-// Helper to check if a cell is empty (don't overwrite resources)
-function isEmpty(x, y) {
-    const idx = (y * GRID_SIZE + x) * 4;
-    return data[idx] === CELL_EMPTY;
-}
+// Map generator instance
+const mapGenerator = new MapGenerator(GRID_SIZE, {
+    numBlobs: NUM_BLOBS,
+    blobMinRadius: BLOB_MIN_RADIUS,
+    blobMaxRadius: BLOB_MAX_RADIUS,
+    blobDensity: BLOB_DENSITY,
+    numWallLines: NUM_WALL_LINES,
+    wallMinLength: WALL_MIN_LENGTH,
+    wallMaxLength: WALL_MAX_LENGTH,
+    numWallBlobs: NUM_WALL_BLOBS,
+    wallBlobRadius: WALL_BLOB_RADIUS,
+});
 
 // Generate map with a specific seed
 function generateMap(seed) {
-    console.log(`Generating map with seed: ${seed}`);
     mapSeed = seed;
-    seededRandom = createSeededRandom(seed);
-
-// Fill with empty
-data.fill(0);
-
-// Place resources in blobs/clusters (more realistic RTS style)
-let totalResources = 0;
-
-for (let b = 0; b < NUM_BLOBS; b++) {
-    // Pick blob center randomly
-        const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-        const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-    
-    // Random radius for this blob
-        const radius = BLOB_MIN_RADIUS + seededRandom() * (BLOB_MAX_RADIUS - BLOB_MIN_RADIUS);
-    
-    // Fill the blob with resources
-    for (let dy = -Math.ceil(radius); dy <= Math.ceil(radius); dy++) {
-        for (let dx = -Math.ceil(radius); dx <= Math.ceil(radius); dx++) {
-            const x = centerX + dx;
-            const y = centerY + dy;
-            
-            // Check bounds
-            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
-            
-            // Check if within blob radius (with some noise for organic shape)
-            const dist = Math.sqrt(dx * dx + dy * dy);
-                const noiseRadius = radius * (0.7 + seededRandom() * 0.6); // Irregular edges
-            if (dist > noiseRadius) continue;
-            
-            // Density check
-                if (seededRandom() > BLOB_DENSITY) continue;
-            
-            // Give each resource a random phase (0-255) for staggered movement
-            const phase = Math.floor(seededRandom() * 256);
-            setCell(x, y, CELL_RESOURCE, 1.0, phase);
-            totalResources++;
-        }
-    }
-}
-
-// Generate Walls - random barriers and obstacles
-let totalWalls = 0;
-
-// Generate wall lines (horizontal or vertical)
-for (let i = 0; i < NUM_WALL_LINES; i++) {
-        const horizontal = seededRandom() > 0.5;
-        const length = Math.floor(WALL_MIN_LENGTH + seededRandom() * (WALL_MAX_LENGTH - WALL_MIN_LENGTH));
-    
-    // Pick starting position (leave margin from edges)
-        const startX = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
-        const startY = Math.floor(seededRandom() * (GRID_SIZE - length - 10)) + 5;
-    
-    for (let j = 0; j < length; j++) {
-        const x = horizontal ? startX + j : startX;
-        const y = horizontal ? startY : startY + j;
-        
-        // Only place if cell is empty (don't overwrite resources)
-        if (x >= 1 && x < GRID_SIZE - 1 && y >= 1 && y < GRID_SIZE - 1 && isEmpty(x, y)) {
-            setCell(x, y, CELL_WALL);
-            totalWalls++;
-        }
-    }
-}
-
-// Generate small wall clusters
-for (let b = 0; b < NUM_WALL_BLOBS; b++) {
-        const centerX = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-        const centerY = Math.floor(seededRandom() * (GRID_SIZE - 20)) + 10;
-    
-    for (let dy = -WALL_BLOB_RADIUS; dy <= WALL_BLOB_RADIUS; dy++) {
-        for (let dx = -WALL_BLOB_RADIUS; dx <= WALL_BLOB_RADIUS; dx++) {
-            const x = centerX + dx;
-            const y = centerY + dy;
-            
-            if (x < 1 || x >= GRID_SIZE - 1 || y < 1 || y >= GRID_SIZE - 1) continue;
-            
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > WALL_BLOB_RADIUS * 0.8) continue;
-            
-            // 70% density
-                if (seededRandom() > 0.7) continue;
-            
-            if (isEmpty(x, y)) {
-                setCell(x, y, CELL_WALL);
-                totalWalls++;
-            }
-        }
-    }
-}
-
-grid.upload(data, true);  // allFrames=true for initial map generation
-
-    console.log(`Map generated:`);
-console.log(`  Grid: ${GRID_SIZE}x${GRID_SIZE}`);
-    console.log(`  ${totalResources} resources scattered`);
-console.log(`  ${totalWalls} walls placed`);
-    
-    return { totalResources, totalWalls };
+    const result = mapGenerator.generate(data, seed);
+    grid.upload(data, true);  // allFrames=true for initial map generation
+    return result;
 }
 
 // Generate initial map
@@ -648,12 +557,7 @@ let mouseY = 0;
 let shiftHeld = false;
 // Cursor overlay is now rendered in shader (see u_shiftHeld, u_deleteRadius, u_mousePos)
 
-// Camera state now managed by Camera class (initialized above)
-// Legacy accessors for compatibility during refactor:
-function getCameraX() { return camera.x; }
-function getCameraY() { return camera.y; }
-function getCameraZoom() { return camera.zoom; }
-function getVisibleGridSize() { return camera.getVisibleGridSize(); }
+// Camera helper shortcuts (Camera class is initialized above)
 function screenToGrid(screenX, screenY) { return camera.screenToGrid(screenX, screenY); }
 function gridToScreen(gridX, gridY) { return camera.gridToScreen(gridX, gridY); }
 
@@ -1750,202 +1654,8 @@ function updateNetworkIndicator() {
     }
 }
 
-// formatDuration is now imported from GameUtils.js
-
-// Create matchmaking dialog
-async function showMatchmakingDialog() {
-    // Remove existing dialog if any
-    const existing = document.getElementById('matchmaking-dialog');
-    if (existing) existing.remove();
-    
-    // Create dialog overlay
-    const overlay = document.createElement('div');
-    overlay.id = 'matchmaking-dialog';
-    overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.85);
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        z-index: 10000;
-    `;
-    
-    const dialog = document.createElement('div');
-    dialog.style.cssText = `
-        background: #1a1a2e;
-        border-radius: 12px;
-        padding: 24px;
-        min-width: 400px;
-        max-width: 500px;
-        max-height: 70vh;
-        overflow-y: auto;
-        border: 2px solid #4a4a6a;
-        font-family: 'SF Mono', monospace;
-    `;
-    
-    dialog.innerHTML = `
-        <h2 style="color: #fff; margin: 0 0 16px 0; font-size: 1.5rem;">🎮 Matchmaking</h2>
-        <div id="rooms-list" style="color: #888; margin-bottom: 16px;">Loading games...</div>
-        <div style="display: flex; gap: 12px;">
-            <button id="new-game-btn" style="
-                flex: 1;
-                padding: 12px;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                cursor: pointer;
-                font-size: 14px;
-                font-weight: bold;
-            ">✨ New Game</button>
-            <button id="close-matchmaking-btn" style="
-                padding: 12px 20px;
-                background: #333;
-                color: #888;
-                border: 1px solid #555;
-                border-radius: 8px;
-                cursor: pointer;
-                font-size: 14px;
-            ">Cancel</button>
-        </div>
-    `;
-    
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-    
-    // Close button handler
-    document.getElementById('close-matchmaking-btn').onclick = () => overlay.remove();
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    
-    // New game button handler
-    document.getElementById('new-game-btn').onclick = async () => {
-        try {
-            const resp = await fetch('/api/rooms/create', { method: 'POST' });
-            const data = await resp.json();
-            overlay.remove();
-            await joinRoom(data.roomId);
-        } catch (error) {
-            console.error('Failed to create room:', error);
-        }
-    };
-    
-    // Fetch and display rooms
-    await refreshRoomsList();
-}
-
-async function refreshRoomsList() {
-    const roomsList = document.getElementById('rooms-list');
-    if (!roomsList) return;
-    
-    try {
-        const resp = await fetch('/api/rooms');
-        const data = await resp.json();
-        
-        if (data.rooms.length === 0) {
-            roomsList.innerHTML = `
-                <p style="color: #888; text-align: center; padding: 20px;">
-                    No games available.<br>Create a new one!
-                </p>
-            `;
-            return;
-        }
-        
-        roomsList.innerHTML = data.rooms.map(room => `
-            <div class="room-card" data-room-id="${room.roomId}" style="
-                background: #252540;
-                border-radius: 8px;
-                padding: 12px;
-                margin-bottom: 8px;
-                border: 1px solid #3a3a5a;
-                display: flex;
-                gap: 12px;
-                align-items: center;
-            ">
-                <div style="
-                    width: 64px;
-                    height: 64px;
-                    background: #1a1a2e;
-                    border-radius: 4px;
-                    flex-shrink: 0;
-                    overflow: hidden;
-                ">
-                    ${room.hasState 
-                        ? `<img src="/api/rooms/${room.roomId}/minimap" 
-                             style="width: 64px; height: 64px; image-rendering: pixelated;"
-                             onerror="this.style.display='none'"
-                           />`
-                        : `<div style="
-                             width: 100%; height: 100%;
-                             display: flex; align-items: center; justify-content: center;
-                             color: #444; font-size: 24px;
-                           ">?</div>`
-                    }
-                </div>
-                <div style="flex: 1; min-width: 0;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="color: #fff; font-weight: bold;">${room.displayName}</span>
-                        <span style="color: ${room.playerCount >= room.maxPlayers ? '#e74c3c' : '#2ecc71'}; font-size: 12px;">
-                            ${room.playerCount}/${room.maxPlayers} players${room.spectatorCount > 0 ? ` • 👁 ${room.spectatorCount}` : ''}
-                        </span>
-                    </div>
-                    <div style="color: #888; font-size: 11px; margin-top: 4px;">
-                        Running for ${formatDuration(room.ageSeconds)} • Seed: ${room.mapSeed}
-                    </div>
-                    <div style="display: flex; gap: 8px; margin-top: 8px;">
-                        <button class="join-btn" data-room="${room.roomId}" style="
-                            flex: 1;
-                            padding: 6px 12px;
-                            background: ${room.playerCount >= room.maxPlayers ? '#555' : '#4a7c59'};
-                            color: white;
-                            border: none;
-                            border-radius: 4px;
-                            cursor: ${room.playerCount >= room.maxPlayers ? 'not-allowed' : 'pointer'};
-                            font-size: 12px;
-                        " ${room.playerCount >= room.maxPlayers ? 'disabled' : ''}>
-                            ${room.playerCount >= room.maxPlayers ? 'Full' : '🎮 Join'}
-                        </button>
-                        <button class="watch-btn" data-room="${room.roomId}" style="
-                            padding: 6px 12px;
-                            background: #4a5568;
-                            color: white;
-                            border: none;
-                            border-radius: 4px;
-                            cursor: pointer;
-                            font-size: 12px;
-                        ">👁 Watch</button>
-                    </div>
-                </div>
-            </div>
-        `).join('');
-        
-        // Add click handlers for join buttons
-        document.querySelectorAll('.join-btn:not([disabled])').forEach(btn => {
-            btn.onclick = async (e) => {
-                e.stopPropagation();
-                const roomIdToJoin = btn.dataset.room;
-                document.getElementById('matchmaking-dialog')?.remove();
-                await joinRoom(roomIdToJoin);
-            };
-        });
-        
-        // Add click handlers for watch buttons
-        document.querySelectorAll('.watch-btn').forEach(btn => {
-            btn.onclick = async (e) => {
-                e.stopPropagation();
-                const roomIdToWatch = btn.dataset.room;
-                document.getElementById('matchmaking-dialog')?.remove();
-                await watchRoom(roomIdToWatch);
-            };
-        });
-        
-    } catch (error) {
-        roomsList.innerHTML = `<p style="color: #e74c3c;">Failed to load games</p>`;
-    }
-}
+// Matchmaking dialog instance (created lazily)
+let matchmakingDialog = null;
 
 async function joinRoom(roomIdToJoin) {
     try {
@@ -1981,8 +1691,15 @@ async function toggleMultiplayer() {
     if (isMultiplayer) {
         networkSync.disconnect();
     } else {
-        // Show matchmaking dialog instead of direct connect
-        await showMatchmakingDialog();
+        // Create matchmaking dialog if not exists
+        if (!matchmakingDialog) {
+            matchmakingDialog = new MatchmakingDialog(networkSync, {
+                onJoinRoom: joinRoom,
+                onWatchRoom: watchRoom,
+                onCreateRoom: joinRoom
+            });
+        }
+        await matchmakingDialog.show();
     }
 }
 
