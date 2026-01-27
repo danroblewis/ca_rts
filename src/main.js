@@ -33,6 +33,7 @@ import { RollbackManager } from './game/RollbackManager.js';
 import { SettingsUI } from './ui/SettingsUI.js';
 import { WinConditionManager } from './game/WinConditionManager.js';
 import { NetworkIndicator } from './ui/NetworkIndicator.js';
+import { SpeedToggle } from './ui/SpeedToggle.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -918,18 +919,11 @@ function updateNetworkIndicator() {
     networkIndicator.update(isMultiplayer, isSpectator, connectedPlayers);
     
     // Hide Super Speed toggle when in multiplayer (speed must be synced) - but allow on localhost
-    const speedToggleContainer = document.getElementById('speed-toggle-container');
-    if (speedToggleContainer) {
-        const shouldHide = isMultiplayer && !isOnLocalhost;
-        speedToggleContainer.style.display = shouldHide ? 'none' : 'flex';
-        
-        // Force sync mode when in multiplayer
-        if (isMultiplayer && !SYNC_SIM_WITH_RENDER) {
-            SYNC_SIM_WITH_RENDER = true;
-            const toggle = document.getElementById('speed-toggle');
-            if (toggle) toggle.checked = false;
-            updateSpeedToggleDisplay();
-        }
+    if (isMultiplayer && !isOnLocalhost) {
+        speedToggle.hide();
+        speedToggle.forceSyncMode();
+    } else if (!isMultiplayer) {
+        speedToggle.show();
     }
 }
 
@@ -1100,54 +1094,23 @@ const HEARTBEAT_INTERVAL = 1000;   // Send heartbeat every second
 const TPS_MARGIN = 5;              // Add margin to target TPS to allow speedup
 
 // Toggle: true = sync with render (normal speed), false = fast as possible (super speed)
-// Default to normal speed, but allow toggle on localhost
-// Force sync mode (hide toggle) when not on localhost
 let SYNC_SIM_WITH_RENDER = DEFAULT_SYNC_MODE;
 
-// Super Speed Toggle UI
-const speedToggle = document.getElementById('speed-toggle');
-const speedLabel = document.getElementById('speed-label');
-const speedToggleContainer = document.getElementById('speed-toggle-container');
+// Speed Toggle UI (using SpeedToggle module)
+const speedToggle = new SpeedToggle({
+    defaultSyncMode: DEFAULT_SYNC_MODE,
+    isOnLocalhost: isOnLocalhost,
+    onSpeedChange: (syncWithRender) => {
+        SYNC_SIM_WITH_RENDER = syncWithRender;
+    },
+    onFastModeStart: () => fastSimulationLoop()
+});
 
-function updateSpeedToggleUI() {
-    const superSpeedOn = !SYNC_SIM_WITH_RENDER;
-    if (speedToggle) speedToggle.checked = superSpeedOn;
-    if (speedLabel) {
-        speedLabel.classList.toggle('active', superSpeedOn);
-    }
+// Helper for network indicator to update speed toggle display
+function updateSpeedToggleDisplay() {
+    // No-op - SpeedToggle handles its own UI now
 }
 
-function setSuperSpeed(enabled) {
-    const wasFast = !SYNC_SIM_WITH_RENDER;
-    SYNC_SIM_WITH_RENDER = !enabled;
-    updateSpeedToggleUI();
-    console.log(`Super Speed: ${enabled ? 'ON (fast as possible)' : 'OFF (synced with render)'}`);
-    if (!SYNC_SIM_WITH_RENDER && !wasFast) {
-        // Start the fast loop when switching to fast mode
-        fastSimulationLoop();
-    }
-}
-
-if (speedToggle) {
-    speedToggle.addEventListener('change', (e) => {
-        setSuperSpeed(e.target.checked);
-    });
-}
-
-// Hide speed toggle on non-localhost (forced sync mode)
-if (!isOnLocalhost && speedToggleContainer) {
-    speedToggleContainer.style.display = 'none';
-}
-
-// Initialize UI state
-updateSpeedToggleUI();
-
-// Note: Audio toggle button is handled by audioManager.bindButton() (called earlier)
-
-// Expose toggle to console for easy switching
-window.toggleSimSync = () => {
-    setSuperSpeed(SYNC_SIM_WITH_RENDER); // If currently synced, enable super speed (and vice versa)
-};
 console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
 
 function simulationStep() {
