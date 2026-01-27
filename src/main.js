@@ -8,6 +8,7 @@ import { AudioReductionPipeline } from './audio/AudioReductionPipeline.js';
 import { AudioEngine } from './audio/AudioEngine.js';
 import { CheckpointBuffer } from './gpu/CheckpointBuffer.js';
 import { ActionQueue } from './network/ActionQueue.js';
+import { Logger } from './utils/Logger.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -1506,7 +1507,7 @@ networkSync.onSpeedSync = (serverTargetTps, slowestPlayer, tickCounts = {}, targ
     
     // Only log if target changed significantly
     if (Math.abs(oldTarget - serverTargetTps) > 1) {
-        console.log(`[Speed Sync] Adjusting to ${targetTicksPerSecond.toFixed(1)} TPS (slowest: Player ${slowestPlayer}, our TPS: ${effectiveTicksPerSecond.toFixed(1)})`);
+        Logger.log('speed', `Target TPS: ${targetTicksPerSecond.toFixed(1)} (slowest: P${slowestPlayer}, our potential: ${effectiveTicksPerSecond.toFixed(1)})`);
     }
     
     // Tick synchronization - check if we're behind the leader
@@ -1628,55 +1629,49 @@ networkSync.onStateReceived = (syncData) => {
     // Received state from another player - apply it
     const receiveTime = performance.now();
     const isPeriodicSync = syncData.action && syncData.action.type === 'periodic_sync';
-    const tickDiff = syncData.simTime - simTime;
-    console.log(`[Sync] ${isPeriodicSync ? 'PERIODIC' : 'FULL'} sync received:`);
-    console.log(`[Sync]   From: Player ${syncData.playerId}`);
-    console.log(`[Sync]   Their tick: ${syncData.simTime}`);
-    console.log(`[Sync]   Our tick BEFORE: ${Math.floor(simTime)}`);
-    console.log(`[Sync]   Tick difference: ${tickDiff > 0 ? '+' : ''}${Math.floor(tickDiff)} (${tickDiff > 0 ? 'we are behind' : tickDiff < 0 ? 'we are ahead' : 'in sync'})`);
+    const tickDiff = Math.floor(syncData.simTime - simTime);
+    const syncType = isPeriodicSync ? 'PERIODIC' : 'FULL';
+    const behindAhead = tickDiff > 0 ? 'behind' : tickDiff < 0 ? 'ahead' : 'in-sync';
+    
+    Logger.log('sync', `=== ${syncType} SYNC from P${syncData.playerId} ===`);
+    Logger.log('sync', `Their tick: ${Math.floor(syncData.simTime)}, Our tick: ${Math.floor(simTime)}, Delta: ${tickDiff} (we are ${behindAhead})`);
     
     // Clear waiting state - we now have valid state to work with
     if (waitingForSync) {
-        console.log(`[Sync] State sync received, simulation can now run`);
+        Logger.log('sync', 'State sync received, simulation can now run');
         waitingForSync = false;
     }
     
     // Update local grid with received state
     const uploadStart = performance.now();
     const stateSize = syncData.gridState ? syncData.gridState.length : 0;
-    console.log(`[Sync]   Grid state size: ${stateSize} floats (${(stateSize * 4 / 1024 / 1024).toFixed(2)} MB)`);
     
     if (syncData.gridState && stateSize > 0) {
         grid.upload(syncData.gridState);
-        const uploadEnd = performance.now();
-        console.log(`[Sync]   Grid upload took ${(uploadEnd - uploadStart).toFixed(2)} ms`);
+        const uploadTime = performance.now() - uploadStart;
+        Logger.log('sync', `Grid uploaded: ${(stateSize * 4 / 1024 / 1024).toFixed(2)} MB in ${uploadTime.toFixed(1)}ms`);
     } else {
-        console.error(`[Sync]   ERROR: No grid state to upload!`);
-        return;  // Don't continue if no state
+        Logger.error('sync', 'No grid state to upload!');
+        return;
     }
     
     // For periodic syncs: Apply grid state, set simTime to match, then fast-forward
-    // This keeps the grid state and simTime in sync while minimizing visual jumps
     // For initial/player syncs: Just sync the time since we're starting fresh
     const oldSimTime = simTime;
     if (!isPeriodicSync) {
         simTime = syncData.simTime;
-        console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (synced to their tick)`);
+        Logger.log('sync', `Initial sync: tick set to ${Math.floor(simTime)}`);
     } else {
         // For periodic sync: we need to fast-forward from the received tick to our current tick
-        // This way the grid state evolves correctly to match our local timeline
         const ticksToFastForward = Math.floor(oldSimTime - syncData.simTime);
         
         if (ticksToFastForward > 0 && ticksToFastForward < 120) {
             // We're ahead - fast-forward the received state to catch up
-            console.log(`[Sync]   Fast-forwarding ${ticksToFastForward} ticks to catch up...`);
-            simTime = syncData.simTime;  // Start from their tick
+            Logger.log('sync', `Fast-forwarding ${ticksToFastForward} ticks (from ${Math.floor(syncData.simTime)} to ${Math.floor(oldSimTime)})`);
+            simTime = syncData.simTime;
             
-            // Run simulation steps to catch up (without rendering)
-            // Note: grid.upload() put the state in the current READ buffer
-            // We need to run simulation (read -> write) then swap, NOT swap first!
+            const ffStart = performance.now();
             for (let i = 0; i < ticksToFastForward; i++) {
-                // Run the simulation shader (reads from current, writes to next)
                 simShader.use();
                 simShader.setTexture('u_state', grid.getReadTexture(), 0);
                 simShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
@@ -1684,33 +1679,29 @@ networkSync.onStateReceived = (syncData) => {
                 grid.getWriteFramebuffer().bind();
                 simShader.dispatch();
                 grid.getWriteFramebuffer().unbind();
-                
-                // Now swap so the result becomes the new read buffer
                 grid.swap();
                 simTime += 1.0;
             }
-            console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (fast-forwarded)`);
+            const ffTime = performance.now() - ffStart;
+            Logger.log('sync', `Fast-forward complete: now at tick ${Math.floor(simTime)} (${ffTime.toFixed(1)}ms)`);
         } else if (ticksToFastForward <= 0) {
-            // We're behind or in sync - just accept the state and sync time
             simTime = syncData.simTime;
-            console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (we were behind, synced)`);
+            Logger.log('sync', `We were behind: tick synced to ${Math.floor(simTime)}`);
         } else {
-            // Way too many ticks to fast-forward (>2 seconds) - just accept the jump
             simTime = syncData.simTime;
-            console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (too far ahead, reset)`);
+            Logger.log('sync', `Too far ahead (${ticksToFastForward} ticks): reset to ${Math.floor(simTime)}`);
         }
     }
     
     // For initial syncs: clear rollback state since we're starting fresh
-    // For periodic syncs: keep rollback state so we can still handle actions
     if (!isPeriodicSync) {
         if (checkpointBuffer) {
             checkpointBuffer.clear();
-            console.log(`[Multiplayer] Cleared checkpoint buffer`);
+            Logger.log('checkpoint', 'Cleared checkpoint buffer');
         }
         if (actionQueue) {
             actionQueue.clear();
-            console.log(`[Multiplayer] Cleared action queue`);
+            Logger.log('action', 'Cleared action queue');
         }
         
         // Save a checkpoint at this new state immediately
@@ -2317,8 +2308,12 @@ function applyAction(action, playerId) {
  * @param {number} incomingPlayerId - The player who performed the incoming action
  */
 function rollbackAndReplay(targetTick, incomingAction, incomingPlayerId) {
-    const currentTick = simTime;
-    console.log(`[Rollback] Starting rollback from tick ${currentTick} to ${targetTick}`);
+    const currentTick = Math.floor(simTime);
+    const rollbackStart = performance.now();
+    
+    Logger.log('rollback', `=== ROLLBACK START ===`);
+    Logger.log('rollback', `Trigger: ${incomingAction.type} from Player ${incomingPlayerId} at tick ${targetTick}`);
+    Logger.log('rollback', `Current tick: ${currentTick}, Target tick: ${targetTick}, Delta: ${currentTick - targetTick} ticks`);
     
     // Add the incoming action to the queue FIRST
     if (!actionQueue.hasAction(targetTick, incomingPlayerId, incomingAction.type)) {
@@ -2326,87 +2321,97 @@ function rollbackAndReplay(targetTick, incomingAction, incomingPlayerId) {
     }
     
     // Debug: show all actions in queue
-    console.log(`[Rollback] Queue has ${actionQueue.actions.length} actions:`,
-        actionQueue.actions.map(a => `${a.type}@${a.tick} P${a.playerId} applied=${a.applied}`));
+    Logger.log('rollback', `Queue has ${actionQueue.actions.length} actions`);
     
     // Find the OLDEST UNAPPLIED action that needs replaying
-    // Already-applied actions don't need to be re-replayed!
     const unappliedActions = actionQueue.actions.filter(a => !a.applied);
     const oldestUnappliedTick = unappliedActions.length > 0 
         ? Math.min(...unappliedActions.map(a => a.tick)) 
         : targetTick;
     const rollbackToTick = Math.min(targetTick, oldestUnappliedTick);
-    console.log(`[Rollback] ${unappliedActions.length} unapplied actions, oldestUnappliedTick=${oldestUnappliedTick}, rollbackToTick=${rollbackToTick}`);
+    Logger.log('rollback', `Unapplied: ${unappliedActions.length}, oldest=${oldestUnappliedTick}, rollbackTo=${rollbackToTick}`);
     
     // Find the best checkpoint before ALL actions that need replaying
     const checkpoint = checkpointBuffer.findCheckpointBefore(rollbackToTick);
     if (!checkpoint) {
-        console.error(`[Rollback] No checkpoint found before tick ${rollbackToTick}, oldest: ${checkpointBuffer.getOldestTick()}`);
-        // Fallback: apply action to current state (may cause desyncs)
+        Logger.error('rollback', `No checkpoint found before tick ${rollbackToTick}, oldest: ${checkpointBuffer.getOldestTick()}`);
         applyAction(incomingAction, incomingPlayerId);
         return;
     }
     
-    console.log(`[Rollback] Found checkpoint at tick ${checkpoint.tick} (rollback target: ${rollbackToTick})`);
+    Logger.log('checkpoint', `Using checkpoint at tick ${checkpoint.tick} (target: ${rollbackToTick})`);
     
     // Verify checkpoint is strictly BEFORE the rollback target
-    // This is required because we need to replay simulation steps up to the action's tick
     if (checkpoint.tick >= rollbackToTick) {
-        console.error(`[Rollback] ERROR: Checkpoint at ${checkpoint.tick} is NOT strictly before target ${rollbackToTick}! This should not happen.`);
-        // Emergency fallback: apply action to current state (may cause minor desyncs)
+        Logger.error('rollback', `Checkpoint at ${checkpoint.tick} is NOT before target ${rollbackToTick}!`);
         applyAction(incomingAction, incomingPlayerId);
         return;
     }
     
     // Restore from checkpoint
+    const restoreStart = performance.now();
     grid.uploadCurrent(checkpoint.cpuData);
+    const tickBeforeReplay = simTime;
     simTime = checkpoint.tick;
+    const restoreTime = performance.now() - restoreStart;
+    Logger.log('checkpoint', `Restored to tick ${checkpoint.tick} in ${restoreTime.toFixed(1)}ms`);
     
-    // Reset applied status for ALL actions at or after checkpoint tick - they all need replay
-    // Use checkpoint.tick - 1 to include actions AT the checkpoint tick
+    // Reset applied status for ALL actions at or after checkpoint tick
     actionQueue.resetAppliedAfter(checkpoint.tick - 1);
     
-    // Get ALL actions that need to be replayed (from checkpoint tick onwards)
-    // Include actions AT checkpoint.tick by using checkpoint.tick - 1 as start
+    // Get ALL actions that need to be replayed
     const actionsToReplay = actionQueue.getActionsInRange(checkpoint.tick - 1, currentTick);
-    console.log(`[Rollback] ${actionsToReplay.length} actions to replay from tick ${checkpoint.tick} to ${currentTick}:`,
-        actionsToReplay.map(a => `${a.type}@${a.tick} by P${a.playerId}`));
+    Logger.log('rollback', `Replaying ${actionsToReplay.length} actions from tick ${checkpoint.tick} to ${currentTick}`);
+    
+    // Count simulation steps for debugging
+    let simStepsRun = 0;
+    let actionsApplied = 0;
     
     // Replay simulation from checkpoint to current tick
-    // We need to run simulation steps AND apply actions at the right ticks
+    const replayStart = performance.now();
     while (simTime < currentTick) {
         // Apply all actions that should happen at this tick
-        const actionsAtTick = actionsToReplay.filter(a => a.tick === simTime);
+        const actionsAtTick = actionsToReplay.filter(a => a.tick === Math.floor(simTime));
         for (const action of actionsAtTick) {
             if (!action.applied) {
-                console.log(`[Rollback] Applying ${action.type} at tick ${simTime} for player ${action.playerId}`);
+                Logger.log('action', `Replay: ${action.type} at tick ${Math.floor(simTime)} for P${action.playerId}`);
                 applyAction(action.data, action.playerId);
                 action.applied = true;
+                actionsApplied++;
             }
         }
         
         // Run simulation step (this increments simTime)
         simulationStep();
+        simStepsRun++;
     }
     
-    // Apply any actions at the final tick (currentTick) - these happen AFTER the last simulation step
+    // Apply any actions at the final tick
     const finalActions = actionsToReplay.filter(a => a.tick === currentTick);
     for (const action of finalActions) {
         if (!action.applied) {
-            console.log(`[Rollback] Applying final ${action.type} at tick ${simTime} for player ${action.playerId}`);
+            Logger.log('action', `Final: ${action.type} at tick ${Math.floor(simTime)} for P${action.playerId}`);
             applyAction(action.data, action.playerId);
             action.applied = true;
+            actionsApplied++;
         }
     }
     
-    console.log(`[Rollback] Replay complete, now at tick ${simTime}`);
+    const replayTime = performance.now() - replayStart;
+    const totalTime = performance.now() - rollbackStart;
+    
+    Logger.log('rollback', `=== ROLLBACK COMPLETE ===`);
+    Logger.log('rollback', `Sim steps: ${simStepsRun}, Actions applied: ${actionsApplied}`);
+    Logger.log('rollback', `Tick: ${tickBeforeReplay} -> ${checkpoint.tick} -> ${Math.floor(simTime)}`);
+    Logger.log('rollback', `Time: restore=${restoreTime.toFixed(1)}ms, replay=${replayTime.toFixed(1)}ms, total=${totalTime.toFixed(1)}ms`);
 }
 
 // Handle incoming actions from other players
 networkSync.onActionReceived = (message) => {
     const { playerId, simTime: actionTick, action } = message;
+    const tickDelta = Math.floor(simTime) - actionTick;
     
-    console.log(`[Network] Received action from Player ${playerId}: ${action.type} at tick ${actionTick}, current tick: ${simTime}`);
+    Logger.log('network', `Received: ${action.type} from P${playerId} at tick ${actionTick} (we're at ${Math.floor(simTime)}, delta=${tickDelta})`);
     
     if (actionTick <= simTime) {
         // Action is in the past - need to rollback and replay
@@ -2414,7 +2419,7 @@ networkSync.onActionReceived = (message) => {
     } else {
         // Action is in the future - queue it for later
         actionQueue.addAction(actionTick, playerId, action.type, action, false);
-        console.log(`[Network] Queued future action for tick ${actionTick}`);
+        Logger.log('network', `Queued future action for tick ${actionTick}`);
     }
 };
 
@@ -2662,7 +2667,7 @@ function logStats() {
                 factoriesPlaced: factoriesPlaced
             }, simTime);
             lastFullSyncTime = now;
-            console.log(`[Periodic Sync] Sent full state at tick ${Math.floor(simTime)}`);
+            Logger.log('sync', `Sent periodic sync at tick ${Math.floor(simTime)}`);
         }
     }
 }
