@@ -24,15 +24,16 @@ import { runGridActionsTests } from './gridactions.test.js';
 import { runMapGeneratorTests } from './mapgenerator.test.js';
 import { runActionApplierTests } from './actionapplier.test.js';
 import { runRollbackManagerTests } from './rollbackmanager.test.js';
+import { runAudioManagerTests } from './audiomanager.test.js';
 
 // Check if we should skip GPU tests
 const skipGPU = shouldSkipGPU();
 
 // Total test count:
 // GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) = 84
-// Refactored module tests: gameutils(20) + camera(10) + gridactions(15) + mapgenerator(12) = 57
+// Refactored module tests: GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 + RollbackManager:15 + AudioManager:16
 const gpuTestCount = 84;
-const unitTestCount = 97;  // GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 + RollbackManager:15
+const unitTestCount = 113;  // 97 + AudioManager:16
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
 // Initialize GPU (needed even for some unit tests that mock canvas)
@@ -58,6 +59,7 @@ await runGridActionsTests();
 await runMapGeneratorTests();
 await runActionApplierTests();
 await runRollbackManagerTests();
+await runAudioManagerTests();
 
 // Output final results
 outputResults();

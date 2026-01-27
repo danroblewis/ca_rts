@@ -4,8 +4,7 @@ import { DataTexture } from './gpu/DataTexture.js';
 import { loadShader } from './shaders/load.js';
 import { CAGrid } from './ca/CAGrid.js';
 import { getNetworkSync } from './network/NetworkSync.js';
-import { AudioReductionPipeline } from './audio/AudioReductionPipeline.js';
-import { AudioEngine } from './audio/AudioEngine.js';
+import { AudioManager } from './audio/AudioManager.js';
 import { CheckpointBuffer } from './gpu/CheckpointBuffer.js';
 import { ActionQueue } from './network/ActionQueue.js';
 import { Logger } from './utils/Logger.js';
@@ -334,72 +333,18 @@ let rollbackManager = null;
 // No separate texture needed - selection moves with units automatically
 
 // ============================================================================
-// Initialize Audio System
+// Initialize Audio System (via AudioManager)
 // ============================================================================
-const audioReductionPipeline = new AudioReductionPipeline(GRID_SIZE, 4);
-const audioEngine = new AudioEngine();
-let audioInitialized = false;
+const audioManager = new AudioManager({
+    gridSize: GRID_SIZE
+});
 
-// Audio needs to be initialized after a user gesture
-async function initAudio() {
-    if (audioInitialized) return;
-    
-    try {
-        await audioReductionPipeline.init();
-        await audioEngine.init();
-        await audioEngine.resume();
-        audioInitialized = true;
-        console.log('[Audio] System initialized');
-        updateAudioButton();
-    } catch (e) {
-        console.error('[Audio] Failed to initialize:', e);
-    }
-}
+// Bind to audio toggle button and setup debug utilities
+audioManager.bindButton(document.getElementById('audioToggle'));
+audioManager.setupDebugUtils();
 
-// Expose audio controls and debug utilities
-window.initAudio = initAudio;
-window.toggleMute = () => {
-    const muted = audioEngine.toggleMute();
-    updateAudioButton();
-    return muted;
-};
-
-// Debug: expose audio engine for console testing
-window.audio = {
-    engine: audioEngine,
-    // Test individual sounds
-    testSpawn: () => audioEngine.tryPlayOneShot('spawn', 1.0),
-    testExplosion: () => audioEngine.tryPlayOneShot('explosion', 1.0),
-    testDepletion: () => audioEngine.tryPlayOneShot('depletion', 1.0),
-    testReject: () => audioEngine.playReject(),
-    // Set loop volumes (0-1)
-    setMining: (v) => audioEngine.loops.mining?.gain.gain.setValueAtTime(v * 0.15, audioEngine.audioContext.currentTime),
-    setCombat: (v) => audioEngine.loops.combat?.gain.gain.setValueAtTime(v * 0.2, audioEngine.audioContext.currentTime),
-    setFactory: (v) => audioEngine.loops.factory?.setActivity?.(v),
-    setSwarm: (v) => audioEngine.loops.swarm?.gain.gain.setValueAtTime(v * 0.1, audioEngine.audioContext.currentTime),
-    // Stop all sounds
-    stopAll: () => {
-        Object.values(audioEngine.loops).forEach(l => l?.gain?.gain.setValueAtTime(0, audioEngine.audioContext.currentTime));
-    },
-    // Show current state
-    status: () => console.log('Loops:', audioEngine.loops, 'One-shots:', audioEngine.oneShotPools)
-};
-
-function updateAudioButton() {
-    const btn = document.getElementById('audioToggle');
-    if (btn) {
-        if (!audioInitialized) {
-            btn.textContent = '🔊';
-        } else if (audioEngine.muted) {
-            btn.textContent = '🔇';
-        } else {
-            btn.textContent = '🔊';
-        }
-    }
-}
-
-// Call once to set initial state
-updateAudioButton();
+// Convenience accessor for components that need the engine directly
+const audioEngine = audioManager.getEngine();
 
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 
@@ -437,7 +382,7 @@ const inputHandler = new InputHandler({
         }
     },
     onInitAudio: () => {
-        if (!audioInitialized) initAudio();
+        if (!audioManager.isInitialized()) audioManager.init();
     },
     isSpectator: () => isSpectator,
     screenToGrid: (x, y) => camera.screenToGrid(x, y),
@@ -1425,18 +1370,7 @@ if (!isOnLocalhost && speedToggleContainer) {
 // Initialize UI state
 updateSpeedToggleUI();
 
-// Audio toggle button
-const audioToggleBtn = document.getElementById('audioToggle');
-if (audioToggleBtn) {
-    audioToggleBtn.addEventListener('click', async () => {
-        if (!audioInitialized) {
-            await initAudio();
-        } else {
-            audioEngine.toggleMute();
-            updateAudioButton();
-        }
-    });
-}
+// Note: Audio toggle button is handled by audioManager.bindButton() (called earlier)
 
 // Expose toggle to console for easy switching
 window.toggleSimSync = () => {
@@ -1692,13 +1626,7 @@ function renderLoop() {
     // ========================================================================
     // Audio: Run reduction pipeline and update audio engine
     // ========================================================================
-    if (audioInitialized) {
-        // Run reduction pipeline on current game state
-        const soundParams = audioReductionPipeline.run(grid.getReadTexture());
-        
-        // Update audio engine with sound parameters
-        audioEngine.update(audioReductionPipeline.getSoundParams());
-    }
+    audioManager.update(grid.getReadTexture());
     
     // Render
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
