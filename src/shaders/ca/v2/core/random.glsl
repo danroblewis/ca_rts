@@ -14,10 +14,10 @@
 // Large prime modulus - keeps all values in safe range
 const int HASH_MOD = 100003;  // Prime number, fits well in 32-bit
 
-// Safe modulo that handles negative numbers
+// Safe modulo using native modulo operator for cross-platform determinism
 int safeMod(int x, int m) {
-    int result = x - (x / m) * m;  // Integer division for modulo
-    if (result < 0) result = result + m;
+    int result = x % m;
+    if (result < 0) result += m;
     return result;
 }
 
@@ -40,11 +40,11 @@ int ihash(int x) {
 // Hash position and time to get a deterministic integer
 // Uses safe modular arithmetic at each step to prevent overflow
 int hashPosTime(vec2 pos, float time) {
-    // Convert floats to integers carefully
+    // Convert floats to integers using floor() for cross-platform determinism
     // Position should always be integer-valued (cell coordinates)
-    int px = int(pos.x + 0.5);  // Round to nearest integer
-    int py = int(pos.y + 0.5);
-    int t = int(time);
+    int px = int(floor(pos.x + 0.5));  // Round to nearest integer
+    int py = int(floor(pos.y + 0.5));
+    int t = int(floor(time));
     
     // Bring each component into safe range BEFORE combining
     // This prevents overflow during multiplication

@@ -26,10 +26,11 @@ uniform float u_seed;
 // Large prime modulus - keeps all values in safe range
 const int HASH_MOD = 100003;
 
-// Safe modulo that handles negative numbers
+// Safe modulo using floor-based division for cross-platform determinism
 int safeMod(int x, int m) {
-    int result = x - (x / m) * m;
-    if (result < 0) result = result + m;
+    // Use native modulo operator for cross-platform determinism
+    int result = x % m;
+    if (result < 0) result += m;
     return result;
 }
 
@@ -44,13 +45,13 @@ int ihash(int x) {
 
 void main() {
     // Each pixel tests a different input value
-    int px = int(v_uv.x * 16.0);
-    int py = int(v_uv.y * 16.0);
+    int px = int(floor(gl_FragCoord.x));
+    int py = int(floor(gl_FragCoord.y));
     int testIndex = py * 16 + px;
     
-    // Create input based on test index and seed
-    int input = testIndex * 1000 + int(u_seed);
-    int result = ihash(input);
+    // Create inputVal based on test index and seed
+    int inputVal = testIndex * 1000 + int(floor(u_seed));
+    int result = ihash(inputVal);
     
     // Encode result in RGBA (split into bytes)
     float r = float(safeMod(result, 256)) / 255.0;
@@ -70,12 +71,14 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 uniform float u_time;
+uniform float u_textureSize;
 
 const int HASH_MOD = 100003;
 
 int safeMod(int x, int m) {
-    int result = x - (x / m) * m;
-    if (result < 0) result = result + m;
+    // Use native modulo operator for cross-platform determinism
+    int result = x % m;
+    if (result < 0) result += m;
     return result;
 }
 
@@ -88,9 +91,10 @@ int ihash(int x) {
 }
 
 int hashPosTime(vec2 pos, float time) {
-    int px = int(pos.x + 0.5);
-    int py = int(pos.y + 0.5);
-    int t = int(time);
+    // Use floor() explicitly for cross-platform determinism
+    int px = int(floor(pos.x + 0.5));
+    int py = int(floor(pos.y + 0.5));
+    int t = int(floor(time));
     
     px = safeMod(px, 1009);
     py = safeMod(py, 1013);
@@ -106,8 +110,9 @@ float hash(vec2 p, float time) {
 }
 
 void main() {
-    // Each pixel represents a different position
-    vec2 pos = v_uv * 512.0;  // 0-512 range
+    // Match JS position calculation: Math.floor((px / textureSize) * 512)
+    vec2 pixelCoord = floor(gl_FragCoord.xy);
+    vec2 pos = floor(pixelCoord / u_textureSize * 512.0);
     
     float hashResult = hash(pos, u_time);
     
@@ -124,12 +129,14 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 uniform float u_time;
+uniform float u_textureSize;
 
 const int HASH_MOD = 100003;
 
 int safeMod(int x, int m) {
-    int result = x - (x / m) * m;
-    if (result < 0) result = result + m;
+    // Use native modulo operator for cross-platform determinism
+    int result = x % m;
+    if (result < 0) result += m;
     return result;
 }
 
@@ -142,9 +149,10 @@ int ihash(int x) {
 }
 
 int hashPosTime(vec2 pos, float time) {
-    int px = int(pos.x + 0.5);
-    int py = int(pos.y + 0.5);
-    int t = int(time);
+    // Use floor() explicitly for cross-platform determinism
+    int px = int(floor(pos.x + 0.5));
+    int py = int(floor(pos.y + 0.5));
+    int t = int(floor(time));
     
     px = safeMod(px, 1009);
     py = safeMod(py, 1013);
@@ -160,7 +168,9 @@ int randomDir(vec2 pos, float time) {
 }
 
 void main() {
-    vec2 pos = v_uv * 512.0;
+    // Match JS position calculation: Math.floor((px / textureSize) * 512)
+    vec2 pixelCoord = floor(gl_FragCoord.xy);
+    vec2 pos = floor(pixelCoord / u_textureSize * 512.0);
     
     int dir = randomDir(pos, u_time);
     
@@ -178,12 +188,14 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 uniform float u_time;  // Will be a high value like 33931
+uniform float u_textureSize;  // Size of the texture (16 or 64)
 
 const int HASH_MOD = 100003;
 
 int safeMod(int x, int m) {
-    int result = x - (x / m) * m;
-    if (result < 0) result = result + m;
+    // Use native modulo operator for cross-platform determinism
+    int result = x % m;
+    if (result < 0) result += m;
     return result;
 }
 
@@ -196,9 +208,10 @@ int ihash(int x) {
 }
 
 int hashPosTime(vec2 pos, float time) {
-    int px = int(pos.x + 0.5);
-    int py = int(pos.y + 0.5);
-    int t = int(time);
+    // Use floor() explicitly for cross-platform determinism
+    int px = int(floor(pos.x + 0.5));
+    int py = int(floor(pos.y + 0.5));
+    int t = int(floor(time));
     
     px = safeMod(px, 1009);
     py = safeMod(py, 1013);
@@ -214,7 +227,9 @@ float hash(vec2 p, float time) {
 }
 
 void main() {
-    vec2 pos = v_uv * 512.0;
+    // Match JS position calculation: Math.floor((px / textureSize) * 512)
+    vec2 pixelCoord = floor(gl_FragCoord.xy);
+    vec2 pos = floor(pixelCoord / u_textureSize * 512.0);
     
     float hashResult = hash(pos, u_time);
     
@@ -247,8 +262,9 @@ async function runHashShader(fragSource, uniforms, size = 16) {
     fb.bind();
     shader.use();
     
-    // Set uniforms
-    for (const [name, value] of Object.entries(uniforms)) {
+    // Set uniforms (including texture size for position calculations)
+    const allUniforms = { ...uniforms, u_textureSize: size };
+    for (const [name, value] of Object.entries(allUniforms)) {
         shader.setFloat(name, value);
     }
     
