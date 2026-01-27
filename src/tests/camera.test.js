@@ -71,6 +71,36 @@ export async function runCameraTests() {
         assertApprox(camera.zoom, 3.0, 0.01, 'Zoom should decrease by factor');
     });
     
+    await runTest('zoomIn increases zoom by zoomSpeed factor', async () => {
+        const camera = new Camera({
+            gridSize: 512,
+            defaultZoom: 2.0,
+            minZoom: 1.5,
+            maxZoom: 8.0,
+            zoomSpeed: 0.1
+        });
+        
+        camera.setZoom(2.0);
+        camera.zoomIn();
+        // zoomIn multiplies by (1 + zoomSpeed) = 1.1
+        assertApprox(camera.zoom, 2.2, 0.01, 'Zoom should increase by zoomSpeed factor');
+    });
+    
+    await runTest('zoomOut decreases zoom by zoomSpeed factor', async () => {
+        const camera = new Camera({
+            gridSize: 512,
+            defaultZoom: 2.0,
+            minZoom: 1.5,
+            maxZoom: 8.0,
+            zoomSpeed: 0.1
+        });
+        
+        camera.setZoom(2.0);
+        camera.zoomOut();
+        // zoomOut multiplies by (1 - zoomSpeed) = 0.9
+        assertApprox(camera.zoom, 1.8, 0.01, 'Zoom should decrease by zoomSpeed factor');
+    });
+    
     logSection('Camera - Panning');
     
     await runTest('startPan initializes panning state', async () => {
@@ -96,6 +126,45 @@ export async function runCameraTests() {
         camera.startPan(100, 200);
         camera.endPan();
         assert(camera.isPanning === false, 'Should not be panning after endPan');
+    });
+    
+    await runTest('updatePan moves camera based on mouse drag', async () => {
+        const camera = new Camera({
+            gridSize: 512,
+            defaultZoom: 2.0,
+            minZoom: 1.0,
+            maxZoom: 8.0
+        });
+        
+        // Mock canvas
+        const mockCanvas = {
+            getBoundingClientRect: () => ({
+                left: 0,
+                top: 0,
+                width: 512,
+                height: 512
+            })
+        };
+        camera.setCanvas(mockCanvas);
+        
+        // Set initial position and zoom
+        camera.x = 256;
+        camera.y = 256;
+        camera.setZoom(2.0); // Visible size = 256
+        
+        const startX = camera.x;
+        const startY = camera.y;
+        
+        // Start pan at screen center
+        camera.startPan(256, 256);
+        
+        // Drag 128 pixels to the right (half the screen)
+        // With visible size 256, this is 128/512 * 256 = 64 grid units
+        camera.updatePan(384, 256);
+        
+        // Camera should have moved left (opposite of drag direction)
+        assert(camera.x < startX, `Camera x should decrease when dragging right, got ${camera.x}`);
+        assert(camera.y === startY, `Camera y should not change for horizontal drag, got ${camera.y}`);
     });
     
     logSection('Camera - Visible Size');

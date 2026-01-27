@@ -30,7 +30,7 @@ const skipGPU = shouldSkipGPU();
 // GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) = 84
 // Refactored module tests: gameutils(20) + camera(10) + gridactions(15) + mapgenerator(12) = 57
 const gpuTestCount = 84;
-const unitTestCount = 57;
+const unitTestCount = 64;  // GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
 // Initialize GPU (needed even for some unit tests that mock canvas)
