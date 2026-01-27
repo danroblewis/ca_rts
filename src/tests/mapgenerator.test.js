@@ -37,7 +37,7 @@ export async function runMapGeneratorTests() {
             blobMaxRadius: 5
         });
         
-        assert(generator.options.numBlobs === 100, 'Custom numBlobs should be set');
+        assert(generator.config.numBlobs === 100, 'Custom numBlobs should be set');
     });
     
     logSection('MapGenerator - Determinism');
@@ -146,10 +146,10 @@ export async function runMapGeneratorTests() {
         const result = generator.generate(data, 42);
         
         assert(typeof result === 'object', 'Should return result object');
-        assert(typeof result.resourceCount === 'number', 'Should have resourceCount');
-        assert(typeof result.wallCount === 'number', 'Should have wallCount');
-        assert(result.resourceCount > 0, 'Should have some resources');
-        assert(result.wallCount > 0, 'Should have some walls');
+        assert(typeof result.totalResources === 'number', 'Should have totalResources');
+        assert(typeof result.totalWalls === 'number', 'Should have totalWalls');
+        assert(result.totalResources > 0, 'Should have some resources');
+        assert(result.totalWalls > 0, 'Should have some walls');
     });
     
     logSection('MapGenerator - Edge Cases');

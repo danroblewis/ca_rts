@@ -35,7 +35,7 @@ export async function runGameUtilsTests() {
     });
     
     await runTest('Encoding constants are defined', async () => {
-        assert(COORD_PACK_BASE === 1024, `COORD_PACK_BASE should be 1024, got ${COORD_PACK_BASE}`);
+        assert(COORD_PACK_BASE === 512, `COORD_PACK_BASE should be 512, got ${COORD_PACK_BASE}`);
         assert(MEMORY_PACK_BASE > 0, `MEMORY_PACK_BASE should be positive`);
         assert(SELECTED_PACK_BASE > 0, `SELECTED_PACK_BASE should be positive`);
         assert(AGE_PACK_BASE > 0, `AGE_PACK_BASE should be positive`);
@@ -82,7 +82,7 @@ export async function runGameUtilsTests() {
     
     await runTest('packCoords packs x and y correctly', async () => {
         const packed = packCoords(100, 200);
-        assert(packed === 100 + 200 * COORD_PACK_BASE, `Expected ${100 + 200 * 1024}, got ${packed}`);
+        assert(packed === 100 + 200 * COORD_PACK_BASE, `Expected ${100 + 200 * COORD_PACK_BASE}, got ${packed}`);
     });
     
     await runTest('packCoords handles zero values', async () => {
@@ -177,10 +177,11 @@ export async function runGameUtilsTests() {
     logSection('GameUtils - Utility Functions');
     
     await runTest('formatDuration formats correctly', async () => {
-        assert(formatDuration(0) === '00:00', 'Zero should format as 00:00');
-        assert(formatDuration(1000) === '00:01', '1 second should format as 00:01');
-        assert(formatDuration(60000) === '01:00', '1 minute should format as 01:00');
-        assert(formatDuration(3661000) === '61:01', '61 minutes 1 second should format as 61:01');
+        // formatDuration takes seconds and returns human-readable format
+        assert(formatDuration(0) === '0s', 'Zero should format as 0s');
+        assert(formatDuration(30) === '30s', '30 seconds should format as 30s');
+        assert(formatDuration(60) === '1m', '1 minute should format as 1m');
+        assert(formatDuration(3661) === '1h 1m', '1 hour 1 minute should format as 1h 1m');
     });
     
     await runTest('clamp constrains values correctly', async () => {

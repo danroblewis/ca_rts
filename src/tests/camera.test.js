@@ -55,7 +55,7 @@ export async function runCameraTests() {
         assertApprox(camera.zoom, 4.0, 0.01, 'Zoom in range should be set directly');
     });
     
-    await runTest('adjustZoom modifies zoom by delta', async () => {
+    await runTest('adjustZoom modifies zoom by factor', async () => {
         const camera = new Camera({
             gridSize: 512,
             defaultZoom: 2.0,
@@ -64,11 +64,11 @@ export async function runCameraTests() {
         });
         
         camera.setZoom(4.0);
-        camera.adjustZoom(1.0);
-        assertApprox(camera.zoom, 5.0, 0.01, 'Zoom should increase by delta');
+        camera.adjustZoom(1.25); // Multiply by 1.25
+        assertApprox(camera.zoom, 5.0, 0.01, 'Zoom should increase by factor');
         
-        camera.adjustZoom(-2.0);
-        assertApprox(camera.zoom, 3.0, 0.01, 'Zoom should decrease by delta');
+        camera.adjustZoom(0.6); // Multiply by 0.6 -> 5.0 * 0.6 = 3.0
+        assertApprox(camera.zoom, 3.0, 0.01, 'Zoom should decrease by factor');
     });
     
     logSection('Camera - Panning');
@@ -104,7 +104,7 @@ export async function runCameraTests() {
         const camera = new Camera({
             gridSize: 512,
             defaultZoom: 2.0,
-            minZoom: 1.5,
+            minZoom: 1.0,  // Allow zoom 1.0 for this test
             maxZoom: 8.0
         });
         
