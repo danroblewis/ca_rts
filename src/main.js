@@ -31,6 +31,8 @@ import { GameUI } from './ui/GameUI.js';
 import { ActionApplier } from './game/ActionApplier.js';
 import { RollbackManager } from './game/RollbackManager.js';
 import { SettingsUI } from './ui/SettingsUI.js';
+import { WinConditionManager } from './game/WinConditionManager.js';
+import { NetworkIndicator } from './ui/NetworkIndicator.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -407,9 +409,8 @@ const playerTotalFactoriesPlaced = {
     [PLAYER_2]: 0
 };
 
-// Game over state
-let gameOver = false;
-let winner = null;
+// Win condition manager (initialized later with callbacks that need networkSync)
+let winConditionManager = null;
 
 // ============================================================================
 // Input Handler Callbacks - Game logic for input actions
@@ -906,63 +907,23 @@ networkSync.onStateReceived = (syncData) => {
     console.log(`[Multiplayer] State applied. Action: ${action?.type || 'unknown'}`);
 };
 
-// Network indicator UI
+// Network indicator UI (using NetworkIndicator module)
+const networkIndicator = new NetworkIndicator({
+    onClick: () => toggleMultiplayer(),
+    disabled: isOnGitHub
+});
+
+// Helper to update network indicator and handle speed toggle visibility
 function updateNetworkIndicator() {
-    // Don't show network indicator on GitHub Pages
-    if (isOnGitHub) return;
-    
-    let indicator = document.getElementById('network-indicator');
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'network-indicator';
-        indicator.style.cssText = `
-            position: fixed;
-            top: 38px;
-            left: 8px;
-            z-index: 200;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-family: 'SF Mono', monospace;
-            font-size: 10px;
-            backdrop-filter: blur(8px);
-            cursor: pointer;
-        `;
-        indicator.onclick = toggleMultiplayer;
-        document.body.appendChild(indicator);
-    }
-    
-    if (isMultiplayer) {
-        // Show player connection status
-        const p1Connected = connectedPlayers.has(1);
-        const p2Connected = connectedPlayers.has(2);
-        const p1Status = p1Connected ? '🟣' : '⚫';
-        const p2Status = p2Connected ? '🟢' : '⚫';
-        
-        if (isSpectator) {
-            indicator.innerHTML = `👁 Spectating <span style="opacity: ${p1Connected ? 1 : 0.4}">${p1Status}</span> <span style="opacity: ${p2Connected ? 1 : 0.4}">${p2Status}</span>`;
-            indicator.style.background = 'rgba(60, 60, 80, 0.9)';
-        } else {
-            indicator.innerHTML = `<span style="opacity: ${p1Connected ? 1 : 0.4}">${p1Status} P1</span> <span style="opacity: ${p2Connected ? 1 : 0.4}">${p2Status} P2</span>`;
-            indicator.style.background = 'rgba(40, 40, 40, 0.9)';
-        }
-        indicator.style.color = 'white';
-        indicator.style.border = '1px solid rgba(100, 100, 100, 0.8)';
-    } else {
-        indicator.textContent = '⚪ Click to Connect';
-        indicator.style.background = 'rgba(80, 80, 80, 0.8)';
-        indicator.style.color = 'white';
-        indicator.style.border = '2px solid rgba(120, 120, 120, 0.8)';
-    }
+    networkIndicator.update(isMultiplayer, isSpectator, connectedPlayers);
     
     // Hide Super Speed toggle when in multiplayer (speed must be synced) - but allow on localhost
     const speedToggleContainer = document.getElementById('speed-toggle-container');
     if (speedToggleContainer) {
-        // On localhost, always show the toggle (user can choose speed)
-        // On non-localhost, hide if in multiplayer or if not on localhost at all
         const shouldHide = isMultiplayer && !isOnLocalhost;
         speedToggleContainer.style.display = shouldHide ? 'none' : 'flex';
         
-        // Also force sync mode when in multiplayer
+        // Force sync mode when in multiplayer
         if (isMultiplayer && !SYNC_SIM_WITH_RENDER) {
             SYNC_SIM_WITH_RENDER = true;
             const toggle = document.getElementById('speed-toggle');
@@ -1325,56 +1286,37 @@ function fastSimulationLoop() {
 }
 
 // ============================================================================
-// Win/Lose Condition Check
+// Win/Lose Condition Manager
 // ============================================================================
 
-// Scan the grid to count actual factories per player (delegates to GridActions)
-function countFactoriesOnMap() {
-    const data = grid.download();
-    return gridActions.countFactories(data);
-}
+// Initialize WinConditionManager with callbacks
+winConditionManager = new WinConditionManager({
+    countFactories: () => {
+        const data = grid.download();
+        return gridActions.countFactories(data);
+    },
+    getPlayerTotalFactoriesPlaced: () => playerTotalFactoriesPlaced,
+    onFactoryCountsUpdated: (counts) => {
+        playerFactoryCounts[PLAYER_1] = counts[PLAYER_1];
+        playerFactoryCounts[PLAYER_2] = counts[PLAYER_2];
+        updatePlayerIndicator();
+    },
+    onGameOver: (winner) => {
+        gameUI.showGameOver(winner, isMultiplayer, isSpectator, () => {
+            if (isMultiplayer && !isSpectator) {
+                networkSync.requestRestart();
+            } else {
+                const url = new URL(window.location);
+                url.searchParams.set('seed', Math.floor(Math.random() * 999999));
+                window.location.href = url.toString();
+            }
+        });
+    },
+    checkInterval: 5000
+});
 
-// Check for win/lose condition
-function checkWinCondition() {
-    if (gameOver) return;
-    
-    // Count actual factories on map
-    const actualCounts = countFactoriesOnMap();
-    
-    // Update our tracked counts to match reality (GPU might have destroyed some)
-    playerFactoryCounts[PLAYER_1] = actualCounts[PLAYER_1];
-    playerFactoryCounts[PLAYER_2] = actualCounts[PLAYER_2];
-    updatePlayerIndicator();
-    
-    // Check lose condition: placed at least one base AND now have none left
-    // (Must have placed at least one base to lose - can't lose before placing anything)
-    for (const player of [PLAYER_1, PLAYER_2]) {
-        if (playerTotalFactoriesPlaced[player] >= 1 && actualCounts[player] === 0) {
-            // This player loses - all their bases were destroyed
-            gameOver = true;
-            winner = player === PLAYER_1 ? PLAYER_2 : PLAYER_1;
-            console.log(`Player ${player} lost - all bases destroyed!`);
-            showGameOver();
-            return;
-        }
-    }
-}
-
-// Display game over screen (using GameUI module)
-function showGameOver() {
-    gameUI.showGameOver(winner, isMultiplayer, isSpectator, () => {
-        if (isMultiplayer && !isSpectator) {
-            networkSync.requestRestart();
-        } else {
-            const url = new URL(window.location);
-            url.searchParams.set('seed', Math.floor(Math.random() * 999999));
-            window.location.href = url.toString();
-        }
-    });
-}
-
-// Check win condition every 5 seconds
-setInterval(checkWinCondition, 5000);
+// Start win condition checking
+winConditionManager.start();
 
 // ============================================================================
 // Render Loop (also runs synced simulation if enabled)
