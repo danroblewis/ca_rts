@@ -10,6 +10,21 @@ import { CheckpointBuffer } from './gpu/CheckpointBuffer.js';
 import { ActionQueue } from './network/ActionQueue.js';
 import { Logger } from './utils/Logger.js';
 
+// Import refactored modules
+import {
+    CELL_EMPTY, CELL_RESOURCE, CELL_MINING_UNIT, CELL_MINING_FACTORY,
+    CELL_WALL, CELL_MINING_UNIT_P2, CELL_DEMOLISH, CELL_MINING_FACTORY_P2,
+    PLAYER_1, PLAYER_2,
+    COORD_PACK_BASE, MEMORY_PACK_BASE, SELECTED_PACK_BASE, AGE_PACK_BASE, COMMAND_FRESHNESS,
+    createSeededRandom, packCoords, unpackCoords,
+    getUnitSelectedFromG, setUnitSelectionInG,
+    getGridIndex, isInBounds, getUnitTypeForPlayer, getFactoryTypeForPlayer,
+    formatDuration, clamp, distance
+} from './utils/GameUtils.js';
+
+import { initGameState, getGameState } from './game/GameState.js';
+import { initCamera, getCamera } from './game/Camera.js';
+
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
 // ============================================================================
@@ -58,41 +73,21 @@ const PAN_SPEED = 1.0;                // Pan speed multiplier
 const FIRST_FACTORY_RESOURCES = 50;   // Resources given to first factory only
 const DELETE_RADIUS = 5;              // Radius in grid cells for delete operation
 
-// ============================================================================
-// Cell type constants (must match GLSL)
-const CELL_EMPTY = 0;
-const CELL_RESOURCE = 1;
-const CELL_MINING_UNIT = 2;       // Player 1 unit
-const CELL_MINING_FACTORY = 3;   // Player 1 factory (built or unbuilt)
-const CELL_WALL = 4;
-const CELL_MINING_UNIT_P2 = 5;   // Player 2 unit
-const CELL_DEMOLISH = 6;
-const CELL_MINING_FACTORY_P2 = 7; // Player 2 factory (built or unbuilt)
-
-// Player constants
-const PLAYER_1 = 1;
-const PLAYER_2 = 2;
+// Cell type and player constants are now imported from GameUtils.js
 
 // Current player (for multiplayer - default to player 1)
+// TODO: Migrate to GameState
 let currentPlayer = PLAYER_1;
 
 // Spectator mode flag (set later when URL is parsed)
+// TODO: Migrate to GameState
 let isSpectator = false;
 
 // ============================================================================
 // Seeded PRNG for Deterministic Map Generation
 // ============================================================================
 
-// Simple mulberry32 PRNG - deterministic given the same seed
-function mulberry32(seed) {
-    return function() {
-        seed |= 0;
-        seed = seed + 0x6D2B79F5 | 0;
-        let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-        return ((t ^ t >>> 14) >>> 0) / 4294967296;
-    };
-}
+// createSeededRandom is now imported from GameUtils.js
 
 // Map seed - can be shared between players for deterministic map generation
 let mapSeed = DEFAULT_MAP_SEED;
@@ -108,7 +103,7 @@ if (seedParam) {
 }
 
 // Create seeded random function
-let seededRandom = mulberry32(mapSeed);
+let seededRandom = createSeededRandom(mapSeed);
 
 console.log(`Map seed: ${mapSeed}`);
 
@@ -365,33 +360,11 @@ updateAudioButton();
 
 const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 
-// Encoding constants (must match GLSL)
-const COORD_PACK_BASE = 512.0;
-const MEMORY_PACK_BASE = 262144.0;
-const SELECTED_PACK_BASE = 32.0;  // Selection bit at position 5 in G channel
-const AGE_PACK_BASE = 64.0;       // Age starts at bit 6 (after selection bit)
-const COMMAND_FRESHNESS = 100.0;  // High freshness so command is prioritized
+// Encoding constants and helper functions are now imported from GameUtils.js
+// (COORD_PACK_BASE, MEMORY_PACK_BASE, SELECTED_PACK_BASE, AGE_PACK_BASE, COMMAND_FRESHNESS)
+// (getUnitSelectedFromG, setUnitSelectionInG, packCoords)
 
-// Helper to get selection bit from G channel
-function getUnitSelectedFromG(g) {
-    return Math.floor(g / SELECTED_PACK_BASE) % 2 >= 0.5;
-}
-
-// Helper to set selection bit in G channel
-function setUnitSelectionInG(g, selected) {
-    const holding = Math.floor(g) % 2;
-    const counter = Math.floor(g / 2) % 16;
-    const age = Math.floor(g / AGE_PACK_BASE);
-    return holding + counter * 2 + (selected ? SELECTED_PACK_BASE : 0) + age * AGE_PACK_BASE;
-}
-
-// Helper to pack coordinates (must match GLSL)
-function packCoords(x, y) {
-    if (x < 0 || y < 0) return -1;
-    return Math.floor(x) + Math.floor(y) * COORD_PACK_BASE;
-}
-
-// Helper to set a cell
+// Helper to set a cell (uses the global `data` array)
 function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
     const idx = (y * GRID_SIZE + x) * 4;
     data[idx + 0] = type;
@@ -530,7 +503,7 @@ function isEmpty(x, y) {
 function generateMap(seed) {
     console.log(`Generating map with seed: ${seed}`);
     mapSeed = seed;
-    seededRandom = mulberry32(seed);
+    seededRandom = createSeededRandom(seed);
 
 // Fill with empty
 data.fill(0);
@@ -1831,12 +1804,7 @@ function updateNetworkIndicator() {
     }
 }
 
-// Format seconds to human-readable duration
-function formatDuration(seconds) {
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-}
+// formatDuration is now imported from GameUtils.js
 
 // Create matchmaking dialog
 async function showMatchmakingDialog() {
