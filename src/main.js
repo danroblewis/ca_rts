@@ -1426,6 +1426,10 @@ let waitingForSync = false;  // In multiplayer, wait for state sync before runni
 let waitingForSyncStartTime = 0;  // When we started waiting
 const SYNC_WAIT_TIMEOUT = 3000;  // Give up waiting after 3 seconds
 
+// Periodic full state sync to keep clients aligned
+const FULL_SYNC_INTERVAL = 5000;  // Send full state every 5 seconds
+let lastFullSyncTime = 0;
+
 // Track connected players in multiplayer
 const connectedPlayers = new Set();
 
@@ -1623,7 +1627,8 @@ networkSync.onPlayerLeft = (playerId) => {
 networkSync.onStateReceived = (syncData) => {
     // Received state from another player - apply it
     const receiveTime = performance.now();
-    console.log(`[Multiplayer] Applying FULL state from Player ${syncData.playerId} at tick ${syncData.simTime}, our current tick: ${simTime}`);
+    const isPeriodicSync = syncData.action && syncData.action.type === 'periodic_sync';
+    console.log(`[Multiplayer] Applying ${isPeriodicSync ? 'periodic' : 'full'} state from Player ${syncData.playerId} at tick ${syncData.simTime}, our current tick: ${simTime}`);
     
     // Clear waiting state - we now have valid state to work with
     if (waitingForSync) {
@@ -1637,33 +1642,41 @@ networkSync.onStateReceived = (syncData) => {
     const uploadEnd = performance.now();
     console.log(`[Multiplayer] grid.upload() took ${(uploadEnd - uploadStart).toFixed(2)} ms`);
     
-    // Sync simulation time - this is CRITICAL for rollback netcode!
+    // For periodic syncs: DON'T change simTime - just apply grid state
+    // This prevents "jumping" back and forth. The tick sync mechanism handles timing.
+    // For initial/player syncs: DO sync the time since we're starting fresh
     const oldSimTime = simTime;
-    simTime = syncData.simTime;
-    console.log(`[Multiplayer] simTime synced from ${oldSimTime} to ${simTime}`);
-    
-    // Clear rollback netcode state - old checkpoints and actions are invalid
-    // since we just received a new authoritative state
-    if (checkpointBuffer) {
-        checkpointBuffer.clear();
-        console.log(`[Multiplayer] Cleared checkpoint buffer`);
-    }
-    if (actionQueue) {
-        actionQueue.clear();
-        console.log(`[Multiplayer] Cleared action queue`);
+    if (!isPeriodicSync) {
+        simTime = syncData.simTime;
+        console.log(`[Multiplayer] simTime synced from ${oldSimTime} to ${simTime}`);
+    } else {
+        console.log(`[Multiplayer] Periodic sync - keeping local simTime ${simTime} (received tick ${syncData.simTime})`);
     }
     
-    // Save a checkpoint at this new state immediately
-    if (checkpointBuffer && grid) {
-        const checkpointData = grid.download();
-        checkpointBuffer.saveCheckpoint(simTime, checkpointData);
-        console.log(`[Multiplayer] Saved initial checkpoint at tick ${simTime}`);
+    // For initial syncs: clear rollback state since we're starting fresh
+    // For periodic syncs: keep rollback state so we can still handle actions
+    if (!isPeriodicSync) {
+        if (checkpointBuffer) {
+            checkpointBuffer.clear();
+            console.log(`[Multiplayer] Cleared checkpoint buffer`);
+        }
+        if (actionQueue) {
+            actionQueue.clear();
+            console.log(`[Multiplayer] Cleared action queue`);
+        }
+        
+        // Save a checkpoint at this new state immediately
+        if (checkpointBuffer && grid) {
+            const checkpointData = grid.download();
+            checkpointBuffer.saveCheckpoint(simTime, checkpointData);
+            console.log(`[Multiplayer] Saved initial checkpoint at tick ${simTime}`);
+        }
     }
     
     // Update factory counts based on action
     const action = syncData.action;
     if (action) {
-        if (action.type === 'player_sync') {
+        if (action.type === 'player_sync' || action.type === 'periodic_sync') {
             // Full state sync from host - replace our factory counts entirely
             if (action.factoryCounts) {
                 playerFactoryCounts[PLAYER_1] = action.factoryCounts[PLAYER_1] || 0;
@@ -1676,7 +1689,8 @@ networkSync.onStateReceived = (syncData) => {
             if (action.factoriesPlaced !== undefined) {
                 factoriesPlaced = action.factoriesPlaced;
             }
-            console.log(`[Multiplayer] Full state sync received at tick ${simTime}. Factories: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
+            const syncType = action.type === 'periodic_sync' ? 'Periodic' : 'Full';
+            console.log(`[Multiplayer] ${syncType} state sync received at tick ${simTime}. Factories: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
             updatePlayerIndicator();
         } else if (action.type === 'place_factory' && action.player) {
             playerFactoryCounts[action.player]++;
@@ -2589,6 +2603,19 @@ function logStats() {
             lastHeartbeatTime = now;
         }
         
+        // Periodic full state sync from host to keep all clients aligned
+        // This compensates for any remaining determinism issues
+        if (networkSync.playerId === 1 && now - lastFullSyncTime >= FULL_SYNC_INTERVAL) {
+            const gridData = grid.download();
+            networkSync.syncState(gridData, {
+                type: 'periodic_sync',
+                factoryCounts: { ...playerFactoryCounts },
+                totalPlaced: { ...playerTotalFactoriesPlaced },
+                factoriesPlaced: factoriesPlaced
+            }, simTime);
+            lastFullSyncTime = now;
+            console.log(`[Periodic Sync] Sent full state at tick ${Math.floor(simTime)}`);
+        }
     }
 }
 
