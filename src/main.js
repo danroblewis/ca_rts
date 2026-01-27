@@ -137,6 +137,17 @@ const canvas = document.getElementById('canvas');
 const gpu = GPU.init(canvas);
 const gl = gpu.gl;
 
+// Initialize Camera (from refactored module)
+const camera = initCamera({
+    gridSize: GRID_SIZE,
+    defaultZoom: DEFAULT_ZOOM,
+    minZoom: MIN_ZOOM,
+    maxZoom: MAX_ZOOM,
+    zoomSpeed: ZOOM_SPEED,
+    panSpeed: PAN_SPEED
+});
+camera.setCanvas(canvas);
+
 function resize() {
     const dpr = window.devicePixelRatio || 1;
     // Use the minimum of width/height to keep canvas square
@@ -637,68 +648,14 @@ let mouseY = 0;
 let shiftHeld = false;
 // Cursor overlay is now rendered in shader (see u_shiftHeld, u_deleteRadius, u_mousePos)
 
-// Camera state for pan and zoom
-let cameraX = GRID_SIZE / 2;  // Camera center X (in grid units)
-let cameraY = GRID_SIZE / 2;  // Camera center Y (in grid units)
-let cameraZoom = DEFAULT_ZOOM;  // Current zoom level
-let isPanning = false;
-let panStartX = 0;
-let panStartY = 0;
-let panStartCameraX = 0;
-let panStartCameraY = 0;
-
-// Get visible grid size based on zoom
-function getVisibleGridSize() {
-    return GRID_SIZE / cameraZoom;
-}
-
-// Clamp camera to keep view within map bounds
-function clampCamera() {
-    const halfVisible = getVisibleGridSize() / 2;
-    cameraX = Math.max(halfVisible, Math.min(GRID_SIZE - halfVisible, cameraX));
-    cameraY = Math.max(halfVisible, Math.min(GRID_SIZE - halfVisible, cameraY));
-}
-
-// Convert screen coords to grid coords (accounting for camera)
-function screenToGrid(screenX, screenY) {
-    const rect = canvas.getBoundingClientRect();
-    // Normalized screen position (0-1)
-    const normalizedX = (screenX - rect.left) / rect.width;
-    const normalizedY = (screenY - rect.top) / rect.height;
-    
-    // Convert to centered coordinates (-0.5 to 0.5)
-    const centeredX = normalizedX - 0.5;
-    const centeredY = -(normalizedY - 0.5);  // Y is inverted
-    
-    // Apply camera transform: centered coords * visible size + camera center
-    const visibleSize = getVisibleGridSize();
-    const gridX = Math.floor(cameraX + centeredX * visibleSize);
-    const gridY = Math.floor(cameraY + centeredY * visibleSize);
-    
-    return {
-        x: Math.max(0, Math.min(GRID_SIZE - 1, gridX)),
-        y: Math.max(0, Math.min(GRID_SIZE - 1, gridY))
-    };
-}
-
-// Inverse of screenToGrid - convert grid coords to screen coords
-function gridToScreen(gridX, gridY) {
-    const rect = canvas.getBoundingClientRect();
-    const visibleSize = getVisibleGridSize();
-    
-    // Convert grid to centered coords relative to camera
-    const centeredX = (gridX - cameraX) / visibleSize;
-    const centeredY = (gridY - cameraY) / visibleSize;
-    
-    // Convert to normalized screen position
-    const normalizedX = centeredX + 0.5;
-    const normalizedY = 0.5 - centeredY;  // Y is inverted
-    
-    return {
-        x: rect.left + normalizedX * rect.width,
-        y: rect.top + normalizedY * rect.height
-    };
-}
+// Camera state now managed by Camera class (initialized above)
+// Legacy accessors for compatibility during refactor:
+function getCameraX() { return camera.x; }
+function getCameraY() { return camera.y; }
+function getCameraZoom() { return camera.zoom; }
+function getVisibleGridSize() { return camera.getVisibleGridSize(); }
+function screenToGrid(screenX, screenY) { return camera.screenToGrid(screenX, screenY); }
+function gridToScreen(gridX, gridY) { return camera.gridToScreen(gridX, gridY); }
 
 // updateCursorOverlay removed - cursor overlay is now rendered in shader
 
@@ -765,15 +722,8 @@ canvas.addEventListener('mousemove', (event) => {
     mouseY = event.clientY;
     
     // Handle panning with middle mouse button
-    if (isPanning) {
-        const rect = canvas.getBoundingClientRect();
-        const dx = (event.clientX - panStartX) / rect.width;
-        const dy = (event.clientY - panStartY) / rect.height;
-        const visibleSize = getVisibleGridSize();
-        
-        cameraX = panStartCameraX - dx * visibleSize * PAN_SPEED;
-        cameraY = panStartCameraY + dy * visibleSize * PAN_SPEED;  // Y is inverted
-        clampCamera();
+    if (camera.isPanning) {
+        camera.updatePan(event.clientX, event.clientY);
     }
     // All cursor UI is rendered in shader (selection box, command indicator, delete overlay)
 });
@@ -794,18 +744,18 @@ canvas.addEventListener('wheel', (event) => {
             // Zoom mode
             const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
             const zoomDelta = -event.deltaY * ZOOM_SPEED * 0.01;
-            cameraZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
+            camera.setZoom(camera.zoom * (1 + zoomDelta));
             const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
-            cameraX += mouseGridBefore.x - mouseGridAfter.x;
-            cameraY += mouseGridBefore.y - mouseGridAfter.y;
-            clampCamera();
+            camera.x += mouseGridBefore.x - mouseGridAfter.x;
+            camera.y += mouseGridBefore.y - mouseGridAfter.y;
+            camera.clamp();
         } else {
             // Pan mode (default on macOS)
             const visibleSize = getVisibleGridSize();
             const panScale = visibleSize / 500;
-            cameraX += event.deltaX * panScale;
-            cameraY -= event.deltaY * panScale;
-            clampCamera();
+            camera.x += event.deltaX * panScale;
+            camera.y -= event.deltaY * panScale;
+            camera.clamp();
         }
     } else {
         // Windows/Linux: Scroll = zoom, scroll with significant horizontal = pan
@@ -815,9 +765,9 @@ canvas.addEventListener('wheel', (event) => {
             // Pan mode (detected trackpad-like behavior)
             const visibleSize = getVisibleGridSize();
             const panScale = visibleSize / 500;
-            cameraX += event.deltaX * panScale;
-            cameraY -= event.deltaY * panScale;
-            clampCamera();
+            camera.x += event.deltaX * panScale;
+            camera.y -= event.deltaY * panScale;
+            camera.clamp();
         } else {
             // Zoom mode (default on non-Mac)
             const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
@@ -825,11 +775,11 @@ canvas.addEventListener('wheel', (event) => {
             if (event.deltaMode === 1) zoomAmount *= 16;
             if (event.deltaMode === 2) zoomAmount *= 100;
             const zoomDelta = -zoomAmount * ZOOM_SPEED * 0.01;
-            cameraZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, cameraZoom * (1 + zoomDelta)));
+            camera.setZoom(camera.zoom * (1 + zoomDelta));
             const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
-            cameraX += mouseGridBefore.x - mouseGridAfter.x;
-            cameraY += mouseGridBefore.y - mouseGridAfter.y;
-            clampCamera();
+            camera.x += mouseGridBefore.x - mouseGridAfter.x;
+            camera.y += mouseGridBefore.y - mouseGridAfter.y;
+            camera.clamp();
         }
     }
 });
@@ -864,11 +814,7 @@ canvas.addEventListener('mousedown', (event) => {
     // Middle mouse button - start panning
     if (event.button === 1) {
         event.preventDefault();
-        isPanning = true;
-        panStartX = event.clientX;
-        panStartY = event.clientY;
-        panStartCameraX = cameraX;
-        panStartCameraY = cameraY;
+        camera.startPan(event.clientX, event.clientY);
         canvas.style.cursor = 'grabbing';
         return;
     }
@@ -938,8 +884,8 @@ canvas.addEventListener('mousedown', (event) => {
 // Mouse up - finalize selection or stop panning
 canvas.addEventListener('mouseup', (event) => {
     // Stop panning on middle mouse release
-    if (event.button === 1 && isPanning) {
-        isPanning = false;
+    if (event.button === 1 && camera.isPanning) {
+        camera.endPan();
         canvas.style.cursor = 'default';
         return;
     }
@@ -2861,8 +2807,8 @@ function renderLoop() {
     renderShader.setFloat('u_temporalBlend', TEMPORAL_BLEND);  // Temporal blend strength
     
     // Camera uniforms for pan and zoom
-    renderShader.setVec2('u_cameraPos', cameraX, cameraY);
-    renderShader.setFloat('u_cameraZoom', cameraZoom);
+    renderShader.setVec2('u_cameraPos', camera.x, camera.y);
+    renderShader.setFloat('u_cameraZoom', camera.zoom);
     
     // Performance mode uniforms
     renderShader.setFloat('u_showMinimap', showMinimap ? 1.0 : 0.0);
