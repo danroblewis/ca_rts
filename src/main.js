@@ -27,6 +27,7 @@ import { initCamera, getCamera } from './game/Camera.js';
 import { MatchmakingDialog } from './ui/MatchmakingDialog.js';
 import { MapGenerator } from './game/MapGenerator.js';
 import { GridActions } from './game/GridActions.js';
+import { InputHandler } from './input/InputHandler.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -376,14 +377,43 @@ const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
 // (COORD_PACK_BASE, MEMORY_PACK_BASE, SELECTED_PACK_BASE, AGE_PACK_BASE, COMMAND_FRESHNESS)
 // (getUnitSelectedFromG, setUnitSelectionInG, packCoords)
 
-// Helper to set a cell (uses the global `data` array)
-function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
-    const idx = (y * GRID_SIZE + x) * 4;
-    data[idx + 0] = type;
-    data[idx + 1] = dataA;
-    data[idx + 2] = dataB;
-    data[idx + 3] = dataC;
-}
+// ============================================================================
+// InputHandler - Mouse and Keyboard Input (refactored module)
+// ============================================================================
+// InputHandler is initialized here but callbacks reference variables defined later.
+// This works because JavaScript closures capture variable references, not values.
+// The callbacks are only executed when events fire, after all variables are defined.
+
+// Forward declarations for InputHandler callbacks (actual implementations are below)
+let handlePlaceFactory, handleDemolish, handleUnitCommand, handleClearSelection;
+
+// Create InputHandler instance
+const inputHandler = new InputHandler({
+    canvas: canvas,
+    camera: camera,
+    gridSize: GRID_SIZE,
+    zoomSpeed: ZOOM_SPEED,
+    deleteRadius: DELETE_RADIUS,
+    
+    // Callbacks - these use forward references to functions defined later
+    onPlaceFactory: (x, y) => handlePlaceFactory?.(x, y),
+    onDemolish: (x, y) => handleDemolish?.(x, y),
+    onUnitCommand: (command) => handleUnitCommand?.(command),
+    onClearSelection: () => handleClearSelection?.(),
+    onUnitSelection: (region) => {
+        // Sync selection to network if multiplayer
+        if (isMultiplayer && networkSync?.isConnected) {
+            syncAction({ type: 'unit_selection', player: currentPlayer, region: region });
+        }
+    },
+    onInitAudio: () => {
+        if (!audioInitialized) initAudio();
+    },
+    isSpectator: () => isSpectator,
+    screenToGrid: (x, y) => camera.screenToGrid(x, y),
+    markUnitsInRegion: (region) => markUnitsInRegion(region),
+    clearAllSelections: () => clearAllSelections()
+});
 
 // ============================================================================
 // Selection Management - Works directly with grid data
@@ -477,512 +507,232 @@ const playerTotalFactoriesPlaced = {
 let gameOver = false;
 let winner = null;
 
-// Mouse and key state (used for shader-based UI rendering)
-let mouseX = 0;
-let mouseY = 0;
-let shiftHeld = false;
-// Cursor overlay is now rendered in shader (see u_shiftHeld, u_deleteRadius, u_mousePos)
+// ============================================================================
+// Input Handler Callbacks - Game logic for input actions
+// ============================================================================
+// These are called by InputHandler when user performs actions.
+// Input state (mouseX, mouseY, shiftHeld, isSelecting, etc.) is now managed by InputHandler.
 
-// Camera helper shortcuts (Camera class is initialized above)
+// Helper function for render loop to access input state
+function getVisibleGridSize() { return camera.getVisibleGridSize(); }
+
+// Helper to convert screen coords to grid coords (used by render loop for mouse position)
 function screenToGrid(screenX, screenY) { return camera.screenToGrid(screenX, screenY); }
-function gridToScreen(gridX, gridY) { return camera.gridToScreen(gridX, gridY); }
-
-// updateCursorOverlay removed - cursor overlay is now rendered in shader
 
 // ============================================================================
-// Unit Selection and Command System
+// Input Handler Callback Implementations
 // ============================================================================
+// These functions are called by InputHandler when user performs game actions.
+// All input event handling (mouse, keyboard, wheel) is now in InputHandler.
 
-let isSelecting = false;
-let selectionStart = null;
-let selectionEnd = null;
-let hasActiveSelection = false;
-let selectedRegion = null;  // {x1, y1, x2, y2} in grid coords
-let suppressNextClick = false;  // Suppress click after clearing selection via mousedown
-
-// Active command storage (for GPU)
-let activeCommand = null;  // {sourceX1, sourceY1, sourceX2, sourceY2, destX, destY, player}
-
-// Selection box and command indicator are now rendered in the shader
-// (see render_metaballs.frag.glsl u_isSelecting, u_hasActiveSelection, etc.)
-
-// Add command-ping animation (for showCommandPing)
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes command-ping {
-        0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-        100% { transform: translate(-50%, -50%) scale(3); opacity: 0; }
-    }
-`;
-document.head.appendChild(style);
-
-// Show command destination ping effect
-function showCommandPing(screenX, screenY) {
-    const ping = document.createElement('div');
-    ping.style.cssText = `
-        position: fixed;
-        left: ${screenX}px;
-        top: ${screenY}px;
-        width: 20px;
-        height: 20px;
-        border: 3px solid #ffcc00;
-        border-radius: 50%;
-        pointer-events: none;
-        z-index: 101;
-        animation: command-ping 0.5s ease-out forwards;
-    `;
-    document.body.appendChild(ping);
-    setTimeout(() => ping.remove(), 500);
-}
-
-function clearSelection() {
-    isSelecting = false;
-    hasActiveSelection = false;
-    selectedRegion = null;
-    selectionStart = null;
-    selectionEnd = null;
-    
-    // Clear selection bits in all units
-    clearAllSelections();
-}
-
-// Track mouse movement (and pan if middle button held)
-canvas.addEventListener('mousemove', (event) => {
-    mouseX = event.clientX;
-    mouseY = event.clientY;
-    
-    // Handle panning with middle mouse button
-    if (camera.isPanning) {
-        camera.updatePan(event.clientX, event.clientY);
-    }
-    // All cursor UI is rendered in shader (selection box, command indicator, delete overlay)
-});
-
-// Scroll handling: mouse wheel = zoom, trackpad two-finger = pan
-// Detect if we're on macOS (likely has trackpad)
-const isMacOS = navigator.platform.toUpperCase().indexOf('MAC') >= 0 || 
-                navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
-
-canvas.addEventListener('wheel', (event) => {
-    event.preventDefault();
-    
-    // On macOS: default to pan (trackpad behavior), Alt+scroll = zoom
-    // On other OS: default to zoom (mouse wheel behavior), scroll with horizontal = pan
-    if (isMacOS) {
-        // macOS: Alt/Option = zoom, otherwise pan
-        if (event.altKey) {
-            // Zoom mode
-            const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
-            const zoomDelta = -event.deltaY * ZOOM_SPEED * 0.01;
-            camera.setZoom(camera.zoom * (1 + zoomDelta));
-            const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
-            camera.x += mouseGridBefore.x - mouseGridAfter.x;
-            camera.y += mouseGridBefore.y - mouseGridAfter.y;
-            camera.clamp();
-        } else {
-            // Pan mode (default on macOS)
-            const visibleSize = getVisibleGridSize();
-            const panScale = visibleSize / 500;
-            camera.x += event.deltaX * panScale;
-            camera.y -= event.deltaY * panScale;
-            camera.clamp();
-        }
-    } else {
-        // Windows/Linux: Scroll = zoom, scroll with significant horizontal = pan
-        const hasHorizontal = Math.abs(event.deltaX) > 2;
-        
-        if (hasHorizontal) {
-            // Pan mode (detected trackpad-like behavior)
-            const visibleSize = getVisibleGridSize();
-            const panScale = visibleSize / 500;
-            camera.x += event.deltaX * panScale;
-            camera.y -= event.deltaY * panScale;
-            camera.clamp();
-        } else {
-            // Zoom mode (default on non-Mac)
-            const mouseGridBefore = screenToGrid(event.clientX, event.clientY);
-            let zoomAmount = event.deltaY;
-            if (event.deltaMode === 1) zoomAmount *= 16;
-            if (event.deltaMode === 2) zoomAmount *= 100;
-            const zoomDelta = -zoomAmount * ZOOM_SPEED * 0.01;
-            camera.setZoom(camera.zoom * (1 + zoomDelta));
-            const mouseGridAfter = screenToGrid(event.clientX, event.clientY);
-            camera.x += mouseGridBefore.x - mouseGridAfter.x;
-            camera.y += mouseGridBefore.y - mouseGridAfter.y;
-            camera.clamp();
-        }
-    }
-});
-
-// Track shift key
-window.addEventListener('keydown', (event) => {
-    if (event.key === 'Shift') {
-        shiftHeld = true;
-        // Delete overlay rendered in shader via u_shiftHeld
-    }
-    // Escape clears selection and syncs to other players
-    if (event.key === 'Escape') {
-        if (hasActiveSelection) {
-            // Sync selection clear to other players
-            if (isMultiplayer && networkSync.isConnected) {
-                syncAction({ type: 'clear_selection', player: currentPlayer });
-            }
-        }
-        clearSelection();
-    }
-});
-
-window.addEventListener('keyup', (event) => {
-    if (event.key === 'Shift') {
-        shiftHeld = false;
-        // Delete overlay rendered in shader via u_shiftHeld
-    }
-});
-
-// Mouse down - start selection, panning, or set command destination
-canvas.addEventListener('mousedown', (event) => {
-    // Middle mouse button - start panning
-    if (event.button === 1) {
-        event.preventDefault();
-        camera.startPan(event.clientX, event.clientY);
-        canvas.style.cursor = 'grabbing';
-        return;
-    }
-    
-    // Spectators cannot interact (but can still pan)
-    if (isSpectator) return;
-    
-    // Left click with active selection = clear selection (like pressing Escape)
-    if (event.button === 0 && hasActiveSelection && !shiftHeld) {
-        event.preventDefault();
-        // Sync selection clear to other players
-        if (isMultiplayer && networkSync.isConnected) {
-            syncAction({ type: 'clear_selection', player: currentPlayer });
-        }
-        clearSelection();
-        suppressNextClick = true;  // Don't let the subsequent click place a base
-        return;
-    }
-    
-    // Right click or ctrl+click with active selection = set command destination
-    if ((event.button === 2 || event.ctrlKey) && hasActiveSelection && selectedRegion && !shiftHeld) {
-        event.preventDefault();
-        const destPos = screenToGrid(event.clientX, event.clientY);
-        
-        // Create command for the selected units
-        activeCommand = {
-            sourceX1: selectedRegion.x1,
-            sourceY1: selectedRegion.y1,
-            sourceX2: selectedRegion.x2,
-            sourceY2: selectedRegion.y2,
-            destX: destPos.x,
-            destY: destPos.y,
-            player: currentPlayer
-        };
-        
-        console.log('[Command] Sending units from', selectedRegion, 'to', destPos);
-        
-        // Show visual feedback
-        showCommandPing(event.clientX, event.clientY);
-        
-        // Apply command to units in the grid
-        applyUnitCommand(activeCommand);
-        
-        // Sync command to other players - include unit positions for reliable sync
-        if (isMultiplayer && networkSync.isConnected) {
-            syncAction({ type: 'unit_command', ...activeCommand });
-        }
-        
-        // Don't clear selection - user can issue multiple commands to same units
-        // Selection is only cleared when user presses Escape or left-click
-        return;
-    }
-    
-    // Right click or ctrl+click without selection - start new selection
-    if ((event.button === 2 || event.ctrlKey) && !hasActiveSelection) {
-        event.preventDefault();
-        
-        // Start new selection
-        isSelecting = true;
-        selectionStart = { x: event.clientX, y: event.clientY };
-        selectionEnd = null;
-        hasActiveSelection = false;
-        selectedRegion = null;
-    }
-});
-
-// Mouse up - finalize selection or stop panning
-canvas.addEventListener('mouseup', (event) => {
-    // Stop panning on middle mouse release
-    if (event.button === 1 && camera.isPanning) {
-        camera.endPan();
-        canvas.style.cursor = 'default';
-        return;
-    }
-    
-    if (isSelecting && (event.button === 2 || event.ctrlKey)) {
-        selectionEnd = { x: event.clientX, y: event.clientY };
-        
-        // Convert to grid coordinates
-        const start = screenToGrid(selectionStart.x, selectionStart.y);
-        const end = screenToGrid(selectionEnd.x, selectionEnd.y);
-        
-        selectedRegion = {
-            x1: Math.min(start.x, end.x),
-            y1: Math.min(start.y, end.y),
-            x2: Math.max(start.x, end.x),
-            y2: Math.max(start.y, end.y)
-        };
-        
-        // Check if selection is large enough (at least 2x2)
-        if (selectedRegion.x2 - selectedRegion.x1 >= 1 && selectedRegion.y2 - selectedRegion.y1 >= 1) {
-            // Mark units in the selection region in the selection texture
-            const unitsMarked = markUnitsInRegion(selectedRegion);
-            
-            if (unitsMarked > 0) {
-                hasActiveSelection = true;
-                console.log('[Selection] Selected region:', selectedRegion, 'with', unitsMarked, 'units');
-                // Shader shows selected units directly via u_hasActiveSelection
-                
-                // Sync selection to network using region
-                if (isMultiplayer && networkSync.isConnected) {
-                    syncAction({ 
-                        type: 'unit_selection',
-                        player: currentPlayer,
-                        region: selectedRegion
-                    });
-                }
-            } else {
-                console.log('[Selection] No units in region');
-                clearSelection();
-            }
-        } else {
-            clearSelection();
-        }
-        
-        isSelecting = false;
-        // Selection box is rendered in shader, no DOM cleanup needed
-    }
-});
-
-// Prevent context menu on canvas
-canvas.addEventListener('contextmenu', (event) => {
-    event.preventDefault();
-});
-
-canvas.addEventListener('click', async (event) => {
-    // Spectators cannot interact with the game
-    if (isSpectator) {
-        console.log('[Spectator] Cannot interact - spectator mode');
-        return;
-    }
-    
-    // If we just cleared a selection via mousedown, don't place a base
-    if (suppressNextClick) {
-        suppressNextClick = false;
-        return;
-    }
-    
-    // If we're in selection mode or have active selection, don't do normal click
-    if (isSelecting || hasActiveSelection) {
-        return;
-    }
-    
-    // Auto-initialize audio on first user interaction (browser requires user gesture)
-    if (!audioInitialized) {
-        initAudio(); // Don't await - let it init in background
-    }
-    
-    const gridPos = screenToGrid(event.clientX, event.clientY);
+/**
+ * Handle factory placement at grid position
+ */
+handlePlaceFactory = (x, y) => {
     const currentData = grid.download();
+    const centerX = x;
+    const centerY = y;
     
-    if (event.shiftKey) {
-        // SHIFT+CLICK: Delete or mark for demolition
-        let markedCount = 0;
-        let deletedCount = 0;
-        
-        // Track unique factory centers being demolished (key: "player,x,y")
-        const factoriesAffected = new Set();
-        
-        for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
-            for (let dx = -DELETE_RADIUS; dx <= DELETE_RADIUS; dx++) {
-                const x = gridPos.x + dx;
-                const y = gridPos.y + dy;
+    // Check if in multiplayer waiting for opponent
+    if (isMultiplayer && connectedPlayers.size < 2) {
+        console.log('Waiting for opponent to join before placing factories');
+        audioEngine.playReject();
+        return;
+    }
+    
+    // Check bounds for 3x3
+    if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
+        console.log('Too close to edge for 3x3 structure');
+        audioEngine.playReject();
+        return;
+    }
+    
+    // Check factory limit
+    if (playerFactoryCounts[currentPlayer] >= MAX_FACTORIES_PER_PLAYER) {
+        console.log(`Cannot place factory - Player ${currentPlayer} already has ${MAX_FACTORIES_PER_PLAYER} bases (delete some to place more)`);
+        audioEngine.playReject();
+        return;
+    }
+    
+    // Check that all 8 cells (excluding center) are empty before placing
+    let canPlace = true;
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;  // Skip center
+            const fx = centerX + dx;
+            const fy = centerY + dy;
+            const idx = (fy * GRID_SIZE + fx) * 4;
+            const cellType = currentData[idx];
+            if (cellType !== CELL_EMPTY) {
+                canPlace = false;
+                break;
+            }
+        }
+        if (!canPlace) break;
+    }
+    
+    if (!canPlace) {
+        console.log('Cannot place factory - some cells are not empty');
+        audioEngine.playReject();
+        return;
+    }
+    
+    // First factory FOR EACH PLAYER is built (has resources), subsequent are unbuilt
+    const isUnbuilt = playerFactoryCounts[currentPlayer] > 0;
+    const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
+    const resourcesPerCell = totalResources / 8.0;
+    
+    console.log(`[Factory Placement] currentPlayer: ${currentPlayer}, PLAYER_1: ${PLAYER_1}, PLAYER_2: ${PLAYER_2}`);
+    
+    // Place 3x3 grid of factory cells (center stays empty)
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            
+            const fx = centerX + dx;
+            const fy = centerY + dy;
+            const idx = (fy * GRID_SIZE + fx) * 4;
+            
+            const factoryType = currentPlayer === PLAYER_2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
+            currentData[idx + 0] = factoryType;
+            currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;
+            currentData[idx + 2] = centerX;
+            currentData[idx + 3] = centerY;
+        }
+    }
+    
+    grid.upload(currentData);
+    factoriesPlaced++;
+    playerFactoryCounts[currentPlayer]++;
+    playerTotalFactoriesPlaced[currentPlayer]++;
+    updatePlayerIndicator();
+    
+    if (isUnbuilt) {
+        console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY})`);
+    } else {
+        console.log(`Placed 3x3 factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY}) with ${totalResources} total resources`);
+    }
+    
+    // Sync with network
+    syncAction({
+        type: 'place_factory',
+        x: centerX,
+        y: centerY,
+        player: currentPlayer,
+        isUnbuilt: isUnbuilt,
+        factoryNumber: factoriesPlaced
+    });
+};
+
+/**
+ * Handle demolish at grid position
+ */
+handleDemolish = (x, y) => {
+    const currentData = grid.download();
+    let markedCount = 0;
+    let deletedCount = 0;
+    const factoriesAffected = new Set();
+    
+    for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
+        for (let dx = -DELETE_RADIUS; dx <= DELETE_RADIUS; dx++) {
+            const fx = x + dx;
+            const fy = y + dy;
+            
+            if (fx < 0 || fx >= GRID_SIZE || fy < 0 || fy >= GRID_SIZE) continue;
+            
+            const idx = (fy * GRID_SIZE + fx) * 4;
+            const cellType = currentData[idx];
+            const buildCount = currentData[idx + 1];
+            
+            if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
+                const owner = cellType === CELL_MINING_FACTORY_P2 ? PLAYER_2 : PLAYER_1;
                 
-                if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) continue;
+                // Only allow demolishing own factories
+                if (owner !== currentPlayer) continue;
                 
-                const idx = (y * GRID_SIZE + x) * 4;
-                const cellType = currentData[idx];
-                const buildCount = currentData[idx + 1];
+                const centerX = currentData[idx + 2];
+                const centerY = currentData[idx + 3];
                 
-                if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
-                    const owner = cellType === CELL_MINING_FACTORY_P2 ? PLAYER_2 : PLAYER_1;
-                    
-                    // Only allow demolishing own factories
-                    if (owner !== currentPlayer) continue;
-                    
-                    const centerX = currentData[idx + 2];
-                    const centerY = currentData[idx + 3];
-                    
-                    // Track this factory (by center position and owner)
-                    factoriesAffected.add(`${owner},${centerX},${centerY}`);
-                    
-                    // Check if this factory cell has any build progress or resources
-                    // buildCount here represents either resources (built) or build progress (unbuilt)
-                    if (buildCount > 0) {
-                        // Has resources or build progress: mark for demolition (units salvage)
-                        currentData[idx + 0] = CELL_DEMOLISH;
-                        currentData[idx + 1] = 0;
-                        currentData[idx + 2] = centerX;
-                        currentData[idx + 3] = centerY;
-                        markedCount++;
-                    } else {
-                        // Unbuilt factory cell with 0 progress: delete immediately
+                factoriesAffected.add(`${owner},${centerX},${centerY}`);
+                
+                if (buildCount > 0) {
+                    currentData[idx + 0] = CELL_DEMOLISH;
+                    currentData[idx + 1] = 0;
+                    currentData[idx + 2] = centerX;
+                    currentData[idx + 3] = centerY;
+                    markedCount++;
+                } else {
                     currentData[idx + 0] = CELL_EMPTY;
                     currentData[idx + 1] = 0;
                     currentData[idx + 2] = 0;
                     currentData[idx + 3] = 0;
                     deletedCount++;
-                    }
                 }
             }
         }
+    }
+    
+    for (const key of factoriesAffected) {
+        const [owner] = key.split(',').map(Number);
+        playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - 1);
+    }
+    if (factoriesAffected.size > 0) {
+        updatePlayerIndicator();
+    }
+    
+    grid.upload(currentData);
+    if (markedCount > 0 || deletedCount > 0) {
+        const parts = [];
+        if (deletedCount > 0) parts.push(`deleted ${deletedCount} unbuilt`);
+        if (markedCount > 0) parts.push(`marked ${markedCount} for demolition`);
+        if (factoriesAffected.size > 0) parts.push(`${factoriesAffected.size} base(s) freed`);
+        console.log(`${parts.join(', ')} around (${x}, ${y})`);
         
-        // Decrement factory count for each unique factory affected
+        const factoriesFreed = {};
         for (const key of factoriesAffected) {
             const [owner] = key.split(',').map(Number);
-            playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - 1);
-        }
-        if (factoriesAffected.size > 0) {
-            updatePlayerIndicator();  // Update base count display
+            factoriesFreed[owner] = (factoriesFreed[owner] || 0) + 1;
         }
         
-        grid.upload(currentData);
-        if (markedCount > 0 || deletedCount > 0) {
-            const parts = [];
-            if (deletedCount > 0) parts.push(`deleted ${deletedCount} unbuilt`);
-            if (markedCount > 0) parts.push(`marked ${markedCount} for demolition`);
-            if (factoriesAffected.size > 0) parts.push(`${factoriesAffected.size} base(s) freed`);
-            console.log(`${parts.join(', ')} around (${gridPos.x}, ${gridPos.y})`);
-            
-            // Calculate factories freed per player for network sync
-            const factoriesFreed = {};
-            for (const key of factoriesAffected) {
-                const [owner] = key.split(',').map(Number);
-                factoriesFreed[owner] = (factoriesFreed[owner] || 0) + 1;
-            }
-            
-            // Sync with network
-            syncAction({
-                type: 'demolish',
-                x: gridPos.x,
-                y: gridPos.y,
-                deleted: deletedCount,
-                marked: markedCount,
-                factoriesFreed: factoriesFreed
-            });
-        }
-    } else {
-        // NORMAL CLICK: Place 3x3 factory or blueprint
-        // The click position becomes the CENTER of the structure
-        const centerX = gridPos.x;
-        const centerY = gridPos.y;
-        
-        // Check if in multiplayer waiting for opponent
-        if (isMultiplayer && connectedPlayers.size < 2) {
-            console.log('Waiting for opponent to join before placing factories');
-            audioEngine.playReject();
-            return;
-        }
-        
-        // Check bounds for 3x3
-        if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
-            console.log('Too close to edge for 3x3 structure');
-            audioEngine.playReject();
-            return;
-        }
-        
-        // Check factory limit
-        if (playerFactoryCounts[currentPlayer] >= MAX_FACTORIES_PER_PLAYER) {
-            console.log(`Cannot place factory - Player ${currentPlayer} already has ${MAX_FACTORIES_PER_PLAYER} bases (delete some to place more)`);
-            audioEngine.playReject();
-            return;
-        }
-        
-        // Check that all 8 cells (excluding center) are empty before placing
-        let canPlace = true;
-        for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-                if (dx === 0 && dy === 0) continue;  // Skip center
-                const x = centerX + dx;
-                const y = centerY + dy;
-                const idx = (y * GRID_SIZE + x) * 4;
-                const cellType = currentData[idx];
-                // Only allow placement on empty cells (not resources, walls, units, or factories)
-                if (cellType !== CELL_EMPTY) {
-                    canPlace = false;
-                    break;
-                }
-            }
-            if (!canPlace) break;
-        }
-        
-        if (!canPlace) {
-            console.log('Cannot place factory - some cells are not empty');
-            audioEngine.playReject();
-            return;
-        }
-        
-        // First factory FOR EACH PLAYER is built (has resources), subsequent are unbuilt (need construction)
-        const isUnbuilt = playerFactoryCounts[currentPlayer] > 0;
-        const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
-        const resourcesPerCell = totalResources / 8.0;  // 8 cells (center is empty)
-        
-        console.log(`[Factory Placement] currentPlayer: ${currentPlayer}, PLAYER_1: ${PLAYER_1}, PLAYER_2: ${PLAYER_2}`);
-        
-        // Place 3x3 grid of factory cells (center cell stays empty)
-        // All cells store the center position
-        // G channel = resources for built, or build progress (0) for unbuilt
-        // Place 8 factory cells (we already verified all are empty)
-        for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-                if (dx === 0 && dy === 0) continue;  // Skip center
-                
-                const x = centerX + dx;
-                const y = centerY + dy;
-                const idx = (y * GRID_SIZE + x) * 4;
-                
-                const factoryType = currentPlayer === PLAYER_2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
-                currentData[idx + 0] = factoryType;
-                currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;
-                currentData[idx + 2] = centerX;
-                    currentData[idx + 3] = centerY;
-            }
-        }
-        
-        grid.upload(currentData);
-        factoriesPlaced++;
-        playerFactoryCounts[currentPlayer]++;
-        playerTotalFactoriesPlaced[currentPlayer]++;
-        updatePlayerIndicator();  // Update base count display
-        
-        if (isUnbuilt) {
-            console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY})`);
-        } else {
-            console.log(`Placed 3x3 factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY}) with ${totalResources} total resources`);
-        }
-        
-        // Sync with network
         syncAction({
-            type: 'place_factory',
-            x: centerX,
-            y: centerY,
-            player: currentPlayer,
-            isUnbuilt: isUnbuilt,
-            factoryNumber: factoriesPlaced
+            type: 'demolish',
+            x: x,
+            y: y,
+            deleted: deletedCount,
+            marked: markedCount,
+            factoriesFreed: factoriesFreed
         });
     }
-});
+};
+
+/**
+ * Handle unit command (move selected units to destination)
+ */
+handleUnitCommand = (command) => {
+    const activeCommand = {
+        ...command,
+        player: currentPlayer
+    };
+    
+    console.log('[Command] Sending units from', inputHandler.getSelection(), 'to', { x: command.destX, y: command.destY });
+    
+    // Apply command to units in the grid
+    applyUnitCommand(activeCommand);
+    
+    // Sync command to other players
+    if (isMultiplayer && networkSync?.isConnected) {
+        syncAction({ type: 'unit_command', ...activeCommand });
+    }
+};
+
+/**
+ * Handle clear selection (sync to network)
+ */
+handleClearSelection = () => {
+    if (isMultiplayer && networkSync?.isConnected) {
+        syncAction({ type: 'clear_selection', player: currentPlayer });
+    }
+};
 
 // ============================================================================
 // Player Toggle (for testing multiplayer locally)
@@ -2441,9 +2191,14 @@ function renderLoop() {
     renderShader.setFloat('u_currentPlayer', currentPlayer);  // 1.0 or 2.0
     
     // User interaction UI uniforms (rendered in shader instead of DOM)
+    // Input state comes from InputHandler module
+    const isSelecting = inputHandler.isInSelectionMode();
+    const hasActiveSelection = inputHandler.hasSelection();
+    const mousePos = inputHandler.getMousePosition();
+    
     renderShader.setFloat('u_isSelecting', isSelecting ? 1.0 : 0.0);
     renderShader.setFloat('u_hasActiveSelection', hasActiveSelection ? 1.0 : 0.0);
-    renderShader.setFloat('u_shiftHeld', shiftHeld ? 1.0 : 0.0);
+    renderShader.setFloat('u_shiftHeld', inputHandler.isShiftHeld() ? 1.0 : 0.0);
     renderShader.setFloat('u_deleteRadius', DELETE_RADIUS);
     
     // Convert screen coordinates to UV (0-1) for shader
@@ -2454,12 +2209,12 @@ function renderLoop() {
     });
     
     // Mouse position (used for crosshair and delete indicator)
-    const mouseUV = screenToUV(mouseX, mouseY);
+    const mouseUV = screenToUV(mousePos.x, mousePos.y);
     renderShader.setVec2('u_mousePos', mouseUV.x, mouseUV.y);
     
-    if (isSelecting && selectionStart) {
-        const startUV = screenToUV(selectionStart.x, selectionStart.y);
-        const endUV = screenToUV(mouseX, mouseY);
+    if (isSelecting && inputHandler.selectionStart) {
+        const startUV = screenToUV(inputHandler.selectionStart.x, inputHandler.selectionStart.y);
+        const endUV = screenToUV(mousePos.x, mousePos.y);
         renderShader.setVec2('u_selectionStart', startUV.x, startUV.y);
         renderShader.setVec2('u_selectionEnd', endUV.x, endUV.y);
     } else {
