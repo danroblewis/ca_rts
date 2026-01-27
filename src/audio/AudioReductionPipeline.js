@@ -318,13 +318,15 @@ export class AudioReductionPipeline {
         const currentIslandCount = Math.round(countData[0]);
         
         // Detect depletion: island count decreased
-        if (this.prevIslandCount > 0 && currentIslandCount < this.prevIslandCount) {
-            const depleted = this.prevIslandCount - currentIslandCount;
-            this.islandDepletion = depleted;
-            console.log(`[JFA] Island depleted! ${this.prevIslandCount} → ${currentIslandCount} (${depleted} islands cleared)`);
-        } else {
-            this.islandDepletion = 0;
-        }
+        // Disabled - too noisy with moving resources
+        // if (this.prevIslandCount > 0 && currentIslandCount < this.prevIslandCount) {
+        //     const depleted = this.prevIslandCount - currentIslandCount;
+        //     this.islandDepletion = depleted;
+        //     console.log(`[JFA] Island depleted! ${this.prevIslandCount} → ${currentIslandCount} (${depleted} islands cleared)`);
+        // } else {
+        //     this.islandDepletion = 0;
+        // }
+        this.islandDepletion = 0;  // Always 0 - feature disabled
         
         this.prevIslandCount = currentIslandCount;
     }

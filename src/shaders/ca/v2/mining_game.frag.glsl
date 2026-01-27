@@ -30,6 +30,7 @@ precision highp float;
 #include "./traits/demolish.glsl"
 #include "./traits/attack.glsl"
 #include "./traits/combat.glsl"
+#include "./traits/resource_movement.glsl"
 
 uniform sampler2D u_state;
 uniform vec2 u_resolution;
@@ -55,12 +56,13 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     DemolishResult demolish = evaluateDemolish(myPos, u_state, u_resolution);
     AttackResult attack = evaluateAttack(myPos, u_state, u_resolution);
     CombatResult combat = evaluateCombat(myPos, u_time, u_state, u_resolution);
+    ResourceMoveResult resourceMove = evaluateResourceMovement(myPos, u_time, u_state, u_resolution);
     
     // ========================================================================
     // Extract my role from each trait result
     // ========================================================================
     
-    // --- MOVEMENT ---
+    // --- UNIT MOVEMENT ---
     if (movement.happened) {
         // Am I the source? (I become empty)
         if (distance(movement.fromPos, myPos) < 0.5) {
@@ -70,6 +72,22 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         // Am I the destination? (I receive the arriving cell)
         if (distance(movement.toPos, myPos) < 0.5) {
             return transformArrival(movement.arrivingCell, myRaw, myPos, u_state, u_resolution);
+        }
+    }
+    
+    // --- RESOURCE MOVEMENT ---
+    if (resourceMove.happened) {
+        // Am I the source? (I become empty)
+        if (distance(resourceMove.fromPos, myPos) < 0.5) {
+            return encodeEmpty();
+        }
+        
+        // Am I the destination? (I receive the moving resource)
+        if (distance(resourceMove.toPos, myPos) < 0.5) {
+            // Preserve the resource's phase and amount
+            float amount = getResourceAmount(resourceMove.movingCell);
+            float phase = getResourcePhase(resourceMove.movingCell);
+            return encodeResourceWithPhase(amount, phase);
         }
     }
     

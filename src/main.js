@@ -548,7 +548,9 @@ for (let b = 0; b < NUM_BLOBS; b++) {
             // Density check
                 if (seededRandom() > BLOB_DENSITY) continue;
             
-            setCell(x, y, CELL_RESOURCE, 1.0);
+            // Give each resource a random phase (0-255) for staggered movement
+            const phase = Math.floor(seededRandom() * 256);
+            setCell(x, y, CELL_RESOURCE, 1.0, phase);
             totalResources++;
         }
     }

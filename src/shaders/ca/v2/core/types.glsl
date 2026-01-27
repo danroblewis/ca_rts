@@ -87,8 +87,18 @@ float getResourceAmount(vec4 raw) {
     return raw.g;
 }
 
+// Get resource movement phase (stored in B channel, 0-255)
+float getResourcePhase(vec4 raw) {
+    return raw.b;
+}
+
 vec4 encodeResource(float amount) {
     return vec4(float(TYPE_RESOURCE), amount, 0.0, 0.0);
+}
+
+// Encode resource with movement phase (for staggered movement)
+vec4 encodeResourceWithPhase(float amount, float phase) {
+    return vec4(float(TYPE_RESOURCE), amount, phase, 0.0);
 }
 
 // ============================================================================
