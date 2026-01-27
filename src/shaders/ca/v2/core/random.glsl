@@ -1,19 +1,53 @@
 /**
- * Random/Hash Functions
+ * Random/Hash Functions - INTEGER-ONLY for cross-platform determinism
+ * 
+ * These functions use only integer operations to ensure identical results
+ * across different GPU architectures (PC, Mac M4, etc.)
+ * 
+ * NO fract(), NO floating-point multiplication for randomness.
  */
 
 #ifndef RANDOM_GLSL
 #define RANDOM_GLSL
 
-float hash(vec2 p, float seed) {
-    vec3 p3 = fract(vec3(p.x + seed, p.y + seed * 1.3, p.x * 0.7 + p.y) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
+// Integer hash using simple mixing - deterministic across all GPUs
+// Uses int instead of uint for better compatibility
+int ihash(int x) {
+    // Simple integer hash - avoid bitwise for maximum compatibility
+    // Based on simple linear congruential mixing
+    x = x * 1103515245 + 12345;
+    x = x / 65536;  // Integer division to mix bits
+    x = x * 1103515245 + 12345;
+    return x;
 }
 
-// Random direction 1-8 (including diagonals)
-int randomDir(vec2 pos, float seed) {
-    return int(floor(hash(pos, seed) * 8.0)) + 1;
+// Hash position and seed to get a deterministic integer
+int hashPosTime(vec2 pos, float time) {
+    // Convert floats to integers carefully
+    // Position should always be integer-valued (cell coordinates)
+    int px = int(pos.x + 0.5);  // Round to nearest integer
+    int py = int(pos.y + 0.5);
+    int t = int(time);
+    
+    // Combine using simple multiplication and addition
+    int h = px * 73856 + py * 19349 + t * 83492;
+    
+    return ihash(h);
+}
+
+// Get a float 0.0-1.0 from integer hash (for compatibility with existing code)
+float hash(vec2 p, float time) {
+    int h = hashPosTime(p, time);
+    // Make positive and get 0.0-1.0 range
+    if (h < 0) h = -h;
+    return float(h - (h / 10000) * 10000) / 10000.0;  // h % 10000 using integer division
+}
+
+// Random direction 1-8 (including diagonals) - pure integer
+int randomDir(vec2 pos, float time) {
+    int h = hashPosTime(pos, time);
+    if (h < 0) h = -h;  // Make positive
+    return (h - (h / 8) * 8) + 1;  // h % 8 using integer division
 }
 
 // Direction toward target - prefers diagonal when both axes differ

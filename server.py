@@ -230,6 +230,7 @@ class Player:
     room_id: str
     is_host: bool = False
     ticks_per_second: float = 60.0  # Reported simulation speed
+    current_tick: int = 0  # Current simulation tick count
 
 
 @dataclass
@@ -411,17 +412,42 @@ class GameRoom:
         
         return (min_tps if min_tps != float('inf') else 60.0, slowest_player)
     
+    def get_tick_sync_info(self) -> dict:
+        """Calculate tick synchronization info.
+        Returns dict with tick counts and the tick to sync to.
+        """
+        if len(self.players) < 2:
+            return {}
+        
+        tick_counts = {}
+        max_tick = 0
+        leader_player = 0
+        
+        for player_id, player in self.players.items():
+            tick_counts[player_id] = player.current_tick
+            if player.current_tick > max_tick:
+                max_tick = player.current_tick
+                leader_player = player_id
+        
+        return {
+            "tickCounts": tick_counts,
+            "targetTick": max_tick,
+            "leaderPlayer": leader_player
+        }
+    
     async def broadcast_speed_sync(self):
-        """Broadcast the target simulation speed to all players."""
+        """Broadcast the target simulation speed and tick sync info to all players."""
         if len(self.players) < 2:
             return  # No need to sync if only one player
         
         min_tps, slowest_player = self.get_min_ticks_per_second()
+        tick_info = self.get_tick_sync_info()
         
         await self.broadcast({
             "type": "speed_sync",
             "targetTicksPerSecond": min_tps,
-            "slowestPlayer": slowest_player
+            "slowestPlayer": slowest_player,
+            **tick_info  # Include tickCounts, targetTick, leaderPlayer
         }, include_spectators=False)  # Only players need speed sync
 
 
@@ -478,7 +504,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     game_state_cache.set(room.room_id, {
                         "binary": binary_data,  # Store full binary message
                         "simTime": header.get("simTime"),
-                        "playerId": player.player_id
+                        "playerId": player.player_id,
+                        "updateTime": time.time()  # For stale room cleanup
                     })
                     
                     # Forward binary message to all other players
@@ -556,12 +583,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 print(f"Player {player.player_id} joined room '{room_id}' (total: {len(room.players)})")
                 
-                # Send cached game state to late joiner (if available)
+                # Send cached game state to ANY joiner (including hosts who may have refreshed)
+                # The cache contains the most recent state from whoever was last syncing
                 cached_state = game_state_cache.get(room_id)
-                if cached_state and "binary" in cached_state and not player.is_host:
+                if cached_state and "binary" in cached_state:
                     # Send as binary (compressed)
                     await websocket.send_bytes(cached_state["binary"])
-                    print(f"Sent cached binary game state to Player {player.player_id}")
+                    print(f"Sent cached binary game state (tick {cached_state.get('simTime', '?')}) to Player {player.player_id}")
                 
             elif msg_type == "sync":
                 # Legacy JSON sync (from older clients or internal messages)
@@ -572,7 +600,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         "gridState": data.get("gridState"),
                         "simTime": data.get("simTime"),
                         "action": data.get("action"),
-                        "playerId": player.player_id
+                        "playerId": player.player_id,
+                        "updateTime": time.time()  # For stale room cleanup
                     })
                     
                     # Forward sync message to all other players
@@ -597,12 +626,22 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
             
             elif msg_type == "heartbeat":
-                # Player reporting their simulation speed
+                # Player reporting their simulation speed and tick count
                 if room and player:
                     tps = data.get("ticksPerSecond", 60.0)
+                    tick = data.get("currentTick", 0)
                     player.ticks_per_second = tps
-                    # Broadcast the minimum speed to all players
+                    player.current_tick = tick
+                    # Broadcast the minimum speed and tick sync info to all players
                     await room.broadcast_speed_sync()
+            
+            elif msg_type == "game_action":
+                # Lightweight action message (for rollback netcode)
+                # No grid state - just forward the action to other players
+                if room and player:
+                    print(f"[game_action] Player {player.player_id} action: {data.get('action', {}).get('type', 'unknown')} at tick {data.get('simTime', '?')}")
+                    # Forward to all other players and spectators
+                    await room.broadcast(data, exclude_player_id=player.player_id)
             
             elif msg_type == "restart":
                 # Player requesting game restart (Play Again)
@@ -681,10 +720,31 @@ async def serve_html(filename: str):
 # API Endpoints
 # ============================================================================
 
+ROOM_TIMEOUT_SECONDS = 300  # 5 minutes
+
 @app.get("/api/rooms")
 async def list_rooms():
-    """List all active game rooms."""
+    """List all active game rooms, cleaning up stale ones."""
     current_time = time.time()
+    
+    # Find and delete stale rooms (no players and no updates for 5 minutes)
+    stale_room_ids = []
+    for room_id, room in rooms.items():
+        # Check if room has been inactive for too long
+        cached_state = game_state_cache.get(room_id)
+        last_update_time = cached_state.get("updateTime", room.created_at) if cached_state else room.created_at
+        
+        # Room is stale if: no players AND no updates for 5 minutes
+        if len(room.players) == 0 and len(room.spectators) == 0:
+            if current_time - last_update_time > ROOM_TIMEOUT_SECONDS:
+                stale_room_ids.append(room_id)
+    
+    # Delete stale rooms
+    for room_id in stale_room_ids:
+        del rooms[room_id]
+        game_state_cache.delete(room_id)
+        print(f"[Cleanup] Deleted stale room '{room_id}' (inactive for {ROOM_TIMEOUT_SECONDS}s)")
+    
     return {
         "rooms": [
             {
@@ -767,7 +827,9 @@ async def get_room_minimap(room_id: str):
             headers={"Cache-Control": "no-cache"}
         )
     except Exception as e:
-        print(f"Error generating minimap: {e}")
+        import traceback
+        print(f"Error generating minimap for room {room_id}: {e}")
+        traceback.print_exc()
         return Response(
             content=b'',
             status_code=500,

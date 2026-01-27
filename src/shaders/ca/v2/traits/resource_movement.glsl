@@ -139,7 +139,10 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
     // Second pass: randomly select among best directions
     if (numBestDirs > 0) {
         // Pick a random index among the best directions
-        int pick = int(hash(pos, time) * float(numBestDirs));
+        // Use hash() which returns 0.0-1.0, then convert to index
+        float hf = hash(pos, time);
+        int pick = int(hf * float(numBestDirs));
+        if (pick >= numBestDirs) pick = numBestDirs - 1;  // Clamp to valid range
         int found = 0;
         
         for (int d = 1; d <= 8; d++) {

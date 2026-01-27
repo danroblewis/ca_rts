@@ -6,6 +6,8 @@ import { CAGrid } from './ca/CAGrid.js';
 import { getNetworkSync } from './network/NetworkSync.js';
 import { AudioReductionPipeline } from './audio/AudioReductionPipeline.js';
 import { AudioEngine } from './audio/AudioEngine.js';
+import { CheckpointBuffer } from './gpu/CheckpointBuffer.js';
+import { ActionQueue } from './network/ActionQueue.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -274,6 +276,18 @@ console.log(`Performance mode: ${performanceMode ? 'ON' : 'OFF'}`);
 // Initialize World
 // ============================================================================
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
+
+// ============================================================================
+// Rollback Netcode - Checkpoint and Action Queue
+// ============================================================================
+// CheckpointBuffer stores periodic game state snapshots for rollback
+// ActionQueue stores player actions for replay
+const CHECKPOINT_INTERVAL = 10;  // Ticks between checkpoints (~166ms at 60fps) - more frequent for accurate rollback
+const MAX_CHECKPOINTS = 30;      // Keep ~5 seconds of history (30 * 10 ticks = 300 ticks = 5 sec)
+const checkpointBuffer = new CheckpointBuffer(GRID_SIZE, GRID_SIZE, {
+    format: 'float'  // Use symbolic name like CAGrid
+}, MAX_CHECKPOINTS, CHECKPOINT_INTERVAL);
+const actionQueue = new ActionQueue();
 
 // ============================================================================
 // Selection System - Selection state is stored directly in unit data (G channel bit 5)
@@ -723,6 +737,7 @@ let selectionStart = null;
 let selectionEnd = null;
 let hasActiveSelection = false;
 let selectedRegion = null;  // {x1, y1, x2, y2} in grid coords
+let suppressNextClick = false;  // Suppress click after clearing selection via mousedown
 
 // Active command storage (for GPU)
 let activeCommand = null;  // {sourceX1, sourceY1, sourceX2, sourceY2, destX, destY, player}
@@ -856,7 +871,7 @@ window.addEventListener('keydown', (event) => {
         if (hasActiveSelection) {
             // Sync selection clear to other players
             if (isMultiplayer && networkSync.isConnected) {
-                syncAction('clear_selection', { player: currentPlayer });
+                syncAction({ type: 'clear_selection', player: currentPlayer });
             }
         }
         clearSelection();
@@ -887,8 +902,20 @@ canvas.addEventListener('mousedown', (event) => {
     // Spectators cannot interact (but can still pan)
     if (isSpectator) return;
     
-    // Left click with active selection = set command destination (easier on MacBook trackpads)
-    if (event.button === 0 && hasActiveSelection && selectedRegion && !shiftHeld) {
+    // Left click with active selection = clear selection (like pressing Escape)
+    if (event.button === 0 && hasActiveSelection && !shiftHeld) {
+        event.preventDefault();
+        // Sync selection clear to other players
+        if (isMultiplayer && networkSync.isConnected) {
+            syncAction({ type: 'clear_selection', player: currentPlayer });
+        }
+        clearSelection();
+        suppressNextClick = true;  // Don't let the subsequent click place a base
+        return;
+    }
+    
+    // Right click or ctrl+click with active selection = set command destination
+    if ((event.button === 2 || event.ctrlKey) && hasActiveSelection && selectedRegion && !shiftHeld) {
         event.preventDefault();
         const destPos = screenToGrid(event.clientX, event.clientY);
         
@@ -911,18 +938,18 @@ canvas.addEventListener('mousedown', (event) => {
         // Apply command to units in the grid
         applyUnitCommand(activeCommand);
         
-        // Sync command to other players
+        // Sync command to other players - include unit positions for reliable sync
         if (isMultiplayer && networkSync.isConnected) {
-            syncAction('unit_command', activeCommand);
+            syncAction({ type: 'unit_command', ...activeCommand });
         }
         
         // Don't clear selection - user can issue multiple commands to same units
-        // Selection is only cleared when user presses Escape
+        // Selection is only cleared when user presses Escape or left-click
         return;
     }
     
-    // Right click or ctrl+click - start new selection (clears any existing)
-    if (event.button === 2 || event.ctrlKey) {
+    // Right click or ctrl+click without selection - start new selection
+    if ((event.button === 2 || event.ctrlKey) && !hasActiveSelection) {
         event.preventDefault();
         
         // Start new selection
@@ -967,11 +994,12 @@ canvas.addEventListener('mouseup', (event) => {
                 console.log('[Selection] Selected region:', selectedRegion, 'with', unitsMarked, 'units');
                 // Shader shows selected units directly via u_hasActiveSelection
                 
-                // Sync selection to network so other player's actions don't clear it
+                // Sync selection to network using region
                 if (isMultiplayer && networkSync.isConnected) {
-                    syncAction('unit_selection', { 
+                    syncAction({ 
+                        type: 'unit_selection',
                         player: currentPlayer,
-                        region: selectedRegion 
+                        region: selectedRegion
                     });
                 }
             } else {
@@ -996,6 +1024,12 @@ canvas.addEventListener('click', async (event) => {
     // Spectators cannot interact with the game
     if (isSpectator) {
         console.log('[Spectator] Cannot interact - spectator mode');
+        return;
+    }
+    
+    // If we just cleared a selection via mousedown, don't place a base
+    if (suppressNextClick) {
+        suppressNextClick = false;
         return;
     }
     
@@ -1272,6 +1306,55 @@ updatePlayerIndicator();
 let lastFrameTime = 0;
 let frameTimeSmoothed = 16.67;
 
+// Track target tick for display
+let lastKnownTargetTick = 0;
+let lastKnownLeaderPlayer = 0;
+
+function updateTickDisplay() {
+    let tickDisplay = document.getElementById('tick-display');
+    if (!tickDisplay) {
+        tickDisplay = document.createElement('div');
+        tickDisplay.id = 'tick-display';
+        tickDisplay.style.cssText = `
+            position: fixed;
+            bottom: 8px;
+            right: 8px;
+            z-index: 200;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: 'SF Mono', monospace;
+            font-size: 11px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #aaa;
+            backdrop-filter: blur(4px);
+        `;
+        document.body.appendChild(tickDisplay);
+    }
+    
+    const ourTick = Math.floor(simTime);
+    
+    if (isMultiplayer && lastKnownTargetTick > 0) {
+        const diff = lastKnownTargetTick - ourTick;
+        // Pad the diff number to fixed width for consistent display
+        const diffStr = Math.abs(diff).toString().padStart(4, '\u2007'); // figure space for alignment
+        let diffColor = '#aaa';
+        let statusText = '';
+        
+        if (diff > TICK_SYNC_THRESHOLD) {
+            diffColor = '#f99';
+            statusText = `Δ <span style="color:${diffColor}">${diffStr}</span> behind`;
+        } else if (diff < -TICK_SYNC_THRESHOLD) {
+            diffColor = '#9f9';
+            statusText = `Δ <span style="color:${diffColor}">${diffStr}</span> ahead `;
+        } else {
+            statusText = `Δ <span style="color:#9f9">${diffStr}</span> synced`;
+        }
+        tickDisplay.innerHTML = `Tick: ${ourTick} (${statusText})`;
+    } else {
+        tickDisplay.textContent = `Tick: ${ourTick}`;
+    }
+}
+
 function updateFpsDisplay(currentTps, targetTps, potentialTps = null, renderFps = 60) {
     let fpsDisplay = document.getElementById('fps-display');
     if (!fpsDisplay) {
@@ -1339,6 +1422,9 @@ console.log('Press 1 or 2 to switch players, or click the player indicator');
 
 const networkSync = getNetworkSync(GRID_SIZE);
 let isMultiplayer = false;
+let waitingForSync = false;  // In multiplayer, wait for state sync before running simulation
+let waitingForSyncStartTime = 0;  // When we started waiting
+const SYNC_WAIT_TIMEOUT = 3000;  // Give up waiting after 3 seconds
 
 // Track connected players in multiplayer
 const connectedPlayers = new Set();
@@ -1403,8 +1489,13 @@ networkSync.onRestart = (newMapSeed, initiatedBy) => {
     window.location.href = url.toString();
 };
 
-// Speed sync handler - adjust simulation speed to match slowest peer
-networkSync.onSpeedSync = (serverTargetTps, slowestPlayer) => {
+// Tick sync constants
+const TICK_SYNC_THRESHOLD = 30;      // Start catching up if behind by this many ticks
+const TICK_SYNC_HARD_THRESHOLD = 300; // Request full state sync if behind by this many
+const TICK_CATCHUP_BATCH = 10;        // Max ticks to catch up per frame
+
+// Speed sync handler - adjust simulation speed to match slowest peer and sync ticks
+networkSync.onSpeedSync = (serverTargetTps, slowestPlayer, tickCounts = {}, targetTick = 0, leaderPlayer = 0) => {
     const oldTarget = targetTicksPerSecond;
     // Enforce minimum of 1 TPS to prevent stalling
     targetTicksPerSecond = Math.max(1, serverTargetTps);
@@ -1412,6 +1503,37 @@ networkSync.onSpeedSync = (serverTargetTps, slowestPlayer) => {
     // Only log if target changed significantly
     if (Math.abs(oldTarget - serverTargetTps) > 1) {
         console.log(`[Speed Sync] Adjusting to ${targetTicksPerSecond.toFixed(1)} TPS (slowest: Player ${slowestPlayer}, our TPS: ${effectiveTicksPerSecond.toFixed(1)})`);
+    }
+    
+    // Tick synchronization - check if we're behind the leader
+    if (targetTick > 0 && networkSync.playerId) {
+        // Update tracking variables for display
+        lastKnownTargetTick = targetTick;
+        lastKnownLeaderPlayer = leaderPlayer;
+        
+        const ourTick = Math.floor(simTime);
+        const tickDifference = targetTick - ourTick;
+        
+        if (tickDifference > TICK_SYNC_HARD_THRESHOLD) {
+            // Too far behind - request full state sync
+            console.log(`[Tick Sync] Too far behind (${tickDifference} ticks), requesting full state sync`);
+            // The host will send us their state on the next heartbeat cycle
+            // For now, we'll just fast-forward aggressively
+            const catchupTicks = Math.min(tickDifference, TICK_CATCHUP_BATCH * 5);
+            console.log(`[Tick Sync] Fast-forwarding ${catchupTicks} ticks (from ${ourTick} toward ${targetTick})`);
+            for (let i = 0; i < catchupTicks; i++) {
+                simulationStep();
+            }
+        } else if (tickDifference > TICK_SYNC_THRESHOLD) {
+            // Moderately behind - catch up gradually
+            const catchupTicks = Math.min(tickDifference - TICK_SYNC_THRESHOLD, TICK_CATCHUP_BATCH);
+            if (catchupTicks > 0) {
+                console.log(`[Tick Sync] Behind by ${tickDifference} ticks, catching up ${catchupTicks} (from ${ourTick} toward ${targetTick})`);
+                for (let i = 0; i < catchupTicks; i++) {
+                    simulationStep();
+                }
+            }
+        }
     }
 };
 
@@ -1437,6 +1559,13 @@ networkSync.onPlayerJoined = (playerId, isHost, serverMapSeed, serverConnectedPl
         console.log(`[Multiplayer] currentPlayer is now: ${currentPlayer} (PLAYER_1=${PLAYER_1}, PLAYER_2=${PLAYER_2})`);
         updatePlayerIndicator();
         
+        // If we're the host (Player 1), we don't wait for sync - we ARE the source of truth
+        // Non-hosts will receive state sync from host or server cache shortly after joining
+        if (isHost && waitingForSync) {
+            console.log(`[Multiplayer] We are the host, no need to wait for sync`);
+            waitingForSync = false;
+        }
+        
         // If server provided a map seed different from ours, regenerate the map
         if (serverMapSeed !== undefined && serverMapSeed !== mapSeed) {
             console.log(`[Multiplayer] Server has different map seed (${serverMapSeed}), regenerating map...`);
@@ -1461,17 +1590,25 @@ networkSync.onPlayerJoined = (playerId, isHost, serverMapSeed, serverConnectedPl
     } else {
         console.log(`[Multiplayer] Another player joined: ${playerId}`);
         
-        // If we're Player 1 (the host), sync our state to the new player
+        // If we're Player 1 (the host), sync FULL state to the new player
+        // This is critical - lightweight game_action messages won't include the grid!
         if (networkSync.playerId === 1) {
-            console.log(`[Multiplayer] We are the host - syncing game state to new player`);
-            syncAction({
+            console.log(`[Multiplayer] We are the host - syncing FULL game state to new player`);
+            
+            // Download current grid state
+            const gridData = grid.download();
+            
+            // Send full state sync (binary) with simTime so new player starts at same tick
+            networkSync.syncState(gridData, {
                 type: 'player_sync',
                 reason: 'new_player_joined',
                 newPlayerId: playerId,
                 factoryCounts: { ...playerFactoryCounts },
                 totalPlaced: { ...playerTotalFactoriesPlaced },
                 factoriesPlaced: factoriesPlaced
-            });
+            }, simTime);
+            
+            console.log(`[Multiplayer] Sent full state at tick ${simTime} to new player ${playerId}`);
         }
     }
     updateNetworkIndicator();
@@ -1486,7 +1623,13 @@ networkSync.onPlayerLeft = (playerId) => {
 networkSync.onStateReceived = (syncData) => {
     // Received state from another player - apply it
     const receiveTime = performance.now();
-    console.log(`[Multiplayer] Applying state from Player ${syncData.playerId} at tick ${syncData.simTime}`);
+    console.log(`[Multiplayer] Applying FULL state from Player ${syncData.playerId} at tick ${syncData.simTime}, our current tick: ${simTime}`);
+    
+    // Clear waiting state - we now have valid state to work with
+    if (waitingForSync) {
+        console.log(`[Multiplayer] State sync received, simulation can now run`);
+        waitingForSync = false;
+    }
     
     // Update local grid with received state
     const uploadStart = performance.now();
@@ -1494,8 +1637,28 @@ networkSync.onStateReceived = (syncData) => {
     const uploadEnd = performance.now();
     console.log(`[Multiplayer] grid.upload() took ${(uploadEnd - uploadStart).toFixed(2)} ms`);
     
-    // Sync simulation time
+    // Sync simulation time - this is CRITICAL for rollback netcode!
+    const oldSimTime = simTime;
     simTime = syncData.simTime;
+    console.log(`[Multiplayer] simTime synced from ${oldSimTime} to ${simTime}`);
+    
+    // Clear rollback netcode state - old checkpoints and actions are invalid
+    // since we just received a new authoritative state
+    if (checkpointBuffer) {
+        checkpointBuffer.clear();
+        console.log(`[Multiplayer] Cleared checkpoint buffer`);
+    }
+    if (actionQueue) {
+        actionQueue.clear();
+        console.log(`[Multiplayer] Cleared action queue`);
+    }
+    
+    // Save a checkpoint at this new state immediately
+    if (checkpointBuffer && grid) {
+        const checkpointData = grid.download();
+        checkpointBuffer.saveCheckpoint(simTime, checkpointData);
+        console.log(`[Multiplayer] Saved initial checkpoint at tick ${simTime}`);
+    }
     
     // Update factory counts based on action
     const action = syncData.action;
@@ -1513,7 +1676,7 @@ networkSync.onStateReceived = (syncData) => {
             if (action.factoriesPlaced !== undefined) {
                 factoriesPlaced = action.factoriesPlaced;
             }
-            console.log(`[Multiplayer] Full state sync received. Factories: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}, total placed: ${factoriesPlaced}`);
+            console.log(`[Multiplayer] Full state sync received at tick ${simTime}. Factories: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
             updatePlayerIndicator();
         } else if (action.type === 'place_factory' && action.player) {
             playerFactoryCounts[action.player]++;
@@ -1823,6 +1986,9 @@ async function joinRoom(roomIdToJoin) {
         console.log(`[Multiplayer] Joining room: ${roomIdToJoin}`);
         // Update the global roomId so URL updates correctly
         roomId = roomIdToJoin;
+        // Wait for state sync before running simulation (unless we become host)
+        waitingForSync = true;
+        waitingForSyncStartTime = performance.now();
         await networkSync.connect(wsUrl, roomIdToJoin, null, false);
         console.log(`[Multiplayer] Connected to room: ${roomIdToJoin}`);
     } catch (error) {
@@ -1853,25 +2019,342 @@ async function toggleMultiplayer() {
     }
 }
 
-// Sync state after an action
+// Sync state after an action - NEW: lightweight action-only sync
 function syncAction(action) {
-    if (isMultiplayer) {
-        const totalStart = performance.now();
+    if (isMultiplayer && networkSync.isConnected) {
+        // Store action locally for potential replay
+        const storedAction = actionQueue.addAction(simTime, currentPlayer, action.type, action, true);
+        console.log(`[syncAction] Stored local action: ${action.type} at tick ${simTime}, queue size: ${actionQueue.actions.length}`);
         
-        // Time the download
-        const downloadStart = performance.now();
-        const gridData = grid.download();
-        const downloadEnd = performance.now();
-        
-        // Time the network send
-        const sendStart = performance.now();
-        networkSync.syncState(gridData, action, simTime);
-        const sendEnd = performance.now();
-        
-        const totalEnd = performance.now();
-        console.log(`[syncAction] download: ${(downloadEnd - downloadStart).toFixed(2)} ms, send: ${(sendEnd - sendStart).toFixed(2)} ms, total: ${(totalEnd - totalStart).toFixed(2)} ms`);
+        // Send lightweight action message (no grid data!)
+        networkSync.sendAction(action, simTime);
+        console.log(`[syncAction] Sent lightweight action: ${action.type} at tick ${simTime}`);
     }
 }
+
+// ============================================================================
+// Rollback Netcode - Apply and Replay
+// ============================================================================
+
+/**
+ * Apply an action to the current grid state.
+ * This is called both for local actions and during replay.
+ * 
+ * @param {Object} action - The action to apply
+ * @param {number} playerId - The player who performed the action
+ */
+function applyAction(action, playerId) {
+    const currentData = grid.download();
+    let modified = false;
+    
+    switch (action.type) {
+        case 'place_factory': {
+            const { x, y, isUnbuilt } = action;
+            const factoryType = playerId === 2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
+            
+            // First factory gets resources (to spawn initial unit), subsequent are unbuilt
+            const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
+            const resourcesPerCell = totalResources / 8.0;  // 8 cells (center is empty)
+            
+            // Write the 3x3 factory pattern
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    const fx = x + dx;
+                    const fy = y + dy;
+                    if (fx < 0 || fx >= GRID_SIZE || fy < 0 || fy >= GRID_SIZE) continue;
+                    
+                    const idx = (fy * GRID_SIZE + fx) * 4;
+                    const isCenter = dx === 0 && dy === 0;
+                    
+                    if (isCenter) {
+                        // Center is empty
+                        currentData[idx] = 0;
+                        currentData[idx + 1] = 0;
+                        currentData[idx + 2] = 0;
+                        currentData[idx + 3] = 0;
+                    } else {
+                        // Factory cell: type, resources, centerX, centerY
+                        currentData[idx] = factoryType;
+                        currentData[idx + 1] = resourcesPerCell; // Resources for first, 0 for unbuilt
+                        currentData[idx + 2] = x;  // Center X (B channel)
+                        currentData[idx + 3] = y;  // Center Y (A channel)
+                    }
+                }
+            }
+            
+            // Update factory counts for this player
+            playerFactoryCounts[playerId]++;
+            playerTotalFactoriesPlaced[playerId]++;  // Track for win/lose condition
+            factoriesPlaced++;
+            updatePlayerIndicator();
+            
+            modified = true;
+            console.log(`[applyAction] Applied place_factory at (${x}, ${y}) for player ${playerId}, isUnbuilt: ${isUnbuilt}, resources: ${totalResources}, totalPlaced: ${playerTotalFactoriesPlaced[playerId]}`);
+            break;
+        }
+        
+        case 'demolish': {
+            // Apply demolish action - must match local demolish logic exactly!
+            const { x: centerX, y: centerY, factoriesFreed } = action;
+            const factoryType = playerId === 2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
+            
+            let markedCount = 0;
+            let deletedCount = 0;
+            const factoriesAffected = new Set();
+            
+            for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
+                for (let dx = -DELETE_RADIUS; dx <= DELETE_RADIUS; dx++) {
+                    const x = centerX + dx;
+                    const y = centerY + dy;
+                    
+                    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) continue;
+                    
+                    const idx = (y * GRID_SIZE + x) * 4;
+                    const cellType = Math.floor(currentData[idx] + 0.5);
+                    const buildCount = currentData[idx + 1];
+                    
+                    // Only demolish factories owned by the player who sent the action
+                    if (cellType === factoryType) {
+                        const factoryCenterX = currentData[idx + 2];
+                        const factoryCenterY = currentData[idx + 3];
+                        
+                        // Track this factory
+                        factoriesAffected.add(`${playerId},${factoryCenterX},${factoryCenterY}`);
+                        
+                        if (buildCount > 0) {
+                            // Has resources or build progress: mark for demolition
+                            currentData[idx + 0] = CELL_DEMOLISH;
+                            currentData[idx + 1] = 0;
+                            currentData[idx + 2] = factoryCenterX;
+                            currentData[idx + 3] = factoryCenterY;
+                            markedCount++;
+                        } else {
+                            // Unbuilt factory cell with 0 progress: delete immediately
+                            currentData[idx + 0] = CELL_EMPTY;
+                            currentData[idx + 1] = 0;
+                            currentData[idx + 2] = 0;
+                            currentData[idx + 3] = 0;
+                            deletedCount++;
+                        }
+                    }
+                }
+            }
+            
+            // Update factory counts
+            if (factoriesFreed) {
+                for (const [owner, count] of Object.entries(factoriesFreed)) {
+                    playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - count);
+                }
+            }
+            
+            if (markedCount > 0 || deletedCount > 0) {
+                modified = true;
+                console.log(`[applyAction] Applied demolish at (${centerX}, ${centerY}): marked ${markedCount}, deleted ${deletedCount}, factories freed: ${factoriesAffected.size}`);
+                updatePlayerIndicator();
+            }
+            break;
+        }
+        
+        case 'unit_command': {
+            // Apply unit command - sets destination for selected units
+            // Must match applyUnitCommand() exactly!
+            const { destX, destY } = action;
+            const unitType = playerId === 2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
+            
+            let unitsCommanded = 0;
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const idx = (y * GRID_SIZE + x) * 4;
+                    const cellType = Math.floor(currentData[idx] + 0.5);
+                    
+                    // Check if this is our unit and selected
+                    if (cellType === unitType && getUnitSelectedFromG(currentData[idx + 1])) {
+                        // Update B channel with new factory position (allows units to go beyond original distance limit)
+                        const newFactoryPos = packCoords(destX, destY);
+                        currentData[idx + 2] = newFactoryPos;
+                        
+                        // Update A channel with new memory (destination + high freshness)
+                        const newMemory = packCoords(destX, destY) + COMMAND_FRESHNESS * MEMORY_PACK_BASE;
+                        currentData[idx + 3] = newMemory;
+                        
+                        unitsCommanded++;
+                    }
+                }
+            }
+            if (unitsCommanded > 0) {
+                modified = true;
+                console.log(`[applyAction] Applied unit_command to ${unitsCommanded} units, target (${destX}, ${destY})`);
+            }
+            break;
+        }
+        
+        case 'unit_selection': {
+            // Mark units as selected within a region
+            const { region } = action;
+            const unitType = playerId === 2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
+            
+            let unitsSelected = 0;
+            for (let y = Math.max(0, region.y1); y <= Math.min(GRID_SIZE - 1, region.y2); y++) {
+                for (let x = Math.max(0, region.x1); x <= Math.min(GRID_SIZE - 1, region.x2); x++) {
+                    const idx = (y * GRID_SIZE + x) * 4;
+                    const cellType = Math.floor(currentData[idx] + 0.5);
+                    
+                    if (cellType === unitType) {
+                        currentData[idx + 1] = setUnitSelectionInG(currentData[idx + 1], true);
+                        unitsSelected++;
+                    }
+                }
+            }
+            if (unitsSelected > 0) {
+                modified = true;
+                console.log(`[applyAction] Applied unit_selection, ${unitsSelected} units selected`);
+            }
+            break;
+        }
+        
+        case 'clear_selection': {
+            // Clear selection for all units of this player
+            const unitType = playerId === 2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
+            
+            let unitsCleared = 0;
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const idx = (y * GRID_SIZE + x) * 4;
+                    const cellType = Math.floor(currentData[idx] + 0.5);
+                    
+                    if (cellType === unitType && getUnitSelectedFromG(currentData[idx + 1])) {
+                        currentData[idx + 1] = setUnitSelectionInG(currentData[idx + 1], false);
+                        unitsCleared++;
+                    }
+                }
+            }
+            if (unitsCleared > 0) {
+                modified = true;
+                console.log(`[applyAction] Applied clear_selection, ${unitsCleared} units deselected`);
+            }
+            break;
+        }
+        
+        default:
+            console.warn(`[applyAction] Unknown action type: ${action.type}`);
+    }
+    
+    if (modified) {
+        grid.uploadCurrent(currentData);
+    }
+    
+    return modified;
+}
+
+/**
+ * Rollback to a checkpoint and replay simulation with actions.
+ * This is called when a remote action arrives from the past.
+ * 
+ * @param {number} targetTick - The tick we need to go back to
+ * @param {Object} incomingAction - The new action that triggered rollback
+ * @param {number} incomingPlayerId - The player who performed the incoming action
+ */
+function rollbackAndReplay(targetTick, incomingAction, incomingPlayerId) {
+    const currentTick = simTime;
+    console.log(`[Rollback] Starting rollback from tick ${currentTick} to ${targetTick}`);
+    
+    // Add the incoming action to the queue FIRST
+    if (!actionQueue.hasAction(targetTick, incomingPlayerId, incomingAction.type)) {
+        actionQueue.addAction(targetTick, incomingPlayerId, incomingAction.type, incomingAction, false);
+    }
+    
+    // Debug: show all actions in queue
+    console.log(`[Rollback] Queue has ${actionQueue.actions.length} actions:`,
+        actionQueue.actions.map(a => `${a.type}@${a.tick} P${a.playerId} applied=${a.applied}`));
+    
+    // Find the OLDEST UNAPPLIED action that needs replaying
+    // Already-applied actions don't need to be re-replayed!
+    const unappliedActions = actionQueue.actions.filter(a => !a.applied);
+    const oldestUnappliedTick = unappliedActions.length > 0 
+        ? Math.min(...unappliedActions.map(a => a.tick)) 
+        : targetTick;
+    const rollbackToTick = Math.min(targetTick, oldestUnappliedTick);
+    console.log(`[Rollback] ${unappliedActions.length} unapplied actions, oldestUnappliedTick=${oldestUnappliedTick}, rollbackToTick=${rollbackToTick}`);
+    
+    // Find the best checkpoint before ALL actions that need replaying
+    const checkpoint = checkpointBuffer.findCheckpointBefore(rollbackToTick);
+    if (!checkpoint) {
+        console.error(`[Rollback] No checkpoint found before tick ${rollbackToTick}, oldest: ${checkpointBuffer.getOldestTick()}`);
+        // Fallback: apply action to current state (may cause desyncs)
+        applyAction(incomingAction, incomingPlayerId);
+        return;
+    }
+    
+    console.log(`[Rollback] Found checkpoint at tick ${checkpoint.tick} (rollback target: ${rollbackToTick})`);
+    
+    // Verify checkpoint is strictly BEFORE the rollback target
+    // This is required because we need to replay simulation steps up to the action's tick
+    if (checkpoint.tick >= rollbackToTick) {
+        console.error(`[Rollback] ERROR: Checkpoint at ${checkpoint.tick} is NOT strictly before target ${rollbackToTick}! This should not happen.`);
+        // Emergency fallback: apply action to current state (may cause minor desyncs)
+        applyAction(incomingAction, incomingPlayerId);
+        return;
+    }
+    
+    // Restore from checkpoint
+    grid.uploadCurrent(checkpoint.cpuData);
+    simTime = checkpoint.tick;
+    
+    // Reset applied status for ALL actions at or after checkpoint tick - they all need replay
+    // Use checkpoint.tick - 1 to include actions AT the checkpoint tick
+    actionQueue.resetAppliedAfter(checkpoint.tick - 1);
+    
+    // Get ALL actions that need to be replayed (from checkpoint tick onwards)
+    // Include actions AT checkpoint.tick by using checkpoint.tick - 1 as start
+    const actionsToReplay = actionQueue.getActionsInRange(checkpoint.tick - 1, currentTick);
+    console.log(`[Rollback] ${actionsToReplay.length} actions to replay from tick ${checkpoint.tick} to ${currentTick}:`,
+        actionsToReplay.map(a => `${a.type}@${a.tick} by P${a.playerId}`));
+    
+    // Replay simulation from checkpoint to current tick
+    // We need to run simulation steps AND apply actions at the right ticks
+    while (simTime < currentTick) {
+        // Apply all actions that should happen at this tick
+        const actionsAtTick = actionsToReplay.filter(a => a.tick === simTime);
+        for (const action of actionsAtTick) {
+            if (!action.applied) {
+                console.log(`[Rollback] Applying ${action.type} at tick ${simTime} for player ${action.playerId}`);
+                applyAction(action.data, action.playerId);
+                action.applied = true;
+            }
+        }
+        
+        // Run simulation step (this increments simTime)
+        simulationStep();
+    }
+    
+    // Apply any actions at the final tick (currentTick) - these happen AFTER the last simulation step
+    const finalActions = actionsToReplay.filter(a => a.tick === currentTick);
+    for (const action of finalActions) {
+        if (!action.applied) {
+            console.log(`[Rollback] Applying final ${action.type} at tick ${simTime} for player ${action.playerId}`);
+            applyAction(action.data, action.playerId);
+            action.applied = true;
+        }
+    }
+    
+    console.log(`[Rollback] Replay complete, now at tick ${simTime}`);
+}
+
+// Handle incoming actions from other players
+networkSync.onActionReceived = (message) => {
+    const { playerId, simTime: actionTick, action } = message;
+    
+    console.log(`[Network] Received action from Player ${playerId}: ${action.type} at tick ${actionTick}, current tick: ${simTime}`);
+    
+    if (actionTick <= simTime) {
+        // Action is in the past - need to rollback and replay
+        rollbackAndReplay(actionTick, action, playerId);
+    } else {
+        // Action is in the future - queue it for later
+        actionQueue.addAction(actionTick, playerId, action.type, action, false);
+        console.log(`[Network] Queued future action for tick ${actionTick}`);
+    }
+};
 
 // Initialize network indicator
 updateNetworkIndicator();
@@ -1896,6 +2379,9 @@ if (roomParam && !isOnGitHub) {
     } else if (playerParam) {
         // Auto-connect as player with saved player ID
         console.log(`[Multiplayer] Auto-connecting to room ${roomId} as player ${requestedPlayerId}...`);
+        // Wait for state sync before running simulation
+        waitingForSync = true;
+        waitingForSyncStartTime = performance.now();
         (async () => {
             try {
                 const wsUrl = `ws://${window.location.host}/ws`;
@@ -1916,6 +2402,7 @@ let simStepCount = 0;
 let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
+let lastLoggedTick = -1;  // For debug logging
 
 // Speed synchronization for multiplayer
 let effectiveTicksPerSecond = 60;  // Measured actual TPS (may be throttled)
@@ -1992,12 +2479,49 @@ window.toggleSimSync = () => {
 console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
 
 function simulationStep() {
+    // In multiplayer, don't run simulation until we've received initial state sync
+    if (waitingForSync) {
+        // Check for timeout - if we've waited too long, proceed anyway
+        if (performance.now() - waitingForSyncStartTime > SYNC_WAIT_TIMEOUT) {
+            console.warn(`[Multiplayer] Sync wait timeout after ${SYNC_WAIT_TIMEOUT}ms, proceeding with local state`);
+            waitingForSync = false;
+        } else {
+            return;
+        }
+    }
+    
+    // Apply any queued actions that should happen at this tick (from network)
+    if (isMultiplayer) {
+        const actionsAtTick = actionQueue.getActionsAtTick(simTime);
+        
+        // If we have actions to apply, save a checkpoint BEFORE applying them
+        // This ensures we can rollback to the state right before the action
+        if (actionsAtTick.length > 0 && actionsAtTick.some(a => !a.applied)) {
+            const checkpointData = grid.download();
+            checkpointBuffer.saveCheckpoint(simTime, checkpointData);
+        }
+        
+        for (const action of actionsAtTick) {
+            if (!action.applied) {
+                applyAction(action.data, action.playerId);
+                action.applied = true;
+            }
+        }
+    }
+    
     grid.getWriteFramebuffer().bind();
     
     simShader.use();
     simShader.setTexture('u_state', grid.getReadTexture(), 0);
     simShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
     simShader.setFloat('u_time', simTime);
+    
+    // Debug: log every 100 ticks to verify simTime is consistent
+    if (Math.floor(simTime) % 100 === 0 && Math.floor(simTime) !== lastLoggedTick) {
+        lastLoggedTick = Math.floor(simTime);
+        console.log(`[Sim] Running step at tick ${Math.floor(simTime)}`);
+    }
+    
     simShader.dispatch();
     
     grid.getWriteFramebuffer().unbind();
@@ -2006,6 +2530,16 @@ function simulationStep() {
     simStepCount++;
     tpsCalcStepCount++;
     simTime += 1.0;
+    
+    // Save checkpoint periodically for rollback netcode
+    if (isMultiplayer && checkpointBuffer.shouldSaveCheckpoint(simTime)) {
+        const checkpointData = grid.download();
+        checkpointBuffer.saveCheckpoint(simTime, checkpointData);
+        
+        // Garbage collect old applied actions that we can't rollback to anyway
+        const oldestCheckpointTick = checkpointBuffer.getOldestTick();
+        actionQueue.garbageCollectBeforeCheckpoint(oldestCheckpointTick);
+    }
 }
 
 function logStats() {
@@ -2039,6 +2573,9 @@ function logStats() {
         
         // Update FPS display - potentialTicksPerSecond IS the render FPS when synced
         updateFpsDisplay(effectiveTicksPerSecond, targetTicksPerSecond, potentialTicksPerSecond, potentialTicksPerSecond);
+        
+        // Update tick counter display
+        updateTickDisplay();
     }
     
     // Send heartbeat periodically in multiplayer
@@ -2047,10 +2584,11 @@ function logStats() {
             // Send POTENTIAL TPS (what we could run at), not actual (throttled) TPS
             // This allows the system to speed up when both peers can go faster
             if (potentialTicksPerSecond > 1) {
-                networkSync.sendHeartbeat(potentialTicksPerSecond);
+                networkSync.sendHeartbeat(potentialTicksPerSecond, Math.floor(simTime));
             }
             lastHeartbeatTime = now;
         }
+        
     }
 }
 

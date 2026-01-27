@@ -23,7 +23,9 @@ export class NetworkSync {
         this.roomId = null;
         this.isConnected = false;
         this.isSpectator = false;
-        this.onStateReceived = null;
+        this.localSimTime = 0;            // Track local simulation time for cache detection
+        this.onStateReceived = null;      // Called when full state is received (legacy)
+        this.onActionReceived = null;     // Called when lightweight action is received (rollback netcode)
         this.onPlayerJoined = null;
         this.onPlayerLeft = null;
         this.onConnectionChange = null;
@@ -305,12 +307,18 @@ export class NetworkSync {
             console.log(`[NetworkSync] Network latency: ${networkLatency} ms`);
         }
         
-        // Only process syncs from other players (or all syncs for spectators)
-        if (this.isSpectator || parsed.playerId !== this.playerId) {
-            console.log(`[NetworkSync] Received binary sync from Player ${parsed.playerId} at tick ${parsed.simTime}`);
+        // Process syncs from other players OR cached state from server (even if originally from us)
+        // The cached state might be from our previous session (before refresh)
+        // We detect this by checking if our local simTime is 0 or much lower than the sync
+        const isCachedStateFromServer = this.localSimTime === undefined || this.localSimTime < parsed.simTime - 100;
+        
+        if (this.isSpectator || parsed.playerId !== this.playerId || isCachedStateFromServer) {
+            console.log(`[NetworkSync] Received binary sync from Player ${parsed.playerId} at tick ${parsed.simTime} (cached: ${isCachedStateFromServer})`);
             if (this.onStateReceived) {
                 this.onStateReceived(parsed);
             }
+        } else {
+            console.log(`[NetworkSync] Ignoring our own sync (Player ${parsed.playerId}, tick ${parsed.simTime})`);
         }
     }
 
@@ -369,10 +377,27 @@ export class NetworkSync {
                 break;
             
             case 'speed_sync':
-                // Server telling us to sync to a specific simulation speed
+                // Server telling us to sync to a specific simulation speed and tick count
                 console.log(`[NetworkSync] Speed sync: target ${message.targetTicksPerSecond.toFixed(1)} tps (slowest: Player ${message.slowestPlayer})`);
                 if (this.onSpeedSync) {
-                    this.onSpeedSync(message.targetTicksPerSecond, message.slowestPlayer);
+                    this.onSpeedSync(
+                        message.targetTicksPerSecond, 
+                        message.slowestPlayer,
+                        message.tickCounts || {},
+                        message.targetTick || 0,
+                        message.leaderPlayer || 0
+                    );
+                }
+                break;
+            
+            case 'game_action':
+                // Lightweight action message - no grid state, requires rollback
+                if (this.isSpectator || message.playerId !== this.playerId) {
+                    const networkLatency = message.sentAt ? Date.now() - message.sentAt : 0;
+                    console.log(`[NetworkSync] Received action from Player ${message.playerId}: ${message.action.type} at tick ${message.simTime} (latency: ${networkLatency}ms)`);
+                    if (this.onActionReceived) {
+                        this.onActionReceived(message);
+                    }
                 }
                 break;
                 
@@ -390,7 +415,7 @@ export class NetworkSync {
     // ========================================================================
 
     /**
-     * Sync state after performing an action (uses binary format)
+     * Sync state after performing an action (uses binary format - LEGACY, expensive)
      */
     syncState(gridData, action, simTime) {
         if (!this.isConnected) return;
@@ -398,6 +423,29 @@ export class NetworkSync {
         const binaryMessage = this.createBinarySyncMessage(gridData, action, simTime);
         this.sendBinary(binaryMessage);
         console.log(`[NetworkSync] Synced binary state after action: ${action.type}`);
+    }
+
+    /**
+     * Send a lightweight action (no grid state) for rollback netcode.
+     * The receiver will rollback to a checkpoint and replay with this action.
+     * 
+     * @param {Object} action - The action to send (type, data)
+     * @param {number} simTime - The tick when this action was applied
+     */
+    sendAction(action, simTime) {
+        if (!this.isConnected) return;
+        
+        const message = {
+            type: 'game_action',
+            playerId: this.playerId,
+            roomId: this.roomId,
+            simTime: simTime,
+            action: action,
+            sentAt: Date.now()
+        };
+        
+        this.send(message);
+        console.log(`[NetworkSync] Sent action: ${action.type} at tick ${simTime}`);
     }
 
     /**
@@ -425,17 +473,22 @@ export class NetworkSync {
     }
     
     /**
-     * Send heartbeat with current simulation speed
+     * Send heartbeat with current simulation speed and tick count
      * @param {number} ticksPerSecond - Current effective simulation speed
+     * @param {number} currentTick - Current simulation tick count
      */
-    sendHeartbeat(ticksPerSecond) {
+    sendHeartbeat(ticksPerSecond, currentTick) {
         if (!this.isConnected || this.isSpectator) return;
+        
+        // Track local sim time so we can detect cached state from server
+        this.localSimTime = currentTick;
         
         this.send({
             type: 'heartbeat',
             roomId: this.roomId,
             playerId: this.playerId,
-            ticksPerSecond: ticksPerSecond
+            ticksPerSecond: ticksPerSecond,
+            currentTick: currentTick
         });
     }
 }

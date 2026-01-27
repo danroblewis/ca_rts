@@ -70,6 +70,14 @@ export class CAGrid {
         this.buffer.upload(data);
     }
 
+    /**
+     * Upload data to only the current read frame.
+     * Use for incremental updates (e.g., applying actions) without resetting history.
+     */
+    uploadCurrent(data) {
+        this.buffer.uploadCurrent(data);
+    }
+
     /** Download current state to CPU (slow, avoid in hot path) */
     download() {
         return this.buffer.download();

@@ -70,13 +70,16 @@ CombatResult evaluateCombat(vec2 myPos, float time, sampler2D state, vec2 resolu
                 // We need consistent results for both cells, so use sorted coordinates
                 vec2 minPos = min(myPos, neighborPos);
                 vec2 maxPos = max(myPos, neighborPos);
-                float combatSeed = minPos.x + minPos.y * 256.0 + maxPos.x * 65536.0 + time * 0.01;
-                float coinFlip = hash(minPos + maxPos, combatSeed);
                 
-                // Determine winner: coin flip < 0.5 means lower-position wins
-                // We need to know if WE are the lower position
-                bool iAmLowerPos = (myPos.x + myPos.y * 256.0) < (neighborPos.x + neighborPos.y * 256.0);
+                // Create a combined position for hashing that's consistent for both cells
+                vec2 combatPos = minPos + maxPos * 256.0;
+                float coinFlip = hash(combatPos, time);
+                
+                // Coin flip: < 0.5 means lower-position wins
                 bool lowerWins = coinFlip < 0.5;
+                
+                // Determine if we are the "lower position" (deterministic ordering)
+                bool iAmLowerPos = (myPos.x + myPos.y * 256.0) < (neighborPos.x + neighborPos.y * 256.0);
                 
                 // I take damage if: (I'm lower AND lower loses) OR (I'm higher AND higher loses)
                 if ((iAmLowerPos && !lowerWins) || (!iAmLowerPos && lowerWins)) {
