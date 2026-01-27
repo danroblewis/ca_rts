@@ -26,6 +26,7 @@ import { initGameState, getGameState } from './game/GameState.js';
 import { initCamera, getCamera } from './game/Camera.js';
 import { MatchmakingDialog } from './ui/MatchmakingDialog.js';
 import { MapGenerator } from './game/MapGenerator.js';
+import { GridActions } from './game/GridActions.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -282,6 +283,7 @@ console.log(`Performance mode: ${performanceMode ? 'ON' : 'OFF'}`);
 // Initialize World
 // ============================================================================
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
+const gridActions = new GridActions(GRID_SIZE);
 
 // ============================================================================
 // Rollback Netcode - Checkpoint and Action Queue
@@ -387,67 +389,25 @@ function setCell(x, y, type, dataA = 0, dataB = 0, dataC = 0) {
 // Selection Management - Works directly with grid data
 // ============================================================================
 
-// Mark units in a region as selected (only current player's units)
-// Sets the selection bit (bit 5) in the G channel of each unit
+// Mark units in a region as selected (delegates to GridActions)
 function markUnitsInRegion(region) {
     const currentData = grid.download();
-    const unitType = currentPlayer === PLAYER_2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
-    
-    let unitsMarked = 0;
-    
-    for (let y = Math.max(0, region.y1); y <= Math.min(GRID_SIZE - 1, region.y2); y++) {
-        for (let x = Math.max(0, region.x1); x <= Math.min(GRID_SIZE - 1, region.x2); x++) {
-            const gridIdx = (y * GRID_SIZE + x) * 4;
-            const cellType = Math.floor(currentData[gridIdx] + 0.5);
-            
-            // Check if this is our unit
-            if (cellType === unitType) {
-                // Set the selection bit in G channel
-                currentData[gridIdx + 1] = setUnitSelectionInG(currentData[gridIdx + 1], true);
-                unitsMarked++;
-            }
-        }
-    }
-    
-    // Upload modified grid data
+    const unitsMarked = gridActions.markUnitsInRegion(currentData, region, currentPlayer);
     if (unitsMarked > 0) {
         grid.upload(currentData);
         console.log(`[Selection] Marked ${unitsMarked} units`);
     }
-    
     return unitsMarked;
 }
 
-// Clear all selections from the grid (clears selection bit for all units)
+// Clear all selections from the grid (delegates to GridActions)
 function clearAllSelections() {
     const currentData = grid.download();
-    const unitType = currentPlayer === PLAYER_2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
-    
-    let unitsCleared = 0;
-    
-    for (let y = 0; y < GRID_SIZE; y++) {
-        for (let x = 0; x < GRID_SIZE; x++) {
-            const gridIdx = (y * GRID_SIZE + x) * 4;
-            const cellType = Math.floor(currentData[gridIdx] + 0.5);
-            
-            // Check if this is our unit
-            if (cellType === unitType) {
-                // Check if currently selected
-                if (getUnitSelectedFromG(currentData[gridIdx + 1])) {
-                    // Clear the selection bit
-                    currentData[gridIdx + 1] = setUnitSelectionInG(currentData[gridIdx + 1], false);
-                    unitsCleared++;
-                }
-            }
-        }
-    }
-    
-    // Upload modified grid data
+    const unitsCleared = gridActions.clearAllSelections(currentData, currentPlayer);
     if (unitsCleared > 0) {
         grid.upload(currentData);
         console.log(`[Selection] Cleared ${unitsCleared} units`);
     }
-    
     return unitsCleared;
 }
 
@@ -455,52 +415,18 @@ function clearAllSelections() {
 // function updateSelectionForMovingUnits() { ... }
 
 // Apply a unit command - modify units that are marked as selected
+// Apply a unit command - delegates to GridActions
 function applyUnitCommand(command) {
     const { destX, destY, player } = command;
-    
-    // Download current grid state
     const currentData = grid.download();
+    const unitsCommanded = gridActions.applyUnitCommand(currentData, destX, destY, player);
     
-    // Determine unit type for this player
-    const unitType = player === PLAYER_2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
-    
-    let unitsCommanded = 0;
-    
-    // Iterate through entire grid looking for selected units
-    for (let y = 0; y < GRID_SIZE; y++) {
-        for (let x = 0; x < GRID_SIZE; x++) {
-            const gridIdx = (y * GRID_SIZE + x) * 4;
-            const cellType = Math.floor(currentData[gridIdx] + 0.5);
-            
-            // Check if this is our unit and if it's selected (bit 5 in G channel)
-            if (cellType === unitType && getUnitSelectedFromG(currentData[gridIdx + 1])) {
-                // Update the unit's factory position (home base) to the destination
-                // This allows units to move beyond their original distance limit
-                // Channel B (gridIdx + 2) stores the packed factory position
-                const newFactoryPos = packCoords(destX, destY);
-                currentData[gridIdx + 2] = newFactoryPos;
-                
-                // Encode the destination as memory with high freshness
-                const newMemory = packCoords(destX, destY) + COMMAND_FRESHNESS * MEMORY_PACK_BASE;
-                
-                // Update the unit's memory to point to destination
-                currentData[gridIdx + 3] = newMemory;
-                
-                unitsCommanded++;
-            }
-        }
-    }
-    
-    // Upload modified data
     if (unitsCommanded > 0) {
         grid.upload(currentData);
         console.log(`[Command] Commanded ${unitsCommanded} units to move to (${destX}, ${destY})`);
     } else {
         console.log('[Command] No selected units found');
     }
-    
-    // Don't clear selection - user can issue multiple commands to same units
-    // Selection is only cleared when user presses Escape
 }
 
 // Map generator instance
@@ -2320,31 +2246,10 @@ function fastSimulationLoop() {
 // Win/Lose Condition Check
 // ============================================================================
 
-// Scan the grid to count actual factories per player
+// Scan the grid to count actual factories per player (delegates to GridActions)
 function countFactoriesOnMap() {
     const data = grid.download();
-    const counts = { [PLAYER_1]: 0, [PLAYER_2]: 0 };
-    const factoryCenters = { [PLAYER_1]: new Set(), [PLAYER_2]: new Set() };
-    
-    for (let y = 0; y < GRID_SIZE; y++) {
-        for (let x = 0; x < GRID_SIZE; x++) {
-            const idx = (y * GRID_SIZE + x) * 4;
-            const cellType = data[idx];
-            
-            if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
-                const owner = cellType === CELL_MINING_FACTORY_P2 ? PLAYER_2 : PLAYER_1;
-                const centerX = data[idx + 2];
-                const centerY = data[idx + 3];
-                const key = `${centerX},${centerY}`;
-                factoryCenters[owner].add(key);
-            }
-        }
-    }
-    
-    counts[PLAYER_1] = factoryCenters[PLAYER_1].size;
-    counts[PLAYER_2] = factoryCenters[PLAYER_2].size;
-    
-    return counts;
+    return gridActions.countFactories(data);
 }
 
 // Check for win/lose condition
