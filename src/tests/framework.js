@@ -17,15 +17,46 @@ const testFilterLower = testFilter.toLowerCase();
 // Split by | for multiple filters (used when running failing tests)
 const testFilterParts = testFilterLower.split('|').map(s => s.trim()).filter(s => s.length > 0);
 
+// Exclude filter - skip tests matching these patterns
+const excludeFilter = urlParams.get('exclude') || urlParams.get('x') || '';
+const excludeFilterLower = excludeFilter.toLowerCase();
+const excludeFilterParts = excludeFilterLower.split('|').map(s => s.trim()).filter(s => s.length > 0);
+
+// Skip GPU tests shortcut - ?fast=1 or ?nogpu=1
+const skipGPU = urlParams.get('fast') === '1' || urlParams.get('nogpu') === '1';
+
 /**
  * Check if a test name matches the current filter
  * Supports multiple filters separated by | (OR logic)
+ * Also checks exclude filter to skip certain tests
  */
 export function shouldRunTest(name) {
-    if (!testFilter) return true;
     const nameLower = name.toLowerCase();
-    // Match if ANY filter part matches
+    
+    // Check exclusions first
+    if (excludeFilterParts.length > 0) {
+        if (excludeFilterParts.some(filter => nameLower.includes(filter))) {
+            return false;
+        }
+    }
+    
+    // Check include filter
+    if (!testFilter) return true;
     return testFilterParts.some(filter => nameLower.includes(filter));
+}
+
+/**
+ * Check if GPU tests should be skipped (?fast=1 or ?nogpu=1)
+ */
+export function shouldSkipGPU() {
+    return skipGPU;
+}
+
+/**
+ * Get the exclude filter string
+ */
+export function getExcludeFilter() {
+    return excludeFilter;
 }
 
 /**

@@ -81,11 +81,12 @@
         <input type="text" id="testFilter" placeholder="e.g. blueprint, deposit, movement..." />
         <button id="runFiltered">Run</button>
         <button id="runAll" style="background: #6b7280;">Run All</button>
+        <button id="runFast" style="background: #10b981;">⚡ Fast (No GPU)</button>
         <div class="help">
             Filter by test name substring. Examples: 
             <code>?test=blueprint</code>, 
-            <code>?t=deposit</code>, 
-            <code>?test=unit%20moves</code>
+            <code>?exclude=gpu</code>,
+            <code>?fast=1</code> (skip GPU tests)
         </div>
     </div>
     
@@ -109,6 +110,10 @@
         
         document.getElementById('runAll').addEventListener('click', () => {
             window.location.href = 'test.html';
+        });
+        
+        document.getElementById('runFast').addEventListener('click', () => {
+            window.location.href = 'test.html?fast=1';
         });
         
         // Allow Enter key to submit filter
