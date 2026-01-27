@@ -1016,8 +1016,7 @@ networkSync.onActionReceived = (message) => {
     rollbackManager.processRemoteAction(action, playerId, actionTick);
 };
 
-// Initialize network indicator
-updateNetworkIndicator();
+// Note: updateNetworkIndicator() is called after speedToggle is initialized
 
 // Expose to console
 window.toggleMultiplayer = toggleMultiplayer;
@@ -1103,6 +1102,9 @@ const speedToggle = new SpeedToggle({
 });
 
 console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
+
+// Initialize network indicator now that speedToggle exists
+updateNetworkIndicator();
 
 function simulationStep() {
     // In multiplayer, don't run simulation until we've received initial state sync
