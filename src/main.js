@@ -419,11 +419,7 @@ let winConditionManager = null;
 // These are called by InputHandler when user performs actions.
 // Input state (mouseX, mouseY, shiftHeld, isSelecting, etc.) is now managed by InputHandler.
 
-// Helper function for render loop to access input state
-function getVisibleGridSize() { return camera.getVisibleGridSize(); }
-
-// Helper to convert screen coords to grid coords (used by render loop for mouse position)
-function screenToGrid(screenX, screenY) { return camera.screenToGrid(screenX, screenY); }
+// Note: camera.screenToGrid() and camera.getVisibleGridSize() are used directly
 
 // ============================================================================
 // Input Handler Callback Implementations
@@ -1105,11 +1101,6 @@ const speedToggle = new SpeedToggle({
     },
     onFastModeStart: () => fastSimulationLoop()
 });
-
-// Helper for network indicator to update speed toggle display
-function updateSpeedToggleDisplay() {
-    // No-op - SpeedToggle handles its own UI now
-}
 
 console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
 
