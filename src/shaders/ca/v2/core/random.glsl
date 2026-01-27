@@ -1,27 +1,44 @@
 /**
  * Random/Hash Functions - INTEGER-ONLY for cross-platform determinism
  * 
- * These functions use only integer operations to ensure identical results
- * across different GPU architectures (PC, Mac M4, etc.)
+ * These functions use only integer operations with EXPLICIT MODULAR ARITHMETIC
+ * to ensure identical results across different GPU architectures (PC, Mac M4, etc.)
  * 
- * NO fract(), NO floating-point multiplication for randomness.
+ * Key insight: Signed integer overflow is UNDEFINED in GLSL. We must keep
+ * all values within safe ranges to avoid hardware-specific behavior.
  */
 
 #ifndef RANDOM_GLSL
 #define RANDOM_GLSL
 
-// Integer hash using simple mixing - deterministic across all GPUs
-// Uses int instead of uint for better compatibility
+// Large prime modulus - keeps all values in safe range
+const int HASH_MOD = 100003;  // Prime number, fits well in 32-bit
+
+// Safe modulo that handles negative numbers
+int safeMod(int x, int m) {
+    int result = x - (x / m) * m;  // Integer division for modulo
+    if (result < 0) result = result + m;
+    return result;
+}
+
+// Integer hash using safe modular arithmetic
+// All intermediate values stay within safe bounds
 int ihash(int x) {
-    // Simple integer hash - avoid bitwise for maximum compatibility
-    // Based on simple linear congruential mixing
-    x = x * 1103515245 + 12345;
-    x = x / 65536;  // Integer division to mix bits
-    x = x * 1103515245 + 12345;
+    // First, bring x into safe range
+    x = safeMod(x, HASH_MOD);
+    
+    // Mix using small multipliers that won't overflow
+    // 31 * 100003 = 3.1M, safe
+    // 37 * 100003 = 3.7M, safe
+    x = safeMod(x * 31 + 17, HASH_MOD);
+    x = safeMod(x * 37 + 23, HASH_MOD);
+    x = safeMod(x * 41 + 29, HASH_MOD);
+    
     return x;
 }
 
-// Hash position and seed to get a deterministic integer
+// Hash position and time to get a deterministic integer
+// Uses safe modular arithmetic at each step to prevent overflow
 int hashPosTime(vec2 pos, float time) {
     // Convert floats to integers carefully
     // Position should always be integer-valued (cell coordinates)
@@ -29,8 +46,14 @@ int hashPosTime(vec2 pos, float time) {
     int py = int(pos.y + 0.5);
     int t = int(time);
     
-    // Combine using simple multiplication and addition
-    int h = px * 73856 + py * 19349 + t * 83492;
+    // Bring each component into safe range BEFORE combining
+    // This prevents overflow during multiplication
+    px = safeMod(px, 1009);  // Prime < 1024
+    py = safeMod(py, 1013);  // Different prime
+    t = safeMod(t, 10007);   // Prime for time
+    
+    // Now combine - max value is roughly 1009*73 + 1013*19 + 10007*83 = ~900K, safe
+    int h = px * 73 + py * 19 + t * 83;
     
     return ihash(h);
 }
@@ -38,16 +61,14 @@ int hashPosTime(vec2 pos, float time) {
 // Get a float 0.0-1.0 from integer hash (for compatibility with existing code)
 float hash(vec2 p, float time) {
     int h = hashPosTime(p, time);
-    // Make positive and get 0.0-1.0 range
-    if (h < 0) h = -h;
-    return float(h - (h / 10000) * 10000) / 10000.0;  // h % 10000 using integer division
+    // h is already positive and < HASH_MOD, so just normalize
+    return float(h) / float(HASH_MOD);
 }
 
 // Random direction 1-8 (including diagonals) - pure integer
 int randomDir(vec2 pos, float time) {
     int h = hashPosTime(pos, time);
-    if (h < 0) h = -h;  // Make positive
-    return (h - (h / 8) * 8) + 1;  // h % 8 using integer division
+    return safeMod(h, 8) + 1;  // Returns 1-8
 }
 
 // Direction toward target - prefers diagonal when both axes differ

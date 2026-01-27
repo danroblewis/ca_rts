@@ -1628,29 +1628,77 @@ networkSync.onStateReceived = (syncData) => {
     // Received state from another player - apply it
     const receiveTime = performance.now();
     const isPeriodicSync = syncData.action && syncData.action.type === 'periodic_sync';
-    console.log(`[Multiplayer] Applying ${isPeriodicSync ? 'periodic' : 'full'} state from Player ${syncData.playerId} at tick ${syncData.simTime}, our current tick: ${simTime}`);
+    const tickDiff = syncData.simTime - simTime;
+    console.log(`[Sync] ${isPeriodicSync ? 'PERIODIC' : 'FULL'} sync received:`);
+    console.log(`[Sync]   From: Player ${syncData.playerId}`);
+    console.log(`[Sync]   Their tick: ${syncData.simTime}`);
+    console.log(`[Sync]   Our tick BEFORE: ${Math.floor(simTime)}`);
+    console.log(`[Sync]   Tick difference: ${tickDiff > 0 ? '+' : ''}${Math.floor(tickDiff)} (${tickDiff > 0 ? 'we are behind' : tickDiff < 0 ? 'we are ahead' : 'in sync'})`);
     
     // Clear waiting state - we now have valid state to work with
     if (waitingForSync) {
-        console.log(`[Multiplayer] State sync received, simulation can now run`);
+        console.log(`[Sync] State sync received, simulation can now run`);
         waitingForSync = false;
     }
     
     // Update local grid with received state
     const uploadStart = performance.now();
-    grid.upload(syncData.gridState);
-    const uploadEnd = performance.now();
-    console.log(`[Multiplayer] grid.upload() took ${(uploadEnd - uploadStart).toFixed(2)} ms`);
+    const stateSize = syncData.gridState ? syncData.gridState.length : 0;
+    console.log(`[Sync]   Grid state size: ${stateSize} floats (${(stateSize * 4 / 1024 / 1024).toFixed(2)} MB)`);
     
-    // For periodic syncs: DON'T change simTime - just apply grid state
-    // This prevents "jumping" back and forth. The tick sync mechanism handles timing.
-    // For initial/player syncs: DO sync the time since we're starting fresh
+    if (syncData.gridState && stateSize > 0) {
+        grid.upload(syncData.gridState);
+        const uploadEnd = performance.now();
+        console.log(`[Sync]   Grid upload took ${(uploadEnd - uploadStart).toFixed(2)} ms`);
+    } else {
+        console.error(`[Sync]   ERROR: No grid state to upload!`);
+        return;  // Don't continue if no state
+    }
+    
+    // For periodic syncs: Apply grid state, set simTime to match, then fast-forward
+    // This keeps the grid state and simTime in sync while minimizing visual jumps
+    // For initial/player syncs: Just sync the time since we're starting fresh
     const oldSimTime = simTime;
     if (!isPeriodicSync) {
         simTime = syncData.simTime;
-        console.log(`[Multiplayer] simTime synced from ${oldSimTime} to ${simTime}`);
+        console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (synced to their tick)`);
     } else {
-        console.log(`[Multiplayer] Periodic sync - keeping local simTime ${simTime} (received tick ${syncData.simTime})`);
+        // For periodic sync: we need to fast-forward from the received tick to our current tick
+        // This way the grid state evolves correctly to match our local timeline
+        const ticksToFastForward = Math.floor(oldSimTime - syncData.simTime);
+        
+        if (ticksToFastForward > 0 && ticksToFastForward < 120) {
+            // We're ahead - fast-forward the received state to catch up
+            console.log(`[Sync]   Fast-forwarding ${ticksToFastForward} ticks to catch up...`);
+            simTime = syncData.simTime;  // Start from their tick
+            
+            // Run simulation steps to catch up (without rendering)
+            // Note: grid.upload() put the state in the current READ buffer
+            // We need to run simulation (read -> write) then swap, NOT swap first!
+            for (let i = 0; i < ticksToFastForward; i++) {
+                // Run the simulation shader (reads from current, writes to next)
+                simShader.use();
+                simShader.setTexture('u_state', grid.getReadTexture(), 0);
+                simShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
+                simShader.setFloat('u_time', simTime);
+                grid.getWriteFramebuffer().bind();
+                simShader.dispatch();
+                grid.getWriteFramebuffer().unbind();
+                
+                // Now swap so the result becomes the new read buffer
+                grid.swap();
+                simTime += 1.0;
+            }
+            console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (fast-forwarded)`);
+        } else if (ticksToFastForward <= 0) {
+            // We're behind or in sync - just accept the state and sync time
+            simTime = syncData.simTime;
+            console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (we were behind, synced)`);
+        } else {
+            // Way too many ticks to fast-forward (>2 seconds) - just accept the jump
+            simTime = syncData.simTime;
+            console.log(`[Sync]   Our tick AFTER: ${Math.floor(simTime)} (too far ahead, reset)`);
+        }
     }
     
     // For initial syncs: clear rollback state since we're starting fresh
