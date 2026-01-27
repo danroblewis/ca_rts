@@ -89,18 +89,23 @@ function updateProgress(currentTest = null) {
     const output = document.getElementById('output');
     const completed = passed + failed;
     const filterInfo = testFilter ? `\n🔍 Filter: "${testFilter}"` : '';
+    const skipInfo = skipGPU ? '\n⚡ Fast mode (GPU tests skipped)' : '';
     const progressText = totalExpected > 0 
         ? `Running tests... ${completed}/${totalExpected}`
         : `Running tests... ${completed} completed`;
     
     const barWidth = 30;
-    const filledWidth = totalExpected > 0 ? Math.round((completed / totalExpected) * barWidth) : 0;
+    // Clamp filledWidth to prevent negative values when completed > totalExpected
+    const filledWidth = totalExpected > 0 
+        ? Math.min(barWidth, Math.max(0, Math.round((completed / totalExpected) * barWidth))) 
+        : 0;
+    const emptyWidth = barWidth - filledWidth;
     const progressBar = totalExpected > 0 
-        ? `[${'█'.repeat(filledWidth)}${'░'.repeat(barWidth - filledWidth)}]`
+        ? `[${'█'.repeat(filledWidth)}${'░'.repeat(emptyWidth)}]`
         : '';
     
     const currentLine = currentTest ? `\n▶ ${currentTest}` : '';
-    output.textContent = `${progressText}${filterInfo}\n${progressBar}${currentLine}`;
+    output.textContent = `${progressText}${filterInfo}${skipInfo}\n${progressBar}${currentLine}`;
 }
 
 export function assert(condition, message) {
