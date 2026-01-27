@@ -502,181 +502,63 @@ function screenToGrid(screenX, screenY) { return camera.screenToGrid(screenX, sc
 
 /**
  * Handle factory placement at grid position
+ * Validates placement and delegates to ActionApplier for grid manipulation
  */
 handlePlaceFactory = (x, y) => {
     const currentData = grid.download();
-    const centerX = x;
-    const centerY = y;
     
-    // Check if in multiplayer waiting for opponent
+    // Pre-placement validation (game-specific rules)
     if (isMultiplayer && connectedPlayers.size < 2) {
         console.log('Waiting for opponent to join before placing factories');
         audioEngine.playReject();
         return;
     }
     
-    // Check bounds for 3x3
-    if (centerX < 1 || centerX >= GRID_SIZE - 1 || centerY < 1 || centerY >= GRID_SIZE - 1) {
-        console.log('Too close to edge for 3x3 structure');
+    if (!gridActions.canPlaceFactory(currentData, x, y)) {
+        console.log('Cannot place factory - location invalid or blocked');
         audioEngine.playReject();
         return;
     }
     
-    // Check factory limit
     if (playerFactoryCounts[currentPlayer] >= MAX_FACTORIES_PER_PLAYER) {
-        console.log(`Cannot place factory - Player ${currentPlayer} already has ${MAX_FACTORIES_PER_PLAYER} bases (delete some to place more)`);
+        console.log(`Cannot place factory - Player ${currentPlayer} already has ${MAX_FACTORIES_PER_PLAYER} bases`);
         audioEngine.playReject();
         return;
     }
     
-    // Check that all 8 cells (excluding center) are empty before placing
-    let canPlace = true;
-    for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;  // Skip center
-            const fx = centerX + dx;
-            const fy = centerY + dy;
-            const idx = (fy * GRID_SIZE + fx) * 4;
-            const cellType = currentData[idx];
-            if (cellType !== CELL_EMPTY) {
-                canPlace = false;
-                break;
-            }
-        }
-        if (!canPlace) break;
-    }
-    
-    if (!canPlace) {
-        console.log('Cannot place factory - some cells are not empty');
-        audioEngine.playReject();
-        return;
-    }
-    
-    // First factory FOR EACH PLAYER is built (has resources), subsequent are unbuilt
+    // Determine if this is the first factory (gets resources) or subsequent (unbuilt)
     const isUnbuilt = playerFactoryCounts[currentPlayer] > 0;
-    const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
-    const resourcesPerCell = totalResources / 8.0;
+    const action = { type: 'place_factory', x, y, isUnbuilt };
     
-    console.log(`[Factory Placement] currentPlayer: ${currentPlayer}, PLAYER_1: ${PLAYER_1}, PLAYER_2: ${PLAYER_2}`);
-    
-    // Place 3x3 grid of factory cells (center stays empty)
-    for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            
-            const fx = centerX + dx;
-            const fy = centerY + dy;
-            const idx = (fy * GRID_SIZE + fx) * 4;
-            
-            const factoryType = currentPlayer === PLAYER_2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
-            currentData[idx + 0] = factoryType;
-            currentData[idx + 1] = isUnbuilt ? 0 : resourcesPerCell;
-            currentData[idx + 2] = centerX;
-            currentData[idx + 3] = centerY;
-        }
-    }
-    
+    // Apply action using ActionApplier (modifies data in place)
+    // Note: onStateChange callback automatically updates factory counts
+    actionApplier.applyPlaceFactory(currentData, action, currentPlayer);
     grid.upload(currentData);
-    factoriesPlaced++;
-    playerFactoryCounts[currentPlayer]++;
-    playerTotalFactoriesPlaced[currentPlayer]++;
-    updatePlayerIndicator();
     
-    if (isUnbuilt) {
-        console.log(`Placed 3x3 UNBUILT factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY})`);
-    } else {
-        console.log(`Placed 3x3 factory #${factoriesPlaced} for Player ${currentPlayer} (${playerFactoryCounts[currentPlayer]}/${MAX_FACTORIES_PER_PLAYER} bases) at (${centerX}, ${centerY}) with ${totalResources} total resources`);
-    }
+    console.log(`[Factory] Placed ${isUnbuilt ? 'UNBUILT ' : ''}factory #${factoriesPlaced} for P${currentPlayer} at (${x}, ${y})`);
     
     // Sync with network
-    syncAction({
-        type: 'place_factory',
-        x: centerX,
-        y: centerY,
-        player: currentPlayer,
-        isUnbuilt: isUnbuilt,
-        factoryNumber: factoriesPlaced
-    });
+    syncAction({ ...action, player: currentPlayer, factoryNumber: factoriesPlaced });
 };
 
 /**
  * Handle demolish at grid position
+ * Delegates to ActionApplier for grid manipulation
  */
 handleDemolish = (x, y) => {
     const currentData = grid.download();
-    let markedCount = 0;
-    let deletedCount = 0;
-    const factoriesAffected = new Set();
+    const action = { type: 'demolish', x, y };
     
-    for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
-        for (let dx = -DELETE_RADIUS; dx <= DELETE_RADIUS; dx++) {
-            const fx = x + dx;
-            const fy = y + dy;
-            
-            if (fx < 0 || fx >= GRID_SIZE || fy < 0 || fy >= GRID_SIZE) continue;
-            
-            const idx = (fy * GRID_SIZE + fx) * 4;
-            const cellType = currentData[idx];
-            const buildCount = currentData[idx + 1];
-            
-            if (cellType === CELL_MINING_FACTORY || cellType === CELL_MINING_FACTORY_P2) {
-                const owner = cellType === CELL_MINING_FACTORY_P2 ? PLAYER_2 : PLAYER_1;
-                
-                // Only allow demolishing own factories
-                if (owner !== currentPlayer) continue;
-                
-                const centerX = currentData[idx + 2];
-                const centerY = currentData[idx + 3];
-                
-                factoriesAffected.add(`${owner},${centerX},${centerY}`);
-                
-                if (buildCount > 0) {
-                    currentData[idx + 0] = CELL_DEMOLISH;
-                    currentData[idx + 1] = 0;
-                    currentData[idx + 2] = centerX;
-                    currentData[idx + 3] = centerY;
-                    markedCount++;
-                } else {
-                    currentData[idx + 0] = CELL_EMPTY;
-                    currentData[idx + 1] = 0;
-                    currentData[idx + 2] = 0;
-                    currentData[idx + 3] = 0;
-                    deletedCount++;
-                }
-            }
-        }
-    }
+    // Apply action using ActionApplier (modifies data in place)
+    const modified = actionApplier.applyDemolish(currentData, action, currentPlayer);
     
-    for (const key of factoriesAffected) {
-        const [owner] = key.split(',').map(Number);
-        playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - 1);
-    }
-    if (factoriesAffected.size > 0) {
+    if (modified) {
+        grid.upload(currentData);
+        // Note: Factory counts are updated via onStateChange callback in ActionApplier
         updatePlayerIndicator();
-    }
-    
-    grid.upload(currentData);
-    if (markedCount > 0 || deletedCount > 0) {
-        const parts = [];
-        if (deletedCount > 0) parts.push(`deleted ${deletedCount} unbuilt`);
-        if (markedCount > 0) parts.push(`marked ${markedCount} for demolition`);
-        if (factoriesAffected.size > 0) parts.push(`${factoriesAffected.size} base(s) freed`);
-        console.log(`${parts.join(', ')} around (${x}, ${y})`);
         
-        const factoriesFreed = {};
-        for (const key of factoriesAffected) {
-            const [owner] = key.split(',').map(Number);
-            factoriesFreed[owner] = (factoriesFreed[owner] || 0) + 1;
-        }
-        
-        syncAction({
-            type: 'demolish',
-            x: x,
-            y: y,
-            deleted: deletedCount,
-            marked: markedCount,
-            factoriesFreed: factoriesFreed
-        });
+        // Sync with network
+        syncAction({ ...action, player: currentPlayer });
     }
 };
 
