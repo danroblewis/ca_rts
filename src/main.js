@@ -30,6 +30,7 @@ import { InputHandler } from './input/InputHandler.js';
 import { GameUI } from './ui/GameUI.js';
 import { ActionApplier } from './game/ActionApplier.js';
 import { RollbackManager } from './game/RollbackManager.js';
+import { SettingsUI } from './ui/SettingsUI.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -110,27 +111,8 @@ if (seedParam) {
 
 console.log(`Map seed: ${mapSeed}`);
 
-// ============================================================================
-// URL Parameter Handling for Shader Selection
-// ============================================================================
-
-function getShaderModeFromURL() {
-    const params = new URLSearchParams(window.location.search);
-    const mode = params.get('shader');
-    return mode === 'debug' ? 'debug' : 'metaball';
-}
-
-function updateURLShaderMode(mode) {
-    const url = new URL(window.location);
-    if (mode === 'debug') {
-        url.searchParams.set('shader', 'debug');
-    } else {
-        url.searchParams.delete('shader');
-    }
-    window.history.replaceState({}, '', url);
-}
-
-let currentShaderMode = getShaderModeFromURL();
+// Shader mode (managed by SettingsUI, declared here for use before init)
+let currentShaderMode = 'metaball';
 
 // ============================================================================
 // Initialize GPU
@@ -199,87 +181,34 @@ await Promise.all([
 console.timeEnd('⏱️ Shader compilation (GPU)');
 console.timeEnd('⏱️ Total shader loading');
 
-// Active render shader (switchable)
-let renderShader = currentShaderMode === 'debug' ? debugRenderShader : metaballRenderShader;
-
 // ============================================================================
-// Shader Toggle UI Setup
+// Settings UI (Shader and Performance Mode Toggles)
 // ============================================================================
 
-const shaderToggle = document.getElementById('shader-toggle');
-const labelPretty = document.getElementById('label-pretty');
+let renderShader = null;  // Set by SettingsUI
 
-function updateToggleLabels() {
-    if (currentShaderMode === 'debug') {
-        labelPretty.classList.remove('active');
-        shaderToggle.checked = true;
-    } else {
-        labelPretty.classList.add('active');
-        shaderToggle.checked = false;
+const settingsUI = new SettingsUI({
+    shaders: {
+        metaball: metaballRenderShader,
+        debug: debugRenderShader
+    },
+    onShaderChange: (shader, mode) => {
+        renderShader = shader;
+        currentShaderMode = mode;
+    },
+    onPerformanceChange: (enabled, minimap) => {
+        performanceMode = enabled;
+        showMinimap = minimap;
     }
-}
-
-function switchShader(mode) {
-    currentShaderMode = mode;
-    renderShader = mode === 'debug' ? debugRenderShader : metaballRenderShader;
-    updateURLShaderMode(mode);
-    updateToggleLabels();
-    console.log(`Switched to ${mode === 'debug' ? 'Debug' : 'Metaball'} shader`);
-}
-
-shaderToggle.addEventListener('change', (e) => {
-    switchShader(e.target.checked ? 'debug' : 'metaball');
 });
 
-// Initialize toggle state from URL
-updateToggleLabels();
+// Initialize render shader from settings
+renderShader = settingsUI.getCurrentShader();
+currentShaderMode = settingsUI.getShaderMode();
+performanceMode = settingsUI.isPerformanceMode();
+showMinimap = settingsUI.shouldShowMinimap();
 
-// Expose to console for easy switching
-window.switchShader = switchShader;
 console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or switchShader('metaball') to change)`);
-
-// ============================================================================
-// Performance Mode Toggle
-// ============================================================================
-
-const perfToggle = document.getElementById('perf-toggle');
-const perfLabel = document.getElementById('perf-label');
-
-function updatePerfLabel() {
-    if (performanceMode) {
-        perfLabel.style.opacity = '1';
-        perfLabel.style.color = '#22c55e';
-        perfToggle.checked = true;
-    } else {
-        perfLabel.style.opacity = '0.8';
-        perfLabel.style.color = '#aaa';
-        perfToggle.checked = false;
-    }
-}
-
-function togglePerformanceMode(enabled) {
-    performanceMode = enabled;
-    showMinimap = !enabled;
-    
-    // Update URL
-    const url = new URL(window.location);
-    if (enabled) {
-        url.searchParams.set('perf', '1');
-    } else {
-        url.searchParams.delete('perf');
-    }
-    window.history.replaceState({}, '', url);
-    
-    updatePerfLabel();
-    console.log(`Performance mode: ${enabled ? 'ON' : 'OFF'} (minimap: ${showMinimap ? 'visible' : 'hidden'})`);
-}
-
-perfToggle.addEventListener('change', (e) => {
-    togglePerformanceMode(e.target.checked);
-});
-
-// Initialize from URL
-updatePerfLabel();
 console.log(`Performance mode: ${performanceMode ? 'ON' : 'OFF'}`);
 
 // ============================================================================
