@@ -29,6 +29,7 @@ import { MapGenerator } from './game/MapGenerator.js';
 import { GridActions } from './game/GridActions.js';
 import { InputHandler } from './input/InputHandler.js';
 import { GameUI } from './ui/GameUI.js';
+import { ActionApplier } from './game/ActionApplier.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -286,6 +287,30 @@ console.log(`Performance mode: ${performanceMode ? 'ON' : 'OFF'}`);
 // ============================================================================
 const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
 const gridActions = new GridActions(GRID_SIZE);
+
+// ActionApplier handles applying game actions to grid data
+const actionApplier = new ActionApplier({
+    gridSize: GRID_SIZE,
+    deleteRadius: DELETE_RADIUS,
+    firstFactoryResources: FIRST_FACTORY_RESOURCES,
+    onStateChange: (changes) => {
+        // Handle factory placement state changes
+        if (changes.factoryPlaced) {
+            const { player, isFirst } = changes.factoryPlaced;
+            playerFactoryCounts[player]++;
+            playerTotalFactoriesPlaced[player]++;
+            factoriesPlaced++;
+            updatePlayerIndicator();
+        }
+        // Handle factory demolition state changes
+        if (changes.factoriesFreed) {
+            for (const [owner, count] of Object.entries(changes.factoriesFreed)) {
+                playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - count);
+            }
+            updatePlayerIndicator();
+        }
+    }
+});
 
 // ============================================================================
 // Rollback Netcode - Checkpoint and Action Queue
@@ -1266,205 +1291,15 @@ function syncAction(action) {
 /**
  * Apply an action to the current grid state.
  * This is called both for local actions and during replay.
+ * Delegates to ActionApplier for the actual grid manipulation.
  * 
  * @param {Object} action - The action to apply
  * @param {number} playerId - The player who performed the action
+ * @returns {boolean} True if the grid was modified
  */
 function applyAction(action, playerId) {
     const currentData = grid.download();
-    let modified = false;
-    
-    switch (action.type) {
-        case 'place_factory': {
-            const { x, y, isUnbuilt } = action;
-            const factoryType = playerId === 2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
-            
-            // First factory gets resources (to spawn initial unit), subsequent are unbuilt
-            const totalResources = isUnbuilt ? 0 : FIRST_FACTORY_RESOURCES;
-            const resourcesPerCell = totalResources / 8.0;  // 8 cells (center is empty)
-            
-            // Write the 3x3 factory pattern
-            for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
-                    const fx = x + dx;
-                    const fy = y + dy;
-                    if (fx < 0 || fx >= GRID_SIZE || fy < 0 || fy >= GRID_SIZE) continue;
-                    
-                    const idx = (fy * GRID_SIZE + fx) * 4;
-                    const isCenter = dx === 0 && dy === 0;
-                    
-                    if (isCenter) {
-                        // Center is empty
-                        currentData[idx] = 0;
-                        currentData[idx + 1] = 0;
-                        currentData[idx + 2] = 0;
-                        currentData[idx + 3] = 0;
-                    } else {
-                        // Factory cell: type, resources, centerX, centerY
-                        currentData[idx] = factoryType;
-                        currentData[idx + 1] = resourcesPerCell; // Resources for first, 0 for unbuilt
-                        currentData[idx + 2] = x;  // Center X (B channel)
-                        currentData[idx + 3] = y;  // Center Y (A channel)
-                    }
-                }
-            }
-            
-            // Update factory counts for this player
-            playerFactoryCounts[playerId]++;
-            playerTotalFactoriesPlaced[playerId]++;  // Track for win/lose condition
-            factoriesPlaced++;
-            updatePlayerIndicator();
-            
-            modified = true;
-            console.log(`[applyAction] Applied place_factory at (${x}, ${y}) for player ${playerId}, isUnbuilt: ${isUnbuilt}, resources: ${totalResources}, totalPlaced: ${playerTotalFactoriesPlaced[playerId]}`);
-            break;
-        }
-        
-        case 'demolish': {
-            // Apply demolish action - must match local demolish logic exactly!
-            const { x: centerX, y: centerY, factoriesFreed } = action;
-            const factoryType = playerId === 2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
-            
-            let markedCount = 0;
-            let deletedCount = 0;
-            const factoriesAffected = new Set();
-            
-            for (let dy = -DELETE_RADIUS; dy <= DELETE_RADIUS; dy++) {
-                for (let dx = -DELETE_RADIUS; dx <= DELETE_RADIUS; dx++) {
-                    const x = centerX + dx;
-                    const y = centerY + dy;
-                    
-                    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) continue;
-                    
-                    const idx = (y * GRID_SIZE + x) * 4;
-                    const cellType = Math.floor(currentData[idx] + 0.5);
-                    const buildCount = currentData[idx + 1];
-                    
-                    // Only demolish factories owned by the player who sent the action
-                    if (cellType === factoryType) {
-                        const factoryCenterX = currentData[idx + 2];
-                        const factoryCenterY = currentData[idx + 3];
-                        
-                        // Track this factory
-                        factoriesAffected.add(`${playerId},${factoryCenterX},${factoryCenterY}`);
-                        
-                        if (buildCount > 0) {
-                            // Has resources or build progress: mark for demolition
-                            currentData[idx + 0] = CELL_DEMOLISH;
-                            currentData[idx + 1] = 0;
-                            currentData[idx + 2] = factoryCenterX;
-                            currentData[idx + 3] = factoryCenterY;
-                            markedCount++;
-                        } else {
-                            // Unbuilt factory cell with 0 progress: delete immediately
-                            currentData[idx + 0] = CELL_EMPTY;
-                            currentData[idx + 1] = 0;
-                            currentData[idx + 2] = 0;
-                            currentData[idx + 3] = 0;
-                            deletedCount++;
-                        }
-                    }
-                }
-            }
-            
-            // Update factory counts
-            if (factoriesFreed) {
-                for (const [owner, count] of Object.entries(factoriesFreed)) {
-                    playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - count);
-                }
-            }
-            
-            if (markedCount > 0 || deletedCount > 0) {
-                modified = true;
-                console.log(`[applyAction] Applied demolish at (${centerX}, ${centerY}): marked ${markedCount}, deleted ${deletedCount}, factories freed: ${factoriesAffected.size}`);
-                updatePlayerIndicator();
-            }
-            break;
-        }
-        
-        case 'unit_command': {
-            // Apply unit command - sets destination for selected units
-            // Must match applyUnitCommand() exactly!
-            const { destX, destY } = action;
-            const unitType = playerId === 2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
-            
-            let unitsCommanded = 0;
-            for (let y = 0; y < GRID_SIZE; y++) {
-                for (let x = 0; x < GRID_SIZE; x++) {
-                    const idx = (y * GRID_SIZE + x) * 4;
-                    const cellType = Math.floor(currentData[idx] + 0.5);
-                    
-                    // Check if this is our unit and selected
-                    if (cellType === unitType && getUnitSelectedFromG(currentData[idx + 1])) {
-                        // Update B channel with new factory position (allows units to go beyond original distance limit)
-                        const newFactoryPos = packCoords(destX, destY);
-                        currentData[idx + 2] = newFactoryPos;
-                        
-                        // Update A channel with new memory (destination + high freshness)
-                        const newMemory = packCoords(destX, destY) + COMMAND_FRESHNESS * MEMORY_PACK_BASE;
-                        currentData[idx + 3] = newMemory;
-                        
-                        unitsCommanded++;
-                    }
-                }
-            }
-            if (unitsCommanded > 0) {
-                modified = true;
-                console.log(`[applyAction] Applied unit_command to ${unitsCommanded} units, target (${destX}, ${destY})`);
-            }
-            break;
-        }
-        
-        case 'unit_selection': {
-            // Mark units as selected within a region
-            const { region } = action;
-            const unitType = playerId === 2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
-            
-            let unitsSelected = 0;
-            for (let y = Math.max(0, region.y1); y <= Math.min(GRID_SIZE - 1, region.y2); y++) {
-                for (let x = Math.max(0, region.x1); x <= Math.min(GRID_SIZE - 1, region.x2); x++) {
-                    const idx = (y * GRID_SIZE + x) * 4;
-                    const cellType = Math.floor(currentData[idx] + 0.5);
-                    
-                    if (cellType === unitType) {
-                        currentData[idx + 1] = setUnitSelectionInG(currentData[idx + 1], true);
-                        unitsSelected++;
-                    }
-                }
-            }
-            if (unitsSelected > 0) {
-                modified = true;
-                console.log(`[applyAction] Applied unit_selection, ${unitsSelected} units selected`);
-            }
-            break;
-        }
-        
-        case 'clear_selection': {
-            // Clear selection for all units of this player
-            const unitType = playerId === 2 ? CELL_MINING_UNIT_P2 : CELL_MINING_UNIT;
-            
-            let unitsCleared = 0;
-            for (let y = 0; y < GRID_SIZE; y++) {
-                for (let x = 0; x < GRID_SIZE; x++) {
-                    const idx = (y * GRID_SIZE + x) * 4;
-                    const cellType = Math.floor(currentData[idx] + 0.5);
-                    
-                    if (cellType === unitType && getUnitSelectedFromG(currentData[idx + 1])) {
-                        currentData[idx + 1] = setUnitSelectionInG(currentData[idx + 1], false);
-                        unitsCleared++;
-                    }
-                }
-            }
-            if (unitsCleared > 0) {
-                modified = true;
-                console.log(`[applyAction] Applied clear_selection, ${unitsCleared} units deselected`);
-            }
-            break;
-        }
-        
-        default:
-            console.warn(`[applyAction] Unknown action type: ${action.type}`);
-    }
+    const modified = actionApplier.applyAction(currentData, action, playerId);
     
     if (modified) {
         grid.uploadCurrent(currentData);
