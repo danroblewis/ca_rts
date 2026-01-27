@@ -28,6 +28,7 @@ import { MatchmakingDialog } from './ui/MatchmakingDialog.js';
 import { MapGenerator } from './game/MapGenerator.js';
 import { GridActions } from './game/GridActions.js';
 import { InputHandler } from './input/InputHandler.js';
+import { GameUI } from './ui/GameUI.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -735,184 +736,51 @@ handleClearSelection = () => {
 };
 
 // ============================================================================
-// Player Toggle (for testing multiplayer locally)
+// Game UI (Player Indicator, FPS/Tick Display)
 // ============================================================================
 
+// Tick sync threshold for display (also defined later for network sync logic)
+const TICK_SYNC_DISPLAY_THRESHOLD = 30;
+
+// Initialize GameUI with callbacks to access game state
+const gameUI = new GameUI({
+    isOnGitHub: isOnGitHub,
+    maxFactoriesPerPlayer: MAX_FACTORIES_PER_PLAYER,
+    tickSyncThreshold: TICK_SYNC_DISPLAY_THRESHOLD,
+    getCurrentPlayer: () => currentPlayer,
+    getPlayerFactoryCount: (player) => playerFactoryCounts[player] || 0,
+    isSpectator: () => isSpectator,
+    isMultiplayer: () => isMultiplayer,
+    getSimTime: () => simTime,
+    onSwitchPlayer: (player) => window.switchPlayer(player)
+});
+
+// Player switch function (exposed globally for debugging)
 window.switchPlayer = (player) => {
     if (player === 1 || player === PLAYER_1) {
         currentPlayer = PLAYER_1;
     } else if (player === 2 || player === PLAYER_2) {
         currentPlayer = PLAYER_2;
     } else {
-        // Toggle
         currentPlayer = currentPlayer === PLAYER_1 ? PLAYER_2 : PLAYER_1;
     }
     console.log(`Switched to Player ${currentPlayer}`);
-    updatePlayerIndicator();
+    gameUI.updatePlayerIndicator();
 };
 
-function updatePlayerIndicator() {
-    // Don't show player indicator on GitHub Pages
-    if (isOnGitHub) return;
-    
-    let indicator = document.getElementById('player-indicator');
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'player-indicator';
-        indicator.style.cssText = `
-            position: fixed;
-            top: 8px;
-            left: 8px;
-            z-index: 200;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-family: 'SF Mono', monospace;
-            font-size: 11px;
-            font-weight: bold;
-            backdrop-filter: blur(8px);
-            cursor: pointer;
-        `;
-        indicator.onclick = () => window.switchPlayer();
-        document.body.appendChild(indicator);
-    }
-    if (isSpectator) {
-        indicator.textContent = '👁 Spectator';
-        indicator.style.background = 'rgba(80, 80, 100, 0.8)';
-        indicator.style.color = 'white';
-        indicator.style.border = '2px solid rgba(120, 120, 150, 0.8)';
-        indicator.style.cursor = 'default';
-    } else {
-        const baseCount = playerFactoryCounts[currentPlayer];
-        
-        if (currentPlayer === PLAYER_1) {
-            indicator.textContent = `Player 1 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
-            indicator.style.background = 'rgba(112, 51, 204, 0.8)';
-            indicator.style.color = 'white';
-            indicator.style.border = '2px solid rgba(160, 100, 255, 0.8)';
-        } else {
-            indicator.textContent = `Player 2 (${baseCount}/${MAX_FACTORIES_PER_PLAYER})`;
-            indicator.style.background = 'rgba(51, 179, 102, 0.8)';
-            indicator.style.color = 'white';
-            indicator.style.border = '2px solid rgba(100, 220, 150, 0.8)';
-        }
-        indicator.style.cursor = 'pointer';
-    }
+// Convenience wrappers for UI updates (used throughout main.js)
+function updatePlayerIndicator() { gameUI.updatePlayerIndicator(); }
+function updateTickDisplay() { gameUI.updateTickDisplay(); }
+function updateFpsDisplay(currentTps, targetTps, potentialTps = null, renderFps = 60) {
+    gameUI.updateFpsDisplay(currentTps, targetTps, potentialTps, renderFps);
 }
 
-// Initialize player indicator
-updatePlayerIndicator();
-
-// FPS/TPS display
+// FPS/TPS display state
 let lastFrameTime = 0;
 let frameTimeSmoothed = 16.67;
 
-// Track target tick for display
-let lastKnownTargetTick = 0;
-let lastKnownLeaderPlayer = 0;
-
-function updateTickDisplay() {
-    let tickDisplay = document.getElementById('tick-display');
-    if (!tickDisplay) {
-        tickDisplay = document.createElement('div');
-        tickDisplay.id = 'tick-display';
-        tickDisplay.style.cssText = `
-            position: fixed;
-            bottom: 8px;
-            right: 8px;
-            z-index: 200;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-family: 'SF Mono', monospace;
-            font-size: 11px;
-            background: rgba(0, 0, 0, 0.6);
-            color: #aaa;
-            backdrop-filter: blur(4px);
-        `;
-        document.body.appendChild(tickDisplay);
-    }
-    
-    const ourTick = Math.floor(simTime);
-    
-    if (isMultiplayer && lastKnownTargetTick > 0) {
-        const diff = lastKnownTargetTick - ourTick;
-        // Pad the diff number to fixed width for consistent display
-        const diffStr = Math.abs(diff).toString().padStart(4, '\u2007'); // figure space for alignment
-        let diffColor = '#aaa';
-        let statusText = '';
-        
-        if (diff > TICK_SYNC_THRESHOLD) {
-            diffColor = '#f99';
-            statusText = `Δ <span style="color:${diffColor}">${diffStr}</span> behind`;
-        } else if (diff < -TICK_SYNC_THRESHOLD) {
-            diffColor = '#9f9';
-            statusText = `Δ <span style="color:${diffColor}">${diffStr}</span> ahead `;
-        } else {
-            statusText = `Δ <span style="color:#9f9">${diffStr}</span> synced`;
-        }
-        tickDisplay.innerHTML = `Tick: ${ourTick} (${statusText})`;
-    } else {
-        tickDisplay.textContent = `Tick: ${ourTick}`;
-    }
-}
-
-function updateFpsDisplay(currentTps, targetTps, potentialTps = null, renderFps = 60) {
-    let fpsDisplay = document.getElementById('fps-display');
-    if (!fpsDisplay) {
-        fpsDisplay = document.createElement('div');
-        fpsDisplay.id = 'fps-display';
-        fpsDisplay.style.cssText = `
-            position: fixed;
-            bottom: 8px;
-            left: 8px;
-            z-index: 200;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-family: 'SF Mono', monospace;
-            font-size: 11px;
-            background: rgba(0, 0, 0, 0.6);
-            color: #aaa;
-            backdrop-filter: blur(4px);
-        `;
-        document.body.appendChild(fpsDisplay);
-    }
-    
-    // Show current TPS and target (if in multiplayer)
-    if (isMultiplayer) {
-        // In multiplayer, show actual/target/potential
-        const actual = Math.round(currentTps);
-        const target = Math.round(targetTps);
-        const potential = potentialTps ? Math.round(potentialTps) : actual;
-        
-        if (actual < target * 0.9) {
-            // Running slower than target - something is wrong
-            fpsDisplay.textContent = `${actual} TPS (target: ${target}, max: ${potential})`;
-            fpsDisplay.style.color = '#f99';
-        } else if (potential > target * 1.2) {
-            // Could run faster - being throttled
-            fpsDisplay.textContent = `${actual} TPS (synced, could do ${potential})`;
-            fpsDisplay.style.color = '#9f9';
-        } else {
-            // Running at potential
-            fpsDisplay.textContent = `${actual} TPS`;
-            fpsDisplay.style.color = '#9f9';
-        }
-    } else {
-        // Always show both TPS and render FPS for debugging
-        const fps = Math.round(renderFps);
-        const tps = Math.round(currentTps);
-        fpsDisplay.textContent = `${fps} FPS | ${tps} TPS`;
-        fpsDisplay.style.color = fps <= 30 ? '#f99' : fps < 55 ? '#ff9' : '#9f9';
-    }
-}
-
-// Listen for 1/2 keys to switch players
-document.addEventListener('keydown', (e) => {
-    if (e.key === '1') {
-        window.switchPlayer(1);
-    } else if (e.key === '2') {
-        window.switchPlayer(2);
-    }
-});
+// Initialize player indicator
+updatePlayerIndicator();
 
 console.log('Press 1 or 2 to switch players, or click the player indicator');
 
@@ -1012,8 +880,7 @@ networkSync.onSpeedSync = (serverTargetTps, slowestPlayer, tickCounts = {}, targ
     // Tick synchronization - check if we're behind the leader
     if (targetTick > 0 && networkSync.playerId) {
         // Update tracking variables for display
-        lastKnownTargetTick = targetTick;
-        lastKnownLeaderPlayer = leaderPlayer;
+        gameUI.setTargetTick(targetTick, leaderPlayer);
         
         const ourTick = Math.floor(simTime);
         const tickDifference = targetTick - ourTick;
@@ -2028,63 +1895,17 @@ function checkWinCondition() {
     }
 }
 
-// Display game over screen
+// Display game over screen (using GameUI module)
 function showGameOver() {
-    const overlay = document.createElement('div');
-    overlay.id = 'game-over-overlay';
-    overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.85);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        z-index: 10000;
-    `;
-    
-    const winnerName = winner === PLAYER_1 ? 'Player 1 (Purple)' : 'Player 2 (Green)';
-    const winnerColor = winner === PLAYER_1 ? '#a855f7' : '#22c55e';
-    
-    overlay.innerHTML = `
-        <h1 style="color: ${winnerColor}; font-size: 4rem; margin-bottom: 1rem; font-family: sans-serif;">
-            ${winnerName} Wins!
-        </h1>
-        <p style="color: #888; font-size: 1.5rem; font-family: sans-serif;">
-            The opponent has lost all their bases.
-        </p>
-        <button id="play-again-btn" style="
-            margin-top: 2rem;
-            padding: 1rem 2rem;
-            font-size: 1.2rem;
-            background: ${winnerColor};
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-family: sans-serif;
-        ">Play Again</button>
-    `;
-    
-    document.body.appendChild(overlay);
-    
-    document.getElementById('play-again-btn').onclick = () => {
+    gameUI.showGameOver(winner, isMultiplayer, isSpectator, () => {
         if (isMultiplayer && !isSpectator) {
-            // Send restart request via WebSocket - server will assign new seed and broadcast
             networkSync.requestRestart();
-            // The onRestart handler will reload the page with new seed
         } else {
-            // Single player - just reload with new random seed
             const url = new URL(window.location);
             url.searchParams.set('seed', Math.floor(Math.random() * 999999));
             window.location.href = url.toString();
         }
-    };
-    
-    console.log(`[Game Over] ${winnerName} wins!`);
+    });
 }
 
 // Check win condition every 5 seconds
