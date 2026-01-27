@@ -30,6 +30,7 @@ import { GridActions } from './game/GridActions.js';
 import { InputHandler } from './input/InputHandler.js';
 import { GameUI } from './ui/GameUI.js';
 import { ActionApplier } from './game/ActionApplier.js';
+import { RollbackManager } from './game/RollbackManager.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -323,6 +324,9 @@ const checkpointBuffer = new CheckpointBuffer(GRID_SIZE, GRID_SIZE, {
     format: 'float'  // Use symbolic name like CAGrid
 }, MAX_CHECKPOINTS, CHECKPOINT_INTERVAL);
 const actionQueue = new ActionQueue();
+
+// RollbackManager will be initialized later (after simTime is defined)
+let rollbackManager = null;
 
 // ============================================================================
 // Selection System - Selection state is stored directly in unit data (G channel bit 5)
@@ -1086,19 +1090,9 @@ networkSync.onStateReceived = (syncData) => {
     
     // For initial syncs: clear rollback state since we're starting fresh
     if (!isPeriodicSync) {
-        if (checkpointBuffer) {
-            checkpointBuffer.clear();
-            Logger.log('checkpoint', 'Cleared checkpoint buffer');
-        }
-        if (actionQueue) {
-            actionQueue.clear();
-            Logger.log('action', 'Cleared action queue');
-        }
-        
-        // Save a checkpoint at this new state immediately
-        if (checkpointBuffer && grid) {
-            const checkpointData = grid.download();
-            checkpointBuffer.saveCheckpoint(simTime, checkpointData);
+        if (rollbackManager) {
+            rollbackManager.clear();
+            rollbackManager.saveInitialCheckpoint(simTime);
             console.log(`[Multiplayer] Saved initial checkpoint at tick ${simTime}`);
         }
     }
@@ -1271,16 +1265,16 @@ async function toggleMultiplayer() {
     }
 }
 
-// Sync state after an action - NEW: lightweight action-only sync
+// Sync state after an action - uses RollbackManager for local action storage
 function syncAction(action) {
     if (isMultiplayer && networkSync.isConnected) {
-        // Store action locally for potential replay
-        const storedAction = actionQueue.addAction(simTime, currentPlayer, action.type, action, true);
-        console.log(`[syncAction] Stored local action: ${action.type} at tick ${simTime}, queue size: ${actionQueue.actions.length}`);
+        // Store action locally for potential replay using RollbackManager
+        rollbackManager.storeLocalAction(action, currentPlayer);
+        console.log(`[syncAction] Stored local action: ${action.type} at tick ${Math.floor(simTime)}, queue size: ${actionQueue.actions.length}`);
         
         // Send lightweight action message (no grid data!)
-        networkSync.sendAction(action, simTime);
-        console.log(`[syncAction] Sent lightweight action: ${action.type} at tick ${simTime}`);
+        networkSync.sendAction(action, Math.floor(simTime));
+        console.log(`[syncAction] Sent lightweight action: ${action.type} at tick ${Math.floor(simTime)}`);
     }
 }
 
@@ -1308,128 +1302,11 @@ function applyAction(action, playerId) {
     return modified;
 }
 
-/**
- * Rollback to a checkpoint and replay simulation with actions.
- * This is called when a remote action arrives from the past.
- * 
- * @param {number} targetTick - The tick we need to go back to
- * @param {Object} incomingAction - The new action that triggered rollback
- * @param {number} incomingPlayerId - The player who performed the incoming action
- */
-function rollbackAndReplay(targetTick, incomingAction, incomingPlayerId) {
-    const currentTick = Math.floor(simTime);
-    const rollbackStart = performance.now();
-    
-    Logger.log('rollback', `=== ROLLBACK START ===`);
-    Logger.log('rollback', `Trigger: ${incomingAction.type} from Player ${incomingPlayerId} at tick ${targetTick}`);
-    Logger.log('rollback', `Current tick: ${currentTick}, Target tick: ${targetTick}, Delta: ${currentTick - targetTick} ticks`);
-    
-    // Add the incoming action to the queue FIRST
-    if (!actionQueue.hasAction(targetTick, incomingPlayerId, incomingAction.type)) {
-        actionQueue.addAction(targetTick, incomingPlayerId, incomingAction.type, incomingAction, false);
-    }
-    
-    // Debug: show all actions in queue
-    Logger.log('rollback', `Queue has ${actionQueue.actions.length} actions`);
-    
-    // Find the OLDEST UNAPPLIED action that needs replaying
-    const unappliedActions = actionQueue.actions.filter(a => !a.applied);
-    const oldestUnappliedTick = unappliedActions.length > 0 
-        ? Math.min(...unappliedActions.map(a => a.tick)) 
-        : targetTick;
-    const rollbackToTick = Math.min(targetTick, oldestUnappliedTick);
-    Logger.log('rollback', `Unapplied: ${unappliedActions.length}, oldest=${oldestUnappliedTick}, rollbackTo=${rollbackToTick}`);
-    
-    // Find the best checkpoint before ALL actions that need replaying
-    const checkpoint = checkpointBuffer.findCheckpointBefore(rollbackToTick);
-    if (!checkpoint) {
-        Logger.error('rollback', `No checkpoint found before tick ${rollbackToTick}, oldest: ${checkpointBuffer.getOldestTick()}`);
-        applyAction(incomingAction, incomingPlayerId);
-        return;
-    }
-    
-    Logger.log('checkpoint', `Using checkpoint at tick ${checkpoint.tick} (target: ${rollbackToTick})`);
-    
-    // Verify checkpoint is strictly BEFORE the rollback target
-    if (checkpoint.tick >= rollbackToTick) {
-        Logger.error('rollback', `Checkpoint at ${checkpoint.tick} is NOT before target ${rollbackToTick}!`);
-        applyAction(incomingAction, incomingPlayerId);
-        return;
-    }
-    
-    // Restore from checkpoint
-    const restoreStart = performance.now();
-    grid.uploadCurrent(checkpoint.cpuData);
-    const tickBeforeReplay = simTime;
-    simTime = checkpoint.tick;
-    const restoreTime = performance.now() - restoreStart;
-    Logger.log('checkpoint', `Restored to tick ${checkpoint.tick} in ${restoreTime.toFixed(1)}ms`);
-    
-    // Reset applied status for ALL actions at or after checkpoint tick
-    actionQueue.resetAppliedAfter(checkpoint.tick - 1);
-    
-    // Get ALL actions that need to be replayed
-    const actionsToReplay = actionQueue.getActionsInRange(checkpoint.tick - 1, currentTick);
-    Logger.log('rollback', `Replaying ${actionsToReplay.length} actions from tick ${checkpoint.tick} to ${currentTick}`);
-    
-    // Count simulation steps for debugging
-    let simStepsRun = 0;
-    let actionsApplied = 0;
-    
-    // Replay simulation from checkpoint to current tick
-    const replayStart = performance.now();
-    while (simTime < currentTick) {
-        // Apply all actions that should happen at this tick
-        const actionsAtTick = actionsToReplay.filter(a => a.tick === Math.floor(simTime));
-        for (const action of actionsAtTick) {
-            if (!action.applied) {
-                Logger.log('action', `Replay: ${action.type} at tick ${Math.floor(simTime)} for P${action.playerId}`);
-                applyAction(action.data, action.playerId);
-                action.applied = true;
-                actionsApplied++;
-            }
-        }
-        
-        // Run simulation step (this increments simTime)
-        simulationStep();
-        simStepsRun++;
-    }
-    
-    // Apply any actions at the final tick
-    const finalActions = actionsToReplay.filter(a => a.tick === currentTick);
-    for (const action of finalActions) {
-        if (!action.applied) {
-            Logger.log('action', `Final: ${action.type} at tick ${Math.floor(simTime)} for P${action.playerId}`);
-            applyAction(action.data, action.playerId);
-            action.applied = true;
-            actionsApplied++;
-        }
-    }
-    
-    const replayTime = performance.now() - replayStart;
-    const totalTime = performance.now() - rollbackStart;
-    
-    Logger.log('rollback', `=== ROLLBACK COMPLETE ===`);
-    Logger.log('rollback', `Sim steps: ${simStepsRun}, Actions applied: ${actionsApplied}`);
-    Logger.log('rollback', `Tick: ${tickBeforeReplay} -> ${checkpoint.tick} -> ${Math.floor(simTime)}`);
-    Logger.log('rollback', `Time: restore=${restoreTime.toFixed(1)}ms, replay=${replayTime.toFixed(1)}ms, total=${totalTime.toFixed(1)}ms`);
-}
-
-// Handle incoming actions from other players
+// Handle incoming actions from other players - delegates to RollbackManager
 networkSync.onActionReceived = (message) => {
     const { playerId, simTime: actionTick, action } = message;
-    const tickDelta = Math.floor(simTime) - actionTick;
-    
-    Logger.log('network', `Received: ${action.type} from P${playerId} at tick ${actionTick} (we're at ${Math.floor(simTime)}, delta=${tickDelta})`);
-    
-    if (actionTick <= simTime) {
-        // Action is in the past - need to rollback and replay
-        rollbackAndReplay(actionTick, action, playerId);
-    } else {
-        // Action is in the future - queue it for later
-        actionQueue.addAction(actionTick, playerId, action.type, action, false);
-        Logger.log('network', `Queued future action for tick ${actionTick}`);
-    }
+    // Delegate to RollbackManager for rollback detection and handling
+    rollbackManager.processRemoteAction(action, playerId, actionTick);
 };
 
 // Initialize network indicator
@@ -1479,6 +1356,19 @@ let renderFrameCount = 0;
 let lastLogTime = performance.now();
 let simTime = 0;
 let lastLoggedTick = -1;  // For debug logging
+
+// Initialize RollbackManager now that simTime is defined
+// (simulationStep is hoisted so it can be referenced)
+rollbackManager = new RollbackManager({
+    checkpointBuffer,
+    actionQueue,
+    getGridData: () => grid.download(),
+    uploadGridData: (data) => grid.uploadCurrent(data),
+    getCurrentTick: () => Math.floor(simTime),
+    setTick: (tick) => { simTime = tick; },
+    simulationStep: () => simulationStep(),
+    applyAction: (action, playerId) => applyAction(action, playerId)
+});
 
 // Speed synchronization for multiplayer
 let effectiveTicksPerSecond = 60;  // Measured actual TPS (may be throttled)
@@ -1607,14 +1497,9 @@ function simulationStep() {
     tpsCalcStepCount++;
     simTime += 1.0;
     
-    // Save checkpoint periodically for rollback netcode
-    if (isMultiplayer && checkpointBuffer.shouldSaveCheckpoint(simTime)) {
-        const checkpointData = grid.download();
-        checkpointBuffer.saveCheckpoint(simTime, checkpointData);
-        
-        // Garbage collect old applied actions that we can't rollback to anyway
-        const oldestCheckpointTick = checkpointBuffer.getOldestTick();
-        actionQueue.garbageCollectBeforeCheckpoint(oldestCheckpointTick);
+    // Save checkpoint periodically for rollback netcode using RollbackManager
+    if (isMultiplayer && rollbackManager.shouldSaveCheckpoint()) {
+        rollbackManager.saveCheckpoint();
     }
 }
 
