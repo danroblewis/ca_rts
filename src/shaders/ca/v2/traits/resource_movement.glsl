@@ -74,16 +74,20 @@ float countResourcesInDirection(vec2 pos, int dir, sampler2D state, vec2 resolut
 }
 
 // ============================================================================
-// Find the best direction for a resource to move (toward other resources)
+// Find the best direction for a resource to move
+// Uses purely random movement to avoid directional bias and line formation
 // ============================================================================
 
 int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resolution) {
-    // Create random seed from position and time
-    float seed = hash(pos, time * 0.1);
+    // Create random seeds from position and time
+    float seed1 = hash(pos, time * 0.1);
+    float seed2 = hash(pos, time + 500.0);
     
     // Count neighbors in current position
     float currentNeighbors = 0.0;
-    for (int d = 0; d < 8; d++) {
+    bool hasAdjacentUnit = false;
+    
+    for (int d = 1; d <= 8; d++) {
         vec2 checkPos = pos + dirToOffset(d);
         if (checkPos.x < 0.0 || checkPos.x >= resolution.x ||
             checkPos.y < 0.0 || checkPos.y >= resolution.y) {
@@ -91,23 +95,37 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
         }
         vec2 uv = (checkPos + 0.5) / resolution;
         vec4 cell = texture(state, uv);
-        if (getType(cell) == TYPE_RESOURCE) {
+        int cellType = getType(cell);
+        if (cellType == TYPE_RESOURCE) {
             currentNeighbors += 1.0;
+        }
+        // Check for adjacent units (either player)
+        if (cellType == TYPE_UNIT || cellType == TYPE_UNIT_P2) {
+            hasAdjacentUnit = true;
         }
     }
     
-    // If we have many neighbors, less likely to move (stability)
-    if (currentNeighbors >= 4.0 && seed > 0.3) {
+    // Don't move if there's a unit adjacent - they might be trying to mine us
+    if (hasAdjacentUnit) {
         return DIR_NONE;
     }
     
-    // Find the direction with most resources (we want to clump)
-    // Use purely random direction selection with weighted probabilities
-    int bestDir = DIR_NONE;
-    float bestScore = -1.0;
-    int numBestDirs = 0;
+    // Resources with many neighbors are very stable - rarely move
+    // This prevents the core of the blob from destabilizing
+    if (currentNeighbors >= 5.0) {
+        return DIR_NONE;  // Very stable, never move
+    }
+    if (currentNeighbors >= 3.0 && seed1 > 0.1) {
+        return DIR_NONE;  // Mostly stable, only 10% move
+    }
+    if (currentNeighbors >= 1.0 && seed1 > 0.3) {
+        return DIR_NONE;  // Somewhat stable, only 30% move
+    }
     
-    // First pass: find the best score and count how many directions have it
+    // Collect all valid (empty) directions
+    int validDirs[8];
+    int numValid = 0;
+    
     for (int d = 1; d <= 8; d++) {
         vec2 offset = dirToOffset(d);
         vec2 targetPos = pos + offset;
@@ -121,79 +139,37 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
         // Check if target is empty
         vec2 uv = (targetPos + 0.5) / resolution;
         vec4 targetCell = texture(state, uv);
-        if (getType(targetCell) != TYPE_EMPTY) {
-            continue;
-        }
-        
-        // Score based on nearby resources in that direction
-        float score = countResourcesInDirection(pos, d, state, resolution);
-        
-        if (score > bestScore) {
-            bestScore = score;
-            numBestDirs = 1;
-        } else if (abs(score - bestScore) < 0.001) {
-            numBestDirs++;
+        if (getType(targetCell) == TYPE_EMPTY) {
+            validDirs[numValid] = d;
+            numValid++;
         }
     }
     
-    // Second pass: randomly select among best directions
-    if (numBestDirs > 0) {
-        // Pick a random index among the best directions
-        // Use hash() which returns 0.0-1.0, then convert to index
-        float hf = hash(pos, time);
-        int pick = int(hf * float(numBestDirs));
-        if (pick >= numBestDirs) pick = numBestDirs - 1;  // Clamp to valid range
-        int found = 0;
-        
-        for (int d = 1; d <= 8; d++) {
-            vec2 offset = dirToOffset(d);
-            vec2 targetPos = pos + offset;
-            
-            // Bounds check
-            if (targetPos.x < 0.0 || targetPos.x >= resolution.x ||
-                targetPos.y < 0.0 || targetPos.y >= resolution.y) {
-                continue;
-            }
-            
-            // Check if target is empty
-            vec2 uv = (targetPos + 0.5) / resolution;
-            vec4 targetCell = texture(state, uv);
-            if (getType(targetCell) != TYPE_EMPTY) {
-                continue;
-            }
-            
-            float score = countResourcesInDirection(pos, d, state, resolution);
-            
-            if (abs(score - bestScore) < 0.001) {
-                if (found == pick) {
-                    bestDir = d;
-                    break;
-                }
-                found++;
-            }
-        }
+    if (numValid == 0) {
+        return DIR_NONE;  // No valid moves
     }
     
-    // Only move if there's a good reason (found resources in that direction)
-    // or occasionally random walk to explore
-    if (bestScore < 0.1 && seed > 0.15) {
-        return DIR_NONE;
-    }
+    // Pick a random valid direction - purely random, no clumping bias
+    // This prevents the positive feedback loop that causes line formation
+    int pick = int(seed2 * float(numValid));
+    if (pick >= numValid) pick = numValid - 1;
     
-    return bestDir;
+    return validDirs[pick];
 }
 
 // ============================================================================
-// Collision Resolution - lower position index wins (deterministic)
+// Collision Resolution - use hash for unbiased tie-breaking
 // ============================================================================
 
-float getResourcePriority(vec2 pos, vec2 resolution) {
-    return pos.y * resolution.x + pos.x;
+float getResourcePriority(vec2 pos, float time, vec2 resolution) {
+    // Use position-based hash that's consistent for the same tick
+    // This avoids directional bias while remaining deterministic
+    return hash(pos, floor(time / RESOURCE_MOVE_INTERVAL));
 }
 
 // Check if a resource at 'pos' wins the collision for moving to 'targetPos'
 bool resourceWinsCollision(vec2 pos, vec2 targetPos, float time, sampler2D state, vec2 resolution) {
-    float myPriority = getResourcePriority(pos, resolution);
+    float myPriority = getResourcePriority(pos, time, resolution);
     
     // Check all cells that might also want to move to targetPos (8 directions from target)
     for (int d = 1; d <= 8; d++) {
@@ -219,10 +195,11 @@ bool resourceWinsCollision(vec2 pos, vec2 targetPos, float time, sampler2D state
         vec2 theirTarget = competitorPos + dirToOffset(theirDir);
         
         if (distance(theirTarget, targetPos) < 0.5) {
-            // Collision! Lower priority wins
-            float theirPriority = getResourcePriority(competitorPos, resolution);
-            if (theirPriority < myPriority) {
-                return false;  // They win, we lose
+            // Collision! Compare hash-based priorities (unbiased)
+            // Higher priority wins - if they have higher priority, we lose
+            float theirPriority = getResourcePriority(competitorPos, time, resolution);
+            if (theirPriority > myPriority) {
+                return false;  // They have higher priority, they win, we lose
             }
         }
     }

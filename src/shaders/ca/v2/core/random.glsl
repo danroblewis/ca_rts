@@ -52,8 +52,10 @@ int hashPosTime(vec2 pos, float time) {
     py = safeMod(py, 1013);  // Different prime
     t = safeMod(t, 10007);   // Prime for time
     
-    // Now combine - max value is roughly 1009*73 + 1013*19 + 10007*83 = ~900K, safe
-    int h = px * 73 + py * 19 + t * 83;
+    // Combine with balanced coefficients for X and Y to avoid directional bias
+    // Using similar-magnitude primes for px and py ensures neither axis dominates
+    // max value is roughly 1009*73 + 1013*71 + 10007*83 = ~904K, safe
+    int h = px * 73 + py * 71 + t * 83;
     
     return ihash(h);
 }
