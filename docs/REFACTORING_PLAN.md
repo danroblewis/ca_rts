@@ -3,9 +3,9 @@
 ## Current State (January 2026)
 
 ### Completed Refactors
-- `main.js` reduced from **2,947 → 1,588 lines** (46% reduction)
-- **9 modules** extracted with clean interfaces
-- **112 unit tests** covering all extracted modules
+- `main.js` reduced from **2,947 → 1,356 lines** (54% reduction)
+- **16 modules** extracted with clean interfaces
+- **153 unit tests** covering all extracted modules
 
 ### Extracted Modules
 
@@ -18,10 +18,17 @@
 | `game/GridActions.js` | 277 | Grid manipulation | GameUtils |
 | `game/ActionApplier.js` | 286 | Apply game actions to grid | GameUtils |
 | `game/RollbackManager.js` | 261 | Rollback netcode & replay | Logger |
+| `game/StatsTracker.js` | 142 | TPS/FPS tracking | None |
+| `game/SimulationScheduler.js` | 83 | Simulation timing control | None |
 | `input/InputHandler.js` | 418 | Input handling | Camera, Logger |
 | `ui/GameUI.js` | 255 | HUD elements | None |
 | `ui/MatchmakingDialog.js` | 217 | Matchmaking UI | None |
+| `ui/SettingsUI.js` | 80 | Shader/perf mode toggles | None |
+| `ui/NetworkIndicator.js` | 110 | Multiplayer status UI | None |
+| `ui/SpeedToggle.js` | 95 | Speed toggle UI | None |
 | `audio/AudioManager.js` | 208 | Audio init & controls | AudioEngine |
+| `network/NetworkHeartbeat.js` | 85 | Multiplayer heartbeat/sync | NetworkSync, Logger |
+| `game/WinConditionManager.js` | 89 | Win/lose detection | GameUtils |
 
 ### Test Coverage
 
@@ -34,6 +41,9 @@
 | `actionapplier.test.js` | 18 | All action types, state changes |
 | `rollbackmanager.test.js` | 15 | Checkpoints, replay, rollback |
 | `audiomanager.test.js` | 15 | Init, mute, button UI |
+| `winconditionmanager.test.js` | 15 | Win/lose detection, intervals |
+| `networkindicator.test.js` | 12 | State updates, player management |
+| `speedtoggle.test.js` | 14 | Speed control, force sync |
 
 ---
 
@@ -75,7 +85,7 @@
 
 ## What Remains in main.js
 
-The remaining **1,588 lines** contain code tightly coupled to runtime state:
+The remaining **1,356 lines** contain code tightly coupled to runtime state:
 
 ### GPU/Shader Management (~200 lines)
 - Shader loading and compilation
@@ -152,7 +162,7 @@ The current architecture is clean enough for a game of this size:
 
 ## Testing Strategy
 
-### Unit Tests (Current: 112 tests)
+### Unit Tests (Current: 153 tests)
 All extracted modules have comprehensive test coverage:
 - Pure functions in GameUtils ✅
 - Camera state management ✅
@@ -186,7 +196,7 @@ Shader behavior tested via GPU:
 
 ```
 src/
-├── main.js                 # Entry point, loops, wiring (1,588 lines)
+├── main.js                 # Entry point, loops, wiring (1,356 lines)
 ├── game/
 │   ├── Camera.js           # ✅ Camera state & controls
 │   ├── GameState.js        # ✅ Centralized game state
@@ -194,10 +204,16 @@ src/
 │   ├── MapGenerator.js     # ✅ Deterministic map gen
 │   ├── ActionApplier.js    # ✅ Apply game actions
 │   ├── RollbackManager.js  # ✅ Rollback netcode
+│   ├── StatsTracker.js     # ✅ TPS/FPS tracking
+│   ├── SimulationScheduler.js # ✅ Simulation timing
+│   ├── WinConditionManager.js # ✅ Win/lose detection
 │   └── InputHandler.js     # ✅ Input handling
 ├── ui/
 │   ├── GameUI.js           # ✅ HUD elements
-│   └── MatchmakingDialog.js # ✅ Matchmaking UI
+│   ├── MatchmakingDialog.js # ✅ Matchmaking UI
+│   ├── SettingsUI.js       # ✅ Shader/perf toggles
+│   ├── NetworkIndicator.js # ✅ Multiplayer status
+│   └── SpeedToggle.js      # ✅ Speed toggle UI
 ├── audio/
 │   ├── AudioEngine.js      # Existing
 │   ├── AudioManager.js     # ✅ Audio controls
@@ -207,6 +223,7 @@ src/
 │   └── Logger.js           # Existing
 ├── network/
 │   ├── NetworkSync.js      # Existing
+│   ├── NetworkHeartbeat.js # ✅ Multiplayer heartbeat
 │   └── ActionQueue.js      # Existing
 ├── gpu/
 │   ├── GPU.js              # Existing
@@ -219,7 +236,10 @@ src/
     ├── mapgenerator.test.js # ✅ 12 tests
     ├── actionapplier.test.js # ✅ 18 tests
     ├── rollbackmanager.test.js # ✅ 15 tests
-    └── audiomanager.test.js # ✅ 15 tests
+    ├── audiomanager.test.js # ✅ 15 tests
+    ├── winconditionmanager.test.js # ✅ 15 tests
+    ├── networkindicator.test.js # ✅ 12 tests
+    └── speedtoggle.test.js # ✅ 14 tests
 ```
 
 ---
@@ -243,5 +263,7 @@ src/
 | Phase 1 | 2,500 | 4 | 57 |
 | Phase 2 | 2,059 | 6 | 72 |
 | Phase 3 | 1,778 | 8 | 97 |
-| Current | 1,588 | 9 | 112 |
+| Phase 4 | 1,588 | 9 | 112 |
+| Phase 5 | 1,413 | 14 | 153 |
+| Current | 1,356 | 16 | 153 |
 

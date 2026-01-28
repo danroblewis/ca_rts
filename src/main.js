@@ -34,6 +34,9 @@ import { SettingsUI } from './ui/SettingsUI.js';
 import { WinConditionManager } from './game/WinConditionManager.js';
 import { NetworkIndicator } from './ui/NetworkIndicator.js';
 import { SpeedToggle } from './ui/SpeedToggle.js';
+import { StatsTracker } from './game/StatsTracker.js';
+import { NetworkHeartbeat } from './network/NetworkHeartbeat.js';
+import { SimulationScheduler } from './game/SimulationScheduler.js';
 
 // ============================================================================
 // CONFIGURATION - Edit these values to customize the game
@@ -579,7 +582,6 @@ const SYNC_WAIT_TIMEOUT = 3000;  // Give up waiting after 3 seconds
 
 // Periodic full state sync to keep clients aligned
 const FULL_SYNC_INTERVAL = 5000;  // Send full state every 5 seconds
-let lastFullSyncTime = 0;
 
 // Track connected players in multiplayer
 const connectedPlayers = new Set();
@@ -657,7 +659,7 @@ networkSync.onSpeedSync = (serverTargetTps, slowestPlayer, tickCounts = {}, targ
     
     // Only log if target changed significantly
     if (Math.abs(oldTarget - serverTargetTps) > 1) {
-        Logger.log('speed', `Target TPS: ${targetTicksPerSecond.toFixed(1)} (slowest: P${slowestPlayer}, our potential: ${effectiveTicksPerSecond.toFixed(1)})`);
+        Logger.log('speed', `Target TPS: ${targetTicksPerSecond.toFixed(1)} (slowest: P${slowestPlayer}, our potential: ${getEffectiveTps().toFixed(1)})`);
     }
     
     // Tick synchronization - check if we're behind the leader
@@ -1057,9 +1059,6 @@ if (roomParam && !isOnGitHub) {
 // Simulation Loop
 // ============================================================================
 
-let simStepCount = 0;
-let renderFrameCount = 0;
-let lastLogTime = performance.now();
 let simTime = 0;
 let lastLoggedTick = -1;  // For debug logging
 
@@ -1077,19 +1076,35 @@ rollbackManager = new RollbackManager({
 });
 
 // Speed synchronization for multiplayer
-let effectiveTicksPerSecond = 60;  // Measured actual TPS (may be throttled)
-let potentialTicksPerSecond = 60;  // What we COULD run at (unthrottled)
 let targetTicksPerSecond = 60;     // Target TPS from server (slowest peer)
-let lastHeartbeatTime = 0;
-let lastTpsCalcTime = performance.now();
-let tpsCalcStepCount = 0;
-let tpsFrameTimeAccumulator = 0;   // Accumulate frame times to measure potential
-let tpsFrameCount = 0;             // Frame count for TPS calculation
-const HEARTBEAT_INTERVAL = 1000;   // Send heartbeat every second
 const TPS_MARGIN = 5;              // Add margin to target TPS to allow speedup
+
+// Stats tracking module
+const statsTracker = new StatsTracker({
+    logInterval: LOG_INTERVAL,
+    tpsUpdateInterval: 500,
+    onFpsUpdate: (effectiveTps, targetTps, potentialTps, renderFps) => {
+        updateFpsDisplay(effectiveTps, targetTps, potentialTps, renderFps);
+    },
+    onTickUpdate: () => updateTickDisplay()
+});
+
+// Getters for stats (used by network sync)
+const getEffectiveTps = () => statsTracker.getEffectiveTps();
+const getPotentialTps = () => statsTracker.getPotentialTps();
 
 // Toggle: true = sync with render (normal speed), false = fast as possible (super speed)
 let SYNC_SIM_WITH_RENDER = DEFAULT_SYNC_MODE;
+
+// Simulation scheduler handles when to run simulation steps
+const simScheduler = new SimulationScheduler({
+    batchSize: SYNC_SIM_BATCH_SIZE,
+    tpsMargin: TPS_MARGIN,
+    maxStepsPerFrame: 3,
+    simulationStep: () => simulationStep(),
+    getTargetTps: () => targetTicksPerSecond,
+    isMultiplayer: () => isMultiplayer
+});
 
 // Speed Toggle UI (using SpeedToggle module)
 const speedToggle = new SpeedToggle({
@@ -1097,11 +1112,27 @@ const speedToggle = new SpeedToggle({
     isOnLocalhost: isOnLocalhost,
     onSpeedChange: (syncWithRender) => {
         SYNC_SIM_WITH_RENDER = syncWithRender;
+        simScheduler.setSyncMode(syncWithRender);
     },
     onFastModeStart: () => fastSimulationLoop()
 });
 
 console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
+
+// Network heartbeat manager
+const networkHeartbeat = new NetworkHeartbeat({
+    heartbeatInterval: 1000,
+    fullSyncInterval: FULL_SYNC_INTERVAL,
+    networkSync: networkSync,
+    getGridData: () => grid.download(),
+    getSimTime: () => simTime,
+    getFactoryState: () => ({
+        factoryCounts: playerFactoryCounts,
+        totalPlaced: playerTotalFactoriesPlaced,
+        factoriesPlaced: factoriesPlaced
+    }),
+    getPotentialTps: () => getPotentialTps()
+});
 
 // Initialize network indicator now that speedToggle exists
 updateNetworkIndicator();
@@ -1155,8 +1186,7 @@ function simulationStep() {
     grid.getWriteFramebuffer().unbind();
     grid.swap();
     
-    simStepCount++;
-    tpsCalcStepCount++;
+    statsTracker.recordSimStep();
     simTime += 1.0;
     
     // Save checkpoint periodically for rollback netcode using RollbackManager
@@ -1166,66 +1196,11 @@ function simulationStep() {
 }
 
 function logStats() {
-    const now = performance.now();
-    const elapsed = now - lastLogTime;
-    if (elapsed >= LOG_INTERVAL) {
-        const simFps = (simStepCount / elapsed) * 1000;
-        const renderFps = (renderFrameCount / elapsed) * 1000;
-        // console.log(`Sim: ${simFps.toFixed(0)} steps/sec | Render: ${renderFps.toFixed(0)} fps | Step: ${Math.floor(simTime)}`);
-        simStepCount = 0;
-        renderFrameCount = 0;
-        lastLogTime = now;
-    }
+    // Update stats tracker (handles TPS/FPS calculation and display updates)
+    statsTracker.update();
     
-    // Calculate effective TPS and potential TPS for speed sync
-    const tpsElapsed = now - lastTpsCalcTime;
-    if (tpsElapsed >= 500) {  // Update TPS estimate every 500ms
-        // Actual TPS - how many steps we actually ran
-        const measuredTps = (tpsCalcStepCount / tpsElapsed) * 1000;
-        effectiveTicksPerSecond = Math.max(1, measuredTps);
-        tpsCalcStepCount = 0;
-        
-        // Potential TPS - based on render frame rate (how fast we COULD run)
-        if (tpsFrameCount > 0) {
-            const avgFrameTime = tpsFrameTimeAccumulator / tpsFrameCount;
-            potentialTicksPerSecond = Math.max(1, 1000 / avgFrameTime);
-        }
-        tpsFrameTimeAccumulator = 0;
-        tpsFrameCount = 0;
-        lastTpsCalcTime = now;
-        
-        // Update FPS display - potentialTicksPerSecond IS the render FPS when synced
-        updateFpsDisplay(effectiveTicksPerSecond, targetTicksPerSecond, potentialTicksPerSecond, potentialTicksPerSecond);
-        
-        // Update tick counter display
-        updateTickDisplay();
-    }
-    
-    // Send heartbeat periodically in multiplayer
-    if (isMultiplayer && networkSync.isConnected && !isSpectator) {
-        if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
-            // Send POTENTIAL TPS (what we could run at), not actual (throttled) TPS
-            // This allows the system to speed up when both peers can go faster
-            if (potentialTicksPerSecond > 1) {
-                networkSync.sendHeartbeat(potentialTicksPerSecond, Math.floor(simTime));
-            }
-            lastHeartbeatTime = now;
-        }
-        
-        // Periodic full state sync from host to keep all clients aligned
-        // This compensates for any remaining determinism issues
-        if (networkSync.playerId === 1 && now - lastFullSyncTime >= FULL_SYNC_INTERVAL) {
-            const gridData = grid.download();
-            networkSync.syncState(gridData, {
-                type: 'periodic_sync',
-                factoryCounts: { ...playerFactoryCounts },
-                totalPlaced: { ...playerTotalFactoriesPlaced },
-                factoriesPlaced: factoriesPlaced
-            }, simTime);
-            lastFullSyncTime = now;
-            Logger.log('sync', `Sent periodic sync at tick ${Math.floor(simTime)}`);
-        }
-    }
+    // Handle network heartbeat and periodic sync
+    networkHeartbeat.update(isMultiplayer, isSpectator);
 }
 
 // Fast simulation loop (runs as fast as possible via setTimeout)
@@ -1278,56 +1253,23 @@ winConditionManager.start();
 // Render Loop (also runs synced simulation if enabled)
 // ============================================================================
 
-let lastSimStepTime = 0;  // Start at 0 so first step runs immediately
 let lastRenderTime = 0;   // For measuring potential TPS
 
 function renderLoop() {
     const now = performance.now();
     
-    // Measure potential TPS based on render frame rate
-    // This tells us how fast we COULD run, regardless of throttling
+    // Track frame time for potential TPS calculation
     if (lastRenderTime > 0) {
-        const frameTime = now - lastRenderTime;
-        tpsFrameTimeAccumulator += frameTime;
-        tpsFrameCount++;
+        statsTracker.recordRenderFrame(now - lastRenderTime);
     }
     lastRenderTime = now;
     
-    // Run simulation step if synced mode
+    // Run simulation steps (scheduler handles sync mode and TPS throttling)
     if (SYNC_SIM_WITH_RENDER) {
-        // In multiplayer, throttle to match target TPS (with margin for speedup)
-        // But always ensure at least 1 TPS minimum
-        const effectiveTargetTps = isMultiplayer ? Math.max(1, targetTicksPerSecond + TPS_MARGIN) : 999;
-        const targetFrameTime = 1000 / effectiveTargetTps;
-        
-        // Initialize lastSimStepTime on first frame
-        if (lastSimStepTime === 0) {
-            lastSimStepTime = now;
-        }
-        
-        // Run simulation if enough time has passed (or if in single-player, always run)
-        // Use a while loop to catch up if we're behind
-        if (!isMultiplayer) {
-            // Single player: run every frame
-            for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
-                simulationStep();
-            }
-            lastSimStepTime = now;
-        } else {
-            // Multiplayer: throttle to target TPS, but run multiple steps if behind
-            let stepsTaken = 0;
-            const maxStepsPerFrame = 3;  // Prevent runaway if very behind
-            while ((now - lastSimStepTime) >= targetFrameTime && stepsTaken < maxStepsPerFrame) {
-                for (let i = 0; i < SYNC_SIM_BATCH_SIZE; i++) {
-                    simulationStep();
-                }
-                lastSimStepTime += targetFrameTime;  // Advance by target amount, not "now"
-                stepsTaken++;
-            }
-        }
+        simScheduler.runFrame(now);
     }
     
-    // Always call logStats to update FPS display
+    // Update stats and network heartbeat
     logStats();
     
     // Selection is now stored in unit data (G channel bit 5) and moves automatically
@@ -1402,7 +1344,6 @@ function renderLoop() {
     
     renderShader.dispatch();
 
-    renderFrameCount++;
     requestAnimationFrame(renderLoop);
 }
 
