@@ -1,124 +1,101 @@
+/**
+ * main.js - Bootstrap and wire up the game
+ * 
+ * This file:
+ * - Parses configuration from URL and constants
+ * - Initializes GPU and shaders
+ * - Creates the Game instance
+ * - Sets up network via NetworkManager
+ * - Starts the game loop
+ */
+
 import { GPU } from './gpu/GPU.js';
 import { ComputeShader } from './gpu/ComputeShader.js';
-import { DataTexture } from './gpu/DataTexture.js';
 import { loadShader } from './shaders/load.js';
-import { CAGrid } from './ca/CAGrid.js';
 import { getNetworkSync } from './network/NetworkSync.js';
-import { AudioManager } from './audio/AudioManager.js';
-import { CheckpointBuffer } from './gpu/CheckpointBuffer.js';
-import { ActionQueue } from './network/ActionQueue.js';
-import { Logger } from './utils/Logger.js';
+import { PLAYER_1 } from './utils/GameUtils.js';
 
-// Import refactored modules
-import {
-    CELL_EMPTY, CELL_RESOURCE, CELL_MINING_UNIT, CELL_MINING_FACTORY,
-    CELL_WALL, CELL_MINING_UNIT_P2, CELL_DEMOLISH, CELL_MINING_FACTORY_P2,
-    PLAYER_1, PLAYER_2,
-    COORD_PACK_BASE, MEMORY_PACK_BASE, SELECTED_PACK_BASE, AGE_PACK_BASE, COMMAND_FRESHNESS,
-    createSeededRandom, packCoords, unpackCoords,
-    getUnitSelectedFromG, setUnitSelectionInG,
-    getGridIndex, isInBounds, getUnitTypeForPlayer, getFactoryTypeForPlayer,
-    formatDuration, clamp, distance
-} from './utils/GameUtils.js';
-
-import { initGameState, getGameState } from './game/GameState.js';
-import { initCamera, getCamera } from './game/Camera.js';
-import { MatchmakingDialog } from './ui/MatchmakingDialog.js';
-import { MapGenerator } from './game/MapGenerator.js';
-import { GridActions } from './game/GridActions.js';
-import { InputHandler } from './input/InputHandler.js';
-import { GameUI } from './ui/GameUI.js';
-import { ActionApplier } from './game/ActionApplier.js';
-import { RollbackManager } from './game/RollbackManager.js';
+import { Game } from './game/Game.js';
+import { GameLoop } from './game/GameLoop.js';
+import { Renderer } from './rendering/Renderer.js';
 import { SettingsUI } from './ui/SettingsUI.js';
-import { WinConditionManager } from './game/WinConditionManager.js';
 import { NetworkIndicator } from './ui/NetworkIndicator.js';
 import { SpeedToggle } from './ui/SpeedToggle.js';
-import { StatsTracker } from './game/StatsTracker.js';
-import { NetworkHeartbeat } from './network/NetworkHeartbeat.js';
-import { SimulationScheduler } from './game/SimulationScheduler.js';
+import { NetworkManager } from './network/NetworkManager.js';
 
 // ============================================================================
-// CONFIGURATION - Edit these values to customize the game
+// CONFIGURATION
 // ============================================================================
 
-// Grid size (width and height in cells)
-const GRID_SIZE = 512;
-
-// Default map seed (can be overridden via ?seed=12345 URL param)
-const DEFAULT_MAP_SEED = 12345;
-
-// Rendering settings
-const METABALL_SCALE = 1.0;           // Metaball blob scale (0.5 = tighter, 2.0 = blobbier)
-const TEMPORAL_BLEND = 1.0;           // Temporal AA blend (0 = off, 1 = full). Only affects moving units.
-
-// Performance mode (for slower devices like MacBooks)
-let performanceMode = new URLSearchParams(window.location.search).get('perf') === '1';
-let showMinimap = !performanceMode;   // Disable minimap in performance mode
-
-// Simulation speed settings
-const LOG_INTERVAL = 1000;            // Stats logging interval in ms
-const SIM_BATCH_SIZE = 10;            // Simulation steps per batch in fast mode
-const SYNC_SIM_BATCH_SIZE = 1;        // Simulation steps per batch in synced (normal) mode
-const DEFAULT_SYNC_MODE = true;       // true = sync with render (normal), false = fast as possible
-
-// Map generation - Resource blobs (scaled 4x for 512x512)
-const NUM_BLOBS = 600;                // Number of resource clusters (was 150)
-const BLOB_MIN_RADIUS = 3;            // Minimum blob radius
-const BLOB_MAX_RADIUS = 8;            // Maximum blob radius
-const BLOB_DENSITY = 0.6;             // % of cells in blob that have resources
-
-// Map generation - Walls (scaled 4x for 512x512)
-const NUM_WALL_LINES = 176;           // Number of wall lines (was 44)
-const WALL_MIN_LENGTH = 5;            // Minimum wall line length
-const WALL_MAX_LENGTH = 20;           // Maximum wall line length
-const NUM_WALL_BLOBS = 20;            // Number of small wall clusters (was 5)
-const WALL_BLOB_RADIUS = 3;           // Radius of wall clusters
-
-// Camera/Viewport settings
-const DEFAULT_ZOOM = 2.0;             // Initial zoom (2.0 = shows same area as before, 1.0 = full map)
-const MIN_ZOOM = 1.5;                 // Minimum zoom (1.5 = at most 2/3 of map visible, prevents seeing entire map)
-const MAX_ZOOM = 8.0;                 // Maximum zoom (zoomed in 8x)
-const ZOOM_SPEED = 0.1;               // Zoom speed per wheel tick
-const PAN_SPEED = 1.0;                // Pan speed multiplier
-
-// Gameplay settings
-const FIRST_FACTORY_RESOURCES = 50;   // Resources given to first factory only
-const DELETE_RADIUS = 5;              // Radius in grid cells for delete operation
-
-// Cell type and player constants are now imported from GameUtils.js
-
-// Current player (for multiplayer - default to player 1)
-// TODO: Migrate to GameState
-let currentPlayer = PLAYER_1;
-
-// Spectator mode flag (set later when URL is parsed)
-// TODO: Migrate to GameState
-let isSpectator = false;
+const CONFIG = {
+    // Grid
+    gridSize: 512,
+    defaultMapSeed: 12345,
+    
+    // Rendering
+    metaballScale: 1.0,
+    temporalBlend: 1.0,
+    
+    // Simulation
+    logInterval: 1000,
+    simBatchSize: 10,
+    syncSimBatchSize: 1,
+    defaultSyncMode: true,
+    
+    // Map generation
+    numBlobs: 600,
+    blobMinRadius: 3,
+    blobMaxRadius: 8,
+    blobDensity: 0.6,
+    numWallLines: 176,
+    wallMinLength: 5,
+    wallMaxLength: 20,
+    numWallBlobs: 20,
+    wallBlobRadius: 3,
+    
+    // Camera
+    defaultZoom: 2.0,
+    minZoom: 1.5,
+    maxZoom: 8.0,
+    zoomSpeed: 0.1,
+    panSpeed: 1.0,
+    
+    // Gameplay
+    firstFactoryResources: 50,
+    deleteRadius: 5,
+    maxFactoriesPerPlayer: 7,
+    
+    // Rollback
+    checkpointInterval: 10,
+    maxCheckpoints: 30,
+    syncWaitTimeout: 3000,
+    
+    // Network
+    heartbeatInterval: 1000,
+    fullSyncInterval: 5000,
+    tickSyncThreshold: 30,
+    tickSyncHardThreshold: 300,
+    tickCatchupBatch: 10,
+    tpsMargin: 5,
+    tickSyncDisplayThreshold: 30
+};
 
 // ============================================================================
-// Seeded PRNG for Deterministic Map Generation
+// Parse URL parameters
 // ============================================================================
 
-// createSeededRandom is now imported from GameUtils.js
-
-// Map seed - can be shared between players for deterministic map generation
-let mapSeed = DEFAULT_MAP_SEED;
 const urlParams = new URLSearchParams(window.location.search);
+const mapSeed = parseInt(urlParams.get('seed')) || CONFIG.defaultMapSeed;
+const roomParam = urlParams.get('room');
+const playerParam = urlParams.get('player');
+const spectatorParam = urlParams.get('spectator');
+const performanceMode = urlParams.get('perf') === '1';
 
-// Hide multiplayer UI on GitHub Pages (no WebSocket server there)
 const isOnGitHub = window.location.hostname.includes('github');
 const isOnLocalhost = window.location.hostname.includes('localhost');
-
-const seedParam = urlParams.get('seed');
-if (seedParam) {
-    mapSeed = parseInt(seedParam) || DEFAULT_MAP_SEED;
-}
+const isSpectator = spectatorParam === 'true' || spectatorParam === '1';
 
 console.log(`Map seed: ${mapSeed}`);
-
-// Shader mode (managed by SettingsUI, declared here for use before init)
-let currentShaderMode = 'metaball';
 
 // ============================================================================
 // Initialize GPU
@@ -128,24 +105,11 @@ const canvas = document.getElementById('canvas');
 const gpu = GPU.init(canvas);
 const gl = gpu.gl;
 
-// Initialize Camera (from refactored module)
-const camera = initCamera({
-    gridSize: GRID_SIZE,
-    defaultZoom: DEFAULT_ZOOM,
-    minZoom: MIN_ZOOM,
-    maxZoom: MAX_ZOOM,
-    zoomSpeed: ZOOM_SPEED,
-    panSpeed: PAN_SPEED
-});
-camera.setCanvas(canvas);
-
 function resize() {
     const dpr = window.devicePixelRatio || 1;
-    // Use the minimum of width/height to keep canvas square
     const size = Math.min(window.innerWidth, window.innerHeight);
     canvas.width = size * dpr;
     canvas.height = size * dpr;
-    // Also set CSS size to match
     canvas.style.width = size + 'px';
     canvas.style.height = size + 'px';
 }
@@ -155,11 +119,10 @@ resize();
 console.log('GPU compute framework initialized');
 
 // ============================================================================
-// Load Shaders (v2 architecture) - Load both render shaders
+// Load Shaders
 // ============================================================================
 
 console.time('⏱️ Total shader loading');
-console.time('⏱️ Shader source loading (fetch + preprocess)');
 
 const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise.all([
     loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
@@ -167,31 +130,71 @@ const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise
     loadShader('./src/shaders/ca/v2/render.frag.glsl')
 ]);
 
-console.timeEnd('⏱️ Shader source loading (fetch + preprocess)');
-console.log(`  Shader sizes: sim=${simShaderSource.length}, metaball=${metaballShaderSource.length}, debug=${debugShaderSource.length}`);
-
-console.time('⏱️ Shader compilation (GPU)');
-
-// Create shaders (compilation starts in parallel with KHR_parallel_shader_compile if available)
 const simShader = new ComputeShader(simShaderSource);
 const metaballRenderShader = new ComputeShader(metaballShaderSource);
 const debugRenderShader = new ComputeShader(debugShaderSource);
 
-// Wait for all shaders to compile in parallel
 await Promise.all([
     simShader.waitReady(),
     metaballRenderShader.waitReady(),
     debugRenderShader.waitReady()
 ]);
 
-console.timeEnd('⏱️ Shader compilation (GPU)');
 console.timeEnd('⏱️ Total shader loading');
 
 // ============================================================================
-// Settings UI (Shader and Performance Mode Toggles)
+// Create Game instance
 // ============================================================================
 
-let renderShader = null;  // Set by SettingsUI
+const game = new Game({
+    ...CONFIG,
+    gl,
+    canvas,
+    simShader,
+    renderShader: metaballRenderShader,
+    mapSeed,
+    currentPlayer: PLAYER_1,
+    isSpectator,
+    performanceMode,
+    isOnGitHub
+});
+
+// ============================================================================
+// Create Renderer
+// ============================================================================
+
+const renderer = new Renderer({
+    game,
+    shaders: {
+        metaball: metaballRenderShader,
+        debug: debugRenderShader
+    },
+    config: {
+        metaballScale: CONFIG.metaballScale,
+        temporalBlend: CONFIG.temporalBlend,
+        deleteRadius: CONFIG.deleteRadius
+    }
+});
+
+// ============================================================================
+// Create GameLoop
+// ============================================================================
+
+const gameLoop = new GameLoop({
+    game,
+    renderer,
+    config: {
+        simBatchSize: CONFIG.simBatchSize,
+        syncSimBatchSize: CONFIG.syncSimBatchSize,
+        tpsMargin: CONFIG.tpsMargin,
+        heartbeatInterval: CONFIG.heartbeatInterval,
+        fullSyncInterval: CONFIG.fullSyncInterval
+    }
+});
+
+// ============================================================================
+// Settings UI
+// ============================================================================
 
 const settingsUI = new SettingsUI({
     shaders: {
@@ -199,1158 +202,73 @@ const settingsUI = new SettingsUI({
         debug: debugRenderShader
     },
     onShaderChange: (shader, mode) => {
-        renderShader = shader;
-        currentShaderMode = mode;
+        renderer.setShaderMode(mode);
     },
     onPerformanceChange: (enabled, minimap) => {
-        performanceMode = enabled;
-        showMinimap = minimap;
-    }
-});
-
-// Initialize render shader from settings
-renderShader = settingsUI.getCurrentShader();
-currentShaderMode = settingsUI.getShaderMode();
-performanceMode = settingsUI.isPerformanceMode();
-showMinimap = settingsUI.shouldShowMinimap();
-
-console.log(`Shader mode: ${currentShaderMode} (use switchShader('debug') or switchShader('metaball') to change)`);
-console.log(`Performance mode: ${performanceMode ? 'ON' : 'OFF'}`);
-
-// ============================================================================
-// Initialize World
-// ============================================================================
-const grid = new CAGrid(GRID_SIZE, GRID_SIZE);
-const gridActions = new GridActions(GRID_SIZE);
-
-// ActionApplier handles applying game actions to grid data
-const actionApplier = new ActionApplier({
-    gridSize: GRID_SIZE,
-    deleteRadius: DELETE_RADIUS,
-    firstFactoryResources: FIRST_FACTORY_RESOURCES,
-    onStateChange: (changes) => {
-        // Handle factory placement state changes
-        if (changes.factoryPlaced) {
-            const { player, isFirst } = changes.factoryPlaced;
-            playerFactoryCounts[player]++;
-            playerTotalFactoriesPlaced[player]++;
-            factoriesPlaced++;
-            updatePlayerIndicator();
-        }
-        // Handle factory demolition state changes
-        if (changes.factoriesFreed) {
-            for (const [owner, count] of Object.entries(changes.factoriesFreed)) {
-                playerFactoryCounts[owner] = Math.max(0, playerFactoryCounts[owner] - count);
-            }
-            updatePlayerIndicator();
-        }
+        game.performanceMode = enabled;
+        game.showMinimap = minimap;
     }
 });
 
 // ============================================================================
-// Rollback Netcode - Checkpoint and Action Queue
-// ============================================================================
-// CheckpointBuffer stores periodic game state snapshots for rollback
-// ActionQueue stores player actions for replay
-const CHECKPOINT_INTERVAL = 10;  // Ticks between checkpoints (~166ms at 60fps) - more frequent for accurate rollback
-const MAX_CHECKPOINTS = 30;      // Keep ~5 seconds of history (30 * 10 ticks = 300 ticks = 5 sec)
-const checkpointBuffer = new CheckpointBuffer(GRID_SIZE, GRID_SIZE, {
-    format: 'float'  // Use symbolic name like CAGrid
-}, MAX_CHECKPOINTS, CHECKPOINT_INTERVAL);
-const actionQueue = new ActionQueue();
-
-// RollbackManager will be initialized later (after simTime is defined)
-let rollbackManager = null;
-
-// ============================================================================
-// Selection System - Selection state is stored directly in unit data (G channel bit 5)
-// ============================================================================
-// No separate texture needed - selection moves with units automatically
-
-// ============================================================================
-// Initialize Audio System (via AudioManager)
-// ============================================================================
-const audioManager = new AudioManager({
-    gridSize: GRID_SIZE
-});
-
-// Bind to audio toggle button and setup debug utilities
-audioManager.bindButton(document.getElementById('audioToggle'));
-audioManager.setupDebugUtils();
-
-// Convenience accessor for components that need the engine directly
-const audioEngine = audioManager.getEngine();
-
-const data = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
-
-// Encoding constants and helper functions are now imported from GameUtils.js
-// (COORD_PACK_BASE, MEMORY_PACK_BASE, SELECTED_PACK_BASE, AGE_PACK_BASE, COMMAND_FRESHNESS)
-// (getUnitSelectedFromG, setUnitSelectionInG, packCoords)
-
-// ============================================================================
-// InputHandler - Mouse and Keyboard Input (refactored module)
-// ============================================================================
-// InputHandler is initialized here but callbacks reference variables defined later.
-// This works because JavaScript closures capture variable references, not values.
-// The callbacks are only executed when events fire, after all variables are defined.
-
-// Forward declarations for InputHandler callbacks (actual implementations are below)
-let handlePlaceFactory, handleDemolish, handleUnitCommand, handleClearSelection;
-
-// Create InputHandler instance
-const inputHandler = new InputHandler({
-    canvas: canvas,
-    camera: camera,
-    gridSize: GRID_SIZE,
-    zoomSpeed: ZOOM_SPEED,
-    deleteRadius: DELETE_RADIUS,
-    
-    // Callbacks - these use forward references to functions defined later
-    onPlaceFactory: (x, y) => handlePlaceFactory?.(x, y),
-    onDemolish: (x, y) => handleDemolish?.(x, y),
-    onUnitCommand: (command) => handleUnitCommand?.(command),
-    onClearSelection: () => handleClearSelection?.(),
-    onUnitSelection: (region) => {
-        // Sync selection to network if multiplayer
-        if (isMultiplayer && networkSync?.isConnected) {
-            syncAction({ type: 'unit_selection', player: currentPlayer, region: region });
-        }
-    },
-    onInitAudio: () => {
-        if (!audioManager.isInitialized()) audioManager.init();
-    },
-    isSpectator: () => isSpectator,
-    screenToGrid: (x, y) => camera.screenToGrid(x, y),
-    markUnitsInRegion: (region) => markUnitsInRegion(region),
-    clearAllSelections: () => clearAllSelections()
-});
-
-// ============================================================================
-// Selection Management - Works directly with grid data
+// Network Setup
 // ============================================================================
 
-// Mark units in a region as selected (delegates to GridActions)
-function markUnitsInRegion(region) {
-    const currentData = grid.download();
-    const unitsMarked = gridActions.markUnitsInRegion(currentData, region, currentPlayer);
-    if (unitsMarked > 0) {
-        grid.upload(currentData);
-        console.log(`[Selection] Marked ${unitsMarked} units`);
-    }
-    return unitsMarked;
-}
+const networkSync = getNetworkSync(CONFIG.gridSize);
+game.setNetworkSync(networkSync);
 
-// Clear all selections from the grid (delegates to GridActions)
-function clearAllSelections() {
-    const currentData = grid.download();
-    const unitsCleared = gridActions.clearAllSelections(currentData, currentPlayer);
-    if (unitsCleared > 0) {
-        grid.upload(currentData);
-        console.log(`[Selection] Cleared ${unitsCleared} units`);
-    }
-    return unitsCleared;
-}
-
-// No longer needed - selection now moves with units automatically in GPU
-// function updateSelectionForMovingUnits() { ... }
-
-// Apply a unit command - modify units that are marked as selected
-// Apply a unit command - delegates to GridActions
-function applyUnitCommand(command) {
-    const { destX, destY, player } = command;
-    const currentData = grid.download();
-    const unitsCommanded = gridActions.applyUnitCommand(currentData, destX, destY, player);
-    
-    if (unitsCommanded > 0) {
-        grid.upload(currentData);
-        console.log(`[Command] Commanded ${unitsCommanded} units to move to (${destX}, ${destY})`);
-    } else {
-        console.log('[Command] No selected units found');
-    }
-}
-
-// Map generator instance
-const mapGenerator = new MapGenerator(GRID_SIZE, {
-    numBlobs: NUM_BLOBS,
-    blobMinRadius: BLOB_MIN_RADIUS,
-    blobMaxRadius: BLOB_MAX_RADIUS,
-    blobDensity: BLOB_DENSITY,
-    numWallLines: NUM_WALL_LINES,
-    wallMinLength: WALL_MIN_LENGTH,
-    wallMaxLength: WALL_MAX_LENGTH,
-    numWallBlobs: NUM_WALL_BLOBS,
-    wallBlobRadius: WALL_BLOB_RADIUS,
-});
-
-// Generate map with a specific seed
-function generateMap(seed) {
-    mapSeed = seed;
-    const result = mapGenerator.generate(data, seed);
-    grid.upload(data, true);  // allFrames=true for initial map generation
-    return result;
-}
-
-// Generate initial map
-generateMap(mapSeed);
-console.log(`  Click to place a mining factory!`);
-
-// ============================================================================
-// Click to Place Factory / Shift+Click to Delete
-// ============================================================================
-
-const MAX_FACTORIES_PER_PLAYER = 7;
-let factoriesPlaced = 0;
-
-// Track factory count per player (bases marked for demolition don't count)
-const playerFactoryCounts = {
-    [PLAYER_1]: 0,
-    [PLAYER_2]: 0
-};
-
-// Track total factories ever placed per player (for win/lose condition)
-const playerTotalFactoriesPlaced = {
-    [PLAYER_1]: 0,
-    [PLAYER_2]: 0
-};
-
-// Win condition manager (initialized later with callbacks that need networkSync)
-let winConditionManager = null;
-
-// ============================================================================
-// Input Handler Callbacks - Game logic for input actions
-// ============================================================================
-// These are called by InputHandler when user performs actions.
-// Input state (mouseX, mouseY, shiftHeld, isSelecting, etc.) is now managed by InputHandler.
-
-// Note: camera.screenToGrid() and camera.getVisibleGridSize() are used directly
-
-// ============================================================================
-// Input Handler Callback Implementations
-// ============================================================================
-// These functions are called by InputHandler when user performs game actions.
-// All input event handling (mouse, keyboard, wheel) is now in InputHandler.
-
-/**
- * Handle factory placement at grid position
- * Validates placement and delegates to ActionApplier for grid manipulation
- */
-handlePlaceFactory = (x, y) => {
-    const currentData = grid.download();
-    
-    // Pre-placement validation (game-specific rules)
-    if (isMultiplayer && connectedPlayers.size < 2) {
-        console.log('Waiting for opponent to join before placing factories');
-        audioEngine.playReject();
-        return;
-    }
-    
-    if (!gridActions.canPlaceFactory(currentData, x, y)) {
-        console.log('Cannot place factory - location invalid or blocked');
-        audioEngine.playReject();
-        return;
-    }
-    
-    if (playerFactoryCounts[currentPlayer] >= MAX_FACTORIES_PER_PLAYER) {
-        console.log(`Cannot place factory - Player ${currentPlayer} already has ${MAX_FACTORIES_PER_PLAYER} bases`);
-        audioEngine.playReject();
-        return;
-    }
-    
-    // Determine if this is the first factory (gets resources) or subsequent (unbuilt)
-    const isUnbuilt = playerFactoryCounts[currentPlayer] > 0;
-    const action = { type: 'place_factory', x, y, isUnbuilt };
-    
-    // Apply action using ActionApplier (modifies data in place)
-    // Note: onStateChange callback automatically updates factory counts
-    actionApplier.applyPlaceFactory(currentData, action, currentPlayer);
-    grid.upload(currentData);
-    
-    console.log(`[Factory] Placed ${isUnbuilt ? 'UNBUILT ' : ''}factory #${factoriesPlaced} for P${currentPlayer} at (${x}, ${y})`);
-    
-    // Sync with network
-    syncAction({ ...action, player: currentPlayer, factoryNumber: factoriesPlaced });
-};
-
-/**
- * Handle demolish at grid position
- * Delegates to ActionApplier for grid manipulation
- */
-handleDemolish = (x, y) => {
-    const currentData = grid.download();
-    const action = { type: 'demolish', x, y };
-    
-    // Apply action using ActionApplier (modifies data in place)
-    const modified = actionApplier.applyDemolish(currentData, action, currentPlayer);
-    
-    if (modified) {
-        grid.upload(currentData);
-        // Note: Factory counts are updated via onStateChange callback in ActionApplier
-        updatePlayerIndicator();
-        
-        // Sync with network
-        syncAction({ ...action, player: currentPlayer });
-    }
-};
-
-/**
- * Handle unit command (move selected units to destination)
- */
-handleUnitCommand = (command) => {
-    const activeCommand = {
-        ...command,
-        player: currentPlayer
-    };
-    
-    console.log('[Command] Sending units from', inputHandler.getSelection(), 'to', { x: command.destX, y: command.destY });
-    
-    // Apply command to units in the grid
-    applyUnitCommand(activeCommand);
-    
-    // Sync command to other players
-    if (isMultiplayer && networkSync?.isConnected) {
-        syncAction({ type: 'unit_command', ...activeCommand });
-    }
-};
-
-/**
- * Handle clear selection (sync to network)
- */
-handleClearSelection = () => {
-    if (isMultiplayer && networkSync?.isConnected) {
-        syncAction({ type: 'clear_selection', player: currentPlayer });
-    }
-};
-
-// ============================================================================
-// Game UI (Player Indicator, FPS/Tick Display)
-// ============================================================================
-
-// Tick sync threshold for display (also defined later for network sync logic)
-const TICK_SYNC_DISPLAY_THRESHOLD = 30;
-
-// Initialize GameUI with callbacks to access game state
-const gameUI = new GameUI({
-    isOnGitHub: isOnGitHub,
-    maxFactoriesPerPlayer: MAX_FACTORIES_PER_PLAYER,
-    tickSyncThreshold: TICK_SYNC_DISPLAY_THRESHOLD,
-    getCurrentPlayer: () => currentPlayer,
-    getPlayerFactoryCount: (player) => playerFactoryCounts[player] || 0,
-    isSpectator: () => isSpectator,
-    isMultiplayer: () => isMultiplayer,
-    getSimTime: () => simTime,
-    onSwitchPlayer: (player) => window.switchPlayer(player)
-});
-
-// Player switch function (exposed globally for debugging)
-window.switchPlayer = (player) => {
-    if (player === 1 || player === PLAYER_1) {
-        currentPlayer = PLAYER_1;
-    } else if (player === 2 || player === PLAYER_2) {
-        currentPlayer = PLAYER_2;
-    } else {
-        currentPlayer = currentPlayer === PLAYER_1 ? PLAYER_2 : PLAYER_1;
-    }
-    console.log(`Switched to Player ${currentPlayer}`);
-    gameUI.updatePlayerIndicator();
-};
-
-// Convenience wrappers for UI updates (used throughout main.js)
-function updatePlayerIndicator() { gameUI.updatePlayerIndicator(); }
-function updateTickDisplay() { gameUI.updateTickDisplay(); }
-function updateFpsDisplay(currentTps, targetTps, potentialTps = null, renderFps = 60) {
-    gameUI.updateFpsDisplay(currentTps, targetTps, potentialTps, renderFps);
-}
-
-// FPS/TPS display state
-let lastFrameTime = 0;
-let frameTimeSmoothed = 16.67;
-
-// Initialize player indicator
-updatePlayerIndicator();
-
-console.log('Press 1 or 2 to switch players, or click the player indicator');
-
-// ============================================================================
-// Multiplayer Network Sync
-// ============================================================================
-
-const networkSync = getNetworkSync(GRID_SIZE);
-let isMultiplayer = false;
-let waitingForSync = false;  // In multiplayer, wait for state sync before running simulation
-let waitingForSyncStartTime = 0;  // When we started waiting
-const SYNC_WAIT_TIMEOUT = 3000;  // Give up waiting after 3 seconds
-
-// Periodic full state sync to keep clients aligned
-const FULL_SYNC_INTERVAL = 5000;  // Send full state every 5 seconds
-
-// Track connected players in multiplayer
-const connectedPlayers = new Set();
-
-// Get room from URL or generate one
-const roomParam = urlParams.get('room');
-let roomId = roomParam || `game-${mapSeed}`;
-
-// Get player ID from URL (for rejoining after refresh)
-const playerParam = urlParams.get('player');
-const requestedPlayerId = playerParam ? parseInt(playerParam) : null;
-console.log(`[URL Params] playerParam: "${playerParam}", requestedPlayerId: ${requestedPlayerId}`);
-
-// Check if spectator mode
-const spectatorParam = urlParams.get('spectator');
-isSpectator = spectatorParam === 'true' || spectatorParam === '1';
-console.log(`[URL Params] spectatorParam: "${spectatorParam}", isSpectator: ${isSpectator}`);
-
-// Network event handlers
-networkSync.onConnectionChange = (connected) => {
-    isMultiplayer = connected;
-    if (!connected) {
-        connectedPlayers.clear();
-    }
-    updateNetworkIndicator();
-};
-
-// Spectator mode handler
-networkSync.onSpectating = (spectatorId, serverMapSeed, serverConnectedPlayers) => {
-    console.log(`[Spectator] Joined as Spectator ${spectatorId}, mapSeed: ${serverMapSeed}`);
-    isSpectator = true;
-    
-    // Track connected players
-    if (serverConnectedPlayers && Array.isArray(serverConnectedPlayers)) {
-        serverConnectedPlayers.forEach(pid => connectedPlayers.add(pid));
-    }
-    
-    // Update to server's map seed if different
-    if (serverMapSeed !== undefined && serverMapSeed !== mapSeed) {
-        console.log(`[Spectator] Server has map seed ${serverMapSeed}, regenerating map...`);
-        generateMap(serverMapSeed);
-    }
-    
-    // Update URL with room and spectator flag
-    const url = new URL(window.location);
-    url.searchParams.set('room', roomId);
-    url.searchParams.set('spectator', 'true');
-    url.searchParams.delete('player');
-    window.history.replaceState({}, '', url);
-    
-    updateNetworkIndicator();
-    updatePlayerIndicator();
-};
-
-// Restart handler (for Play Again)
-networkSync.onRestart = (newMapSeed, initiatedBy) => {
-    console.log(`[Multiplayer] Game restarting with new seed ${newMapSeed}`);
-    
-    // Keep room and player params, just reload with new seed
-    const url = new URL(window.location);
-    url.searchParams.set('seed', newMapSeed);
-    window.location.href = url.toString();
-};
-
-// Tick sync constants
-const TICK_SYNC_THRESHOLD = 30;      // Start catching up if behind by this many ticks
-const TICK_SYNC_HARD_THRESHOLD = 300; // Request full state sync if behind by this many
-const TICK_CATCHUP_BATCH = 10;        // Max ticks to catch up per frame
-
-// Speed sync handler - adjust simulation speed to match slowest peer and sync ticks
-networkSync.onSpeedSync = (serverTargetTps, slowestPlayer, tickCounts = {}, targetTick = 0, leaderPlayer = 0) => {
-    const oldTarget = targetTicksPerSecond;
-    // Enforce minimum of 1 TPS to prevent stalling
-    targetTicksPerSecond = Math.max(1, serverTargetTps);
-    
-    // Only log if target changed significantly
-    if (Math.abs(oldTarget - serverTargetTps) > 1) {
-        Logger.log('speed', `Target TPS: ${targetTicksPerSecond.toFixed(1)} (slowest: P${slowestPlayer}, our potential: ${getEffectiveTps().toFixed(1)})`);
-    }
-    
-    // Tick synchronization - check if we're behind the leader
-    if (targetTick > 0 && networkSync.playerId) {
-        // Update tracking variables for display
-        gameUI.setTargetTick(targetTick, leaderPlayer);
-        
-        const ourTick = Math.floor(simTime);
-        const tickDifference = targetTick - ourTick;
-        
-        if (tickDifference > TICK_SYNC_HARD_THRESHOLD) {
-            // Too far behind - request full state sync
-            console.log(`[Tick Sync] Too far behind (${tickDifference} ticks), requesting full state sync`);
-            // The host will send us their state on the next heartbeat cycle
-            // For now, we'll just fast-forward aggressively
-            const catchupTicks = Math.min(tickDifference, TICK_CATCHUP_BATCH * 5);
-            console.log(`[Tick Sync] Fast-forwarding ${catchupTicks} ticks (from ${ourTick} toward ${targetTick})`);
-            for (let i = 0; i < catchupTicks; i++) {
-                simulationStep();
-            }
-        } else if (tickDifference > TICK_SYNC_THRESHOLD) {
-            // Moderately behind - catch up gradually
-            const catchupTicks = Math.min(tickDifference - TICK_SYNC_THRESHOLD, TICK_CATCHUP_BATCH);
-            if (catchupTicks > 0) {
-                console.log(`[Tick Sync] Behind by ${tickDifference} ticks, catching up ${catchupTicks} (from ${ourTick} toward ${targetTick})`);
-                for (let i = 0; i < catchupTicks; i++) {
-                    simulationStep();
-                }
-            }
-        }
-    }
-};
-
-networkSync.onPlayerJoined = (playerId, isHost, serverMapSeed, serverConnectedPlayers) => {
-    console.log(`[Multiplayer] ${isHost ? 'You are the host' : 'Player joined'}: ${playerId}, networkSync.playerId: ${networkSync.playerId}, mapSeed: ${serverMapSeed}, connectedPlayers: ${serverConnectedPlayers}`);
-    
-    // Track connected players - add all from server list if provided, otherwise just this one
-    if (serverConnectedPlayers && Array.isArray(serverConnectedPlayers)) {
-        serverConnectedPlayers.forEach(pid => connectedPlayers.add(pid));
-    } else {
-        connectedPlayers.add(playerId);
-    }
-    
-    // Only assign our player number when WE join, not when others join
-    // networkSync.playerId is set before this callback, so we can check if this is our own join
-    if (playerId === networkSync.playerId) {
-        console.log(`[Multiplayer] This is our join! Setting currentPlayer based on playerId: ${playerId}`);
-        if (playerId === 1) {
-            currentPlayer = PLAYER_1;
-        } else {
-            currentPlayer = PLAYER_2;
-        }
-        console.log(`[Multiplayer] currentPlayer is now: ${currentPlayer} (PLAYER_1=${PLAYER_1}, PLAYER_2=${PLAYER_2})`);
-        updatePlayerIndicator();
-        
-        // If we're the host (Player 1), we don't wait for sync - we ARE the source of truth
-        // Non-hosts will receive state sync from host or server cache shortly after joining
-        if (isHost && waitingForSync) {
-            console.log(`[Multiplayer] We are the host, no need to wait for sync`);
-            waitingForSync = false;
-        }
-        
-        // If server provided a map seed different from ours, regenerate the map
-        if (serverMapSeed !== undefined && serverMapSeed !== mapSeed) {
-            console.log(`[Multiplayer] Server has different map seed (${serverMapSeed}), regenerating map...`);
-            generateMap(serverMapSeed);
-            // Reset factory counters since we have a fresh map
-            playerFactoryCounts[PLAYER_1] = 0;
-            playerFactoryCounts[PLAYER_2] = 0;
-            playerTotalFactoriesPlaced[PLAYER_1] = 0;
-            playerTotalFactoriesPlaced[PLAYER_2] = 0;
-            factoriesPlaced = 0;
-        }
-        
-        // Update URL with room, player ID, and seed (for refresh/rejoin)
-        const url = new URL(window.location);
-        url.searchParams.set('room', roomId);
-        url.searchParams.set('player', playerId);
-        if (serverMapSeed !== undefined) {
-            url.searchParams.set('seed', serverMapSeed);
-        }
-        window.history.replaceState({}, '', url);
-        console.log(`[Multiplayer] URL updated: ${url.toString()}`);
-    } else {
-        console.log(`[Multiplayer] Another player joined: ${playerId}`);
-        
-        // If we're Player 1 (the host), sync FULL state to the new player
-        // This is critical - lightweight game_action messages won't include the grid!
-        if (networkSync.playerId === 1) {
-            console.log(`[Multiplayer] We are the host - syncing FULL game state to new player`);
-            
-            // Download current grid state
-            const gridData = grid.download();
-            
-            // Send full state sync (binary) with simTime so new player starts at same tick
-            networkSync.syncState(gridData, {
-                type: 'player_sync',
-                reason: 'new_player_joined',
-                newPlayerId: playerId,
-                factoryCounts: { ...playerFactoryCounts },
-                totalPlaced: { ...playerTotalFactoriesPlaced },
-                factoriesPlaced: factoriesPlaced
-            }, simTime);
-            
-            console.log(`[Multiplayer] Sent full state at tick ${simTime} to new player ${playerId}`);
-        }
-    }
-    updateNetworkIndicator();
-};
-
-networkSync.onPlayerLeft = (playerId) => {
-    console.log(`[Multiplayer] Player ${playerId} left`);
-    connectedPlayers.delete(playerId);
-    updateNetworkIndicator();
-};
-
-networkSync.onStateReceived = (syncData) => {
-    // Received state from another player - apply it
-    const receiveTime = performance.now();
-    const isPeriodicSync = syncData.action && syncData.action.type === 'periodic_sync';
-    const tickDiff = Math.floor(syncData.simTime - simTime);
-    const syncType = isPeriodicSync ? 'PERIODIC' : 'FULL';
-    const behindAhead = tickDiff > 0 ? 'behind' : tickDiff < 0 ? 'ahead' : 'in-sync';
-    
-    Logger.log('sync', `=== ${syncType} SYNC from P${syncData.playerId} ===`);
-    Logger.log('sync', `Their tick: ${Math.floor(syncData.simTime)}, Our tick: ${Math.floor(simTime)}, Delta: ${tickDiff} (we are ${behindAhead})`);
-    
-    // Clear waiting state - we now have valid state to work with
-    if (waitingForSync) {
-        Logger.log('sync', 'State sync received, simulation can now run');
-        waitingForSync = false;
-    }
-    
-    // Update local grid with received state
-    const uploadStart = performance.now();
-    const stateSize = syncData.gridState ? syncData.gridState.length : 0;
-    
-    if (syncData.gridState && stateSize > 0) {
-        grid.upload(syncData.gridState);
-        const uploadTime = performance.now() - uploadStart;
-        Logger.log('sync', `Grid uploaded: ${(stateSize * 4 / 1024 / 1024).toFixed(2)} MB in ${uploadTime.toFixed(1)}ms`);
-    } else {
-        Logger.error('sync', 'No grid state to upload!');
-        return;
-    }
-    
-    // For periodic syncs: Apply grid state, set simTime to match, then fast-forward
-    // For initial/player syncs: Just sync the time since we're starting fresh
-    const oldSimTime = simTime;
-    if (!isPeriodicSync) {
-        simTime = syncData.simTime;
-        Logger.log('sync', `Initial sync: tick set to ${Math.floor(simTime)}`);
-    } else {
-        // For periodic sync: we need to fast-forward from the received tick to our current tick
-        const ticksToFastForward = Math.floor(oldSimTime - syncData.simTime);
-        
-        if (ticksToFastForward > 0 && ticksToFastForward < 120) {
-            // We're ahead - fast-forward the received state to catch up
-            Logger.log('sync', `Fast-forwarding ${ticksToFastForward} ticks (from ${Math.floor(syncData.simTime)} to ${Math.floor(oldSimTime)})`);
-            simTime = syncData.simTime;
-            
-            const ffStart = performance.now();
-            for (let i = 0; i < ticksToFastForward; i++) {
-                simShader.use();
-                simShader.setTexture('u_state', grid.getReadTexture(), 0);
-                simShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
-                simShader.setFloat('u_time', simTime);
-                grid.getWriteFramebuffer().bind();
-                simShader.dispatch();
-                grid.getWriteFramebuffer().unbind();
-                grid.swap();
-                simTime += 1.0;
-            }
-            const ffTime = performance.now() - ffStart;
-            Logger.log('sync', `Fast-forward complete: now at tick ${Math.floor(simTime)} (${ffTime.toFixed(1)}ms)`);
-        } else if (ticksToFastForward <= 0) {
-            simTime = syncData.simTime;
-            Logger.log('sync', `We were behind: tick synced to ${Math.floor(simTime)}`);
-        } else {
-            simTime = syncData.simTime;
-            Logger.log('sync', `Too far ahead (${ticksToFastForward} ticks): reset to ${Math.floor(simTime)}`);
-        }
-    }
-    
-    // For initial syncs: clear rollback state since we're starting fresh
-    if (!isPeriodicSync) {
-        if (rollbackManager) {
-            rollbackManager.clear();
-            rollbackManager.saveInitialCheckpoint(simTime);
-            console.log(`[Multiplayer] Saved initial checkpoint at tick ${simTime}`);
-        }
-    }
-    
-    // Update factory counts based on action
-    const action = syncData.action;
-    if (action) {
-        if (action.type === 'player_sync' || action.type === 'periodic_sync') {
-            // Full state sync from host - replace our factory counts entirely
-            if (action.factoryCounts) {
-                playerFactoryCounts[PLAYER_1] = action.factoryCounts[PLAYER_1] || 0;
-                playerFactoryCounts[PLAYER_2] = action.factoryCounts[PLAYER_2] || 0;
-            }
-            if (action.totalPlaced) {
-                playerTotalFactoriesPlaced[PLAYER_1] = action.totalPlaced[PLAYER_1] || 0;
-                playerTotalFactoriesPlaced[PLAYER_2] = action.totalPlaced[PLAYER_2] || 0;
-            }
-            if (action.factoriesPlaced !== undefined) {
-                factoriesPlaced = action.factoriesPlaced;
-            }
-            const syncType = action.type === 'periodic_sync' ? 'Periodic' : 'Full';
-            console.log(`[Multiplayer] ${syncType} state sync received at tick ${simTime}. Factories: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
-            updatePlayerIndicator();
-        } else if (action.type === 'place_factory' && action.player) {
-            playerFactoryCounts[action.player]++;
-            playerTotalFactoriesPlaced[action.player]++;
-            factoriesPlaced++;
-            console.log(`[Multiplayer] Player ${action.player} placed factory (${playerFactoryCounts[action.player]}/${MAX_FACTORIES_PER_PLAYER})`);
-            updatePlayerIndicator();
-        } else if (action.type === 'demolish' && action.factoriesFreed) {
-            // Decrement counts for freed factories
-            for (const [player, count] of Object.entries(action.factoriesFreed)) {
-                playerFactoryCounts[player] = Math.max(0, playerFactoryCounts[player] - count);
-            }
-            console.log(`[Multiplayer] Factories demolished, counts: P1=${playerFactoryCounts[PLAYER_1]}, P2=${playerFactoryCounts[PLAYER_2]}`);
-            updatePlayerIndicator();
-        } else if (action.type === 'unit_command') {
-            // Other player issued a unit command
-            console.log(`[Multiplayer] Player ${syncData.playerId} issued unit command`);
-            // The grid state is already applied, no need to reapply the command
-        } else if (action.type === 'clear_selection') {
-            // Other player cleared their selection
-            console.log(`[Multiplayer] Player ${syncData.playerId} cleared selection`);
-            // No action needed - selections are local to each player
-        } else if (action.type === 'unit_selection') {
-            // Other player made a selection
-            console.log(`[Multiplayer] Player ${syncData.playerId} selected units in region`);
-            // No action needed - selections are local to each player
-        }
-    }
-    
-    // Selection is stored in unit data (G channel bit 5) and persists automatically
-    // No need to re-apply selection - it's part of the grid state
-    
-    console.log(`[Multiplayer] State applied. Action: ${action?.type || 'unknown'}`);
-};
-
-// Network indicator UI (using NetworkIndicator module)
+// Network indicator
 const networkIndicator = new NetworkIndicator({
-    onClick: () => toggleMultiplayer(),
+    onClick: () => networkManager.toggleMultiplayer(),
     disabled: isOnGitHub
 });
 
-// Helper to update network indicator and handle speed toggle visibility
-function updateNetworkIndicator() {
-    networkIndicator.update(isMultiplayer, isSpectator, connectedPlayers);
-    
-    // Hide Super Speed toggle when in multiplayer (speed must be synced) - but allow on localhost
-    if (isMultiplayer && !isOnLocalhost) {
-        speedToggle.hide();
-        speedToggle.forceSyncMode();
-    } else if (!isMultiplayer) {
-        speedToggle.show();
-    }
-}
-
-// Matchmaking dialog instance (created lazily)
-let matchmakingDialog = null;
-
-async function joinRoom(roomIdToJoin) {
-    try {
-        const wsUrl = `ws://${window.location.host}/ws`;
-        console.log(`[Multiplayer] Joining room: ${roomIdToJoin}`);
-        // Update the global roomId so URL updates correctly
-        roomId = roomIdToJoin;
-        // Wait for state sync before running simulation (unless we become host)
-        waitingForSync = true;
-        waitingForSyncStartTime = performance.now();
-        await networkSync.connect(wsUrl, roomIdToJoin, null, false);
-        console.log(`[Multiplayer] Connected to room: ${roomIdToJoin}`);
-    } catch (error) {
-        console.error('[Multiplayer] Connection failed:', error);
-    }
-}
-
-async function watchRoom(roomIdToWatch) {
-    try {
-        const wsUrl = `ws://${window.location.host}/ws`;
-        console.log(`[Spectator] Watching room: ${roomIdToWatch}`);
-        // Update the global roomId
-        roomId = roomIdToWatch;
-        isSpectator = true;
-        await networkSync.connect(wsUrl, roomIdToWatch, null, true);
-        console.log(`[Spectator] Connected to room: ${roomIdToWatch}`);
-    } catch (error) {
-        console.error('[Spectator] Failed to watch room:', error);
-    }
-}
-
-async function toggleMultiplayer() {
-    if (isMultiplayer) {
-        networkSync.disconnect();
-    } else {
-        // Create matchmaking dialog if not exists
-        if (!matchmakingDialog) {
-            matchmakingDialog = new MatchmakingDialog(networkSync, {
-                onJoinRoom: joinRoom,
-                onWatchRoom: watchRoom,
-                onCreateRoom: joinRoom
-            });
-        }
-        await matchmakingDialog.show();
-    }
-}
-
-// Sync state after an action - uses RollbackManager for local action storage
-function syncAction(action) {
-    if (isMultiplayer && networkSync.isConnected) {
-        // Store action locally for potential replay using RollbackManager
-        rollbackManager.storeLocalAction(action, currentPlayer);
-        console.log(`[syncAction] Stored local action: ${action.type} at tick ${Math.floor(simTime)}, queue size: ${actionQueue.actions.length}`);
-        
-        // Send lightweight action message (no grid data!)
-        networkSync.sendAction(action, Math.floor(simTime));
-        console.log(`[syncAction] Sent lightweight action: ${action.type} at tick ${Math.floor(simTime)}`);
-    }
-}
-
-// ============================================================================
-// Rollback Netcode - Apply and Replay
-// ============================================================================
-
-/**
- * Apply an action to the current grid state.
- * This is called both for local actions and during replay.
- * Delegates to ActionApplier for the actual grid manipulation.
- * 
- * @param {Object} action - The action to apply
- * @param {number} playerId - The player who performed the action
- * @returns {boolean} True if the grid was modified
- */
-function applyAction(action, playerId) {
-    const currentData = grid.download();
-    const modified = actionApplier.applyAction(currentData, action, playerId);
-    
-    if (modified) {
-        grid.uploadCurrent(currentData);
-    }
-    
-    return modified;
-}
-
-// Handle incoming actions from other players - delegates to RollbackManager
-networkSync.onActionReceived = (message) => {
-    const { playerId, simTime: actionTick, action } = message;
-    // Delegate to RollbackManager for rollback detection and handling
-    rollbackManager.processRemoteAction(action, playerId, actionTick);
-};
-
-// Note: updateNetworkIndicator() is called after speedToggle is initialized
-
-// Expose to console
-window.toggleMultiplayer = toggleMultiplayer;
-window.networkSync = networkSync;
-console.log(`Room ID: ${roomId} - Click network indicator or call toggleMultiplayer() to connect`);
-
-// Auto-connect if room URL param is present (for rejoining after refresh or spectator mode)
-if (roomParam && !isOnGitHub) {
-    if (spectatorParam) {
-        // Auto-connect as spectator
-        console.log(`[Spectator] Auto-connecting to room ${roomId} as spectator...`);
-        (async () => {
-            try {
-                await watchRoom(roomId);
-            } catch (error) {
-                console.error('[Spectator] Reconnection failed:', error);
-            }
-        })();
-    } else if (playerParam) {
-        // Auto-connect as player with saved player ID
-        console.log(`[Multiplayer] Auto-connecting to room ${roomId} as player ${requestedPlayerId}...`);
-        // Wait for state sync before running simulation
-        waitingForSync = true;
-        waitingForSyncStartTime = performance.now();
-        (async () => {
-            try {
-                const wsUrl = `ws://${window.location.host}/ws`;
-                await networkSync.connect(wsUrl, roomId, requestedPlayerId, false);
-                console.log(`[Multiplayer] Reconnected to room: ${roomId}`);
-            } catch (error) {
-                console.error('[Multiplayer] Reconnection failed:', error);
-            }
-        })();
-    }
-}
-
-// ============================================================================
-// Simulation Loop
-// ============================================================================
-
-let simTime = 0;
-let lastLoggedTick = -1;  // For debug logging
-
-// Initialize RollbackManager now that simTime is defined
-// (simulationStep is hoisted so it can be referenced)
-rollbackManager = new RollbackManager({
-    checkpointBuffer,
-    actionQueue,
-    getGridData: () => grid.download(),
-    uploadGridData: (data) => grid.uploadCurrent(data),
-    getCurrentTick: () => Math.floor(simTime),
-    setTick: (tick) => { simTime = tick; },
-    simulationStep: () => simulationStep(),
-    applyAction: (action, playerId) => applyAction(action, playerId)
-});
-
-// Speed synchronization for multiplayer
-let targetTicksPerSecond = 60;     // Target TPS from server (slowest peer)
-const TPS_MARGIN = 5;              // Add margin to target TPS to allow speedup
-
-// Stats tracking module
-const statsTracker = new StatsTracker({
-    logInterval: LOG_INTERVAL,
-    tpsUpdateInterval: 500,
-    onFpsUpdate: (effectiveTps, targetTps, potentialTps, renderFps) => {
-        updateFpsDisplay(effectiveTps, targetTps, potentialTps, renderFps);
-    },
-    onTickUpdate: () => updateTickDisplay()
-});
-
-// Getters for stats (used by network sync)
-const getEffectiveTps = () => statsTracker.getEffectiveTps();
-const getPotentialTps = () => statsTracker.getPotentialTps();
-
-// Toggle: true = sync with render (normal speed), false = fast as possible (super speed)
-let SYNC_SIM_WITH_RENDER = DEFAULT_SYNC_MODE;
-
-// Simulation scheduler handles when to run simulation steps
-const simScheduler = new SimulationScheduler({
-    batchSize: SYNC_SIM_BATCH_SIZE,
-    tpsMargin: TPS_MARGIN,
-    maxStepsPerFrame: 3,
-    simulationStep: () => simulationStep(),
-    getTargetTps: () => targetTicksPerSecond,
-    isMultiplayer: () => isMultiplayer
-});
-
-// Speed Toggle UI (using SpeedToggle module)
+// Speed toggle
 const speedToggle = new SpeedToggle({
-    defaultSyncMode: DEFAULT_SYNC_MODE,
-    isOnLocalhost: isOnLocalhost,
+    defaultSyncMode: CONFIG.defaultSyncMode,
+    isOnLocalhost,
     onSpeedChange: (syncWithRender) => {
-        SYNC_SIM_WITH_RENDER = syncWithRender;
-        simScheduler.setSyncMode(syncWithRender);
+        gameLoop.onSpeedChange(syncWithRender);
     },
-    onFastModeStart: () => fastSimulationLoop()
+    onFastModeStart: () => {}
 });
 
-console.log(`Simulation sync: ${SYNC_SIM_WITH_RENDER ? 'ON (synced with render)' : 'OFF (fast as possible)'} - Call toggleSimSync() to change`);
-
-// Network heartbeat manager
-const networkHeartbeat = new NetworkHeartbeat({
-    heartbeatInterval: 1000,
-    fullSyncInterval: FULL_SYNC_INTERVAL,
-    networkSync: networkSync,
-    getGridData: () => grid.download(),
-    getSimTime: () => simTime,
-    getFactoryState: () => ({
-        factoryCounts: playerFactoryCounts,
-        totalPlaced: playerTotalFactoriesPlaced,
-        factoriesPlaced: factoriesPlaced
-    }),
-    getPotentialTps: () => getPotentialTps()
+// Network manager - encapsulates all network event handling
+const networkManager = new NetworkManager({
+    networkSync,
+    game,
+    gameLoop,
+    networkIndicator,
+    speedToggle,
+    config: CONFIG,
+    isOnLocalhost,
+    initialRoomId: roomParam || `game-${mapSeed}`
 });
 
-// Initialize network indicator now that speedToggle exists
-updateNetworkIndicator();
-
-function simulationStep() {
-    // In multiplayer, don't run simulation until we've received initial state sync
-    if (waitingForSync) {
-        // Check for timeout - if we've waited too long, proceed anyway
-        if (performance.now() - waitingForSyncStartTime > SYNC_WAIT_TIMEOUT) {
-            console.warn(`[Multiplayer] Sync wait timeout after ${SYNC_WAIT_TIMEOUT}ms, proceeding with local state`);
-            waitingForSync = false;
-        } else {
-            return;
-        }
-    }
-    
-    // Apply any queued actions that should happen at this tick (from network)
-    if (isMultiplayer) {
-        const actionsAtTick = actionQueue.getActionsAtTick(simTime);
-        
-        // If we have actions to apply, save a checkpoint BEFORE applying them
-        // This ensures we can rollback to the state right before the action
-        if (actionsAtTick.length > 0 && actionsAtTick.some(a => !a.applied)) {
-            const checkpointData = grid.download();
-            checkpointBuffer.saveCheckpoint(simTime, checkpointData);
-        }
-        
-        for (const action of actionsAtTick) {
-            if (!action.applied) {
-                applyAction(action.data, action.playerId);
-                action.applied = true;
-            }
-        }
-    }
-    
-    grid.getWriteFramebuffer().bind();
-    
-    simShader.use();
-    simShader.setTexture('u_state', grid.getReadTexture(), 0);
-    simShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
-    simShader.setFloat('u_time', simTime);
-    
-    // Debug: log every 100 ticks to verify simTime is consistent
-    if (Math.floor(simTime) % 100 === 0 && Math.floor(simTime) !== lastLoggedTick) {
-        lastLoggedTick = Math.floor(simTime);
-        console.log(`[Sim] Running step at tick ${Math.floor(simTime)}`);
-    }
-    
-    simShader.dispatch();
-    
-    grid.getWriteFramebuffer().unbind();
-    grid.swap();
-    
-    statsTracker.recordSimStep();
-    simTime += 1.0;
-    
-    // Save checkpoint periodically for rollback netcode using RollbackManager
-    if (isMultiplayer && rollbackManager.shouldSaveCheckpoint()) {
-        rollbackManager.saveCheckpoint();
-    }
-}
-
-function logStats() {
-    // Update stats tracker (handles TPS/FPS calculation and display updates)
-    statsTracker.update();
-    
-    // Handle network heartbeat and periodic sync
-    networkHeartbeat.update(isMultiplayer, isSpectator);
-}
-
-// Fast simulation loop (runs as fast as possible via setTimeout)
-function fastSimulationLoop() {
-    if (SYNC_SIM_WITH_RENDER) return; // Stop if switched to sync mode
-    
-    for (let i = 0; i < SIM_BATCH_SIZE; i++) {
-        simulationStep();
-    }
-    
-    logStats();
-    
-    setTimeout(fastSimulationLoop, 0);
-}
-
 // ============================================================================
-// Win/Lose Condition Manager
+// Audio setup
 // ============================================================================
 
-// Initialize WinConditionManager with callbacks
-winConditionManager = new WinConditionManager({
-    countFactories: () => {
-        const data = grid.download();
-        return gridActions.countFactories(data);
-    },
-    getPlayerTotalFactoriesPlaced: () => playerTotalFactoriesPlaced,
-    onFactoryCountsUpdated: (counts) => {
-        playerFactoryCounts[PLAYER_1] = counts[PLAYER_1];
-        playerFactoryCounts[PLAYER_2] = counts[PLAYER_2];
-        updatePlayerIndicator();
-    },
-    onGameOver: (winner) => {
-        gameUI.showGameOver(winner, isMultiplayer, isSpectator, () => {
-            if (isMultiplayer && !isSpectator) {
-                networkSync.requestRestart();
-            } else {
-                const url = new URL(window.location);
-                url.searchParams.set('seed', Math.floor(Math.random() * 999999));
-                window.location.href = url.toString();
-            }
-        });
-    },
-    checkInterval: 5000
-});
-
-// Start win condition checking
-winConditionManager.start();
+game.audioManager.bindButton(document.getElementById('audioToggle'));
+game.audioManager.setupDebugUtils();
 
 // ============================================================================
-// Render Loop (also runs synced simulation if enabled)
+// Start the game
 // ============================================================================
 
-let lastRenderTime = 0;   // For measuring potential TPS
+game.start();
+networkManager._updateIndicator();
+gameLoop.start();
 
-function renderLoop() {
-    const now = performance.now();
-    
-    // Track frame time for potential TPS calculation
-    if (lastRenderTime > 0) {
-        statsTracker.recordRenderFrame(now - lastRenderTime);
-    }
-    lastRenderTime = now;
-    
-    // Run simulation steps (scheduler handles sync mode and TPS throttling)
-    if (SYNC_SIM_WITH_RENDER) {
-        simScheduler.runFrame(now);
-    }
-    
-    // Update stats and network heartbeat
-    logStats();
-    
-    // Selection is now stored in unit data (G channel bit 5) and moves automatically
-    
-    // ========================================================================
-    // Audio: Run reduction pipeline and update audio engine
-    // ========================================================================
-    audioManager.update(grid.getReadTexture());
-    
-    // Render
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, canvas.width, canvas.height);
-
-    renderShader.use();
-    
-    // Bind all 8 frame textures for temporal anti-aliasing
-    const frameCount = grid.getFrameCount();
-    for (let i = 0; i < frameCount; i++) {
-        renderShader.setTexture('u_state' + i, grid.getTextureByAge(i), i);
-    }
-    
-    renderShader.setVec2('u_resolution', GRID_SIZE, GRID_SIZE);
-    renderShader.setVec2('u_canvasResolution', canvas.width, canvas.height);
-    renderShader.setFloat('u_time', simTime);  // For pulsing/animation effects
-    renderShader.setFloat('u_metaballScale', METABALL_SCALE);  // Metaball blob scale
-    renderShader.setInt('u_frameCount', frameCount);  // Number of frames to blend
-    renderShader.setFloat('u_temporalBlend', TEMPORAL_BLEND);  // Temporal blend strength
-    
-    // Camera uniforms for pan and zoom
-    renderShader.setVec2('u_cameraPos', camera.x, camera.y);
-    renderShader.setFloat('u_cameraZoom', camera.zoom);
-    
-    // Performance mode uniforms
-    renderShader.setFloat('u_showMinimap', showMinimap ? 1.0 : 0.0);
-    renderShader.setFloat('u_performanceMode', performanceMode ? 1.0 : 0.0);
-    
-    // Selection system uniforms
-    // Note: Selection is now stored in unit data (G channel bit 5), no separate texture needed
-    renderShader.setFloat('u_currentPlayer', currentPlayer);  // 1.0 or 2.0
-    
-    // User interaction UI uniforms (rendered in shader instead of DOM)
-    // Input state comes from InputHandler module
-    const isSelecting = inputHandler.isInSelectionMode();
-    const hasActiveSelection = inputHandler.hasSelection();
-    const mousePos = inputHandler.getMousePosition();
-    
-    renderShader.setFloat('u_isSelecting', isSelecting ? 1.0 : 0.0);
-    renderShader.setFloat('u_hasActiveSelection', hasActiveSelection ? 1.0 : 0.0);
-    renderShader.setFloat('u_shiftHeld', inputHandler.isShiftHeld() ? 1.0 : 0.0);
-    renderShader.setFloat('u_deleteRadius', DELETE_RADIUS);
-    
-    // Convert screen coordinates to UV (0-1) for shader
-    const rect = canvas.getBoundingClientRect();
-    const screenToUV = (x, y) => ({
-        x: (x - rect.left) / rect.width,
-        y: 1.0 - (y - rect.top) / rect.height  // Flip Y for shader
-    });
-    
-    // Mouse position (used for crosshair and delete indicator)
-    const mouseUV = screenToUV(mousePos.x, mousePos.y);
-    renderShader.setVec2('u_mousePos', mouseUV.x, mouseUV.y);
-    
-    if (isSelecting && inputHandler.selectionStart) {
-        const startUV = screenToUV(inputHandler.selectionStart.x, inputHandler.selectionStart.y);
-        const endUV = screenToUV(mousePos.x, mousePos.y);
-        renderShader.setVec2('u_selectionStart', startUV.x, startUV.y);
-        renderShader.setVec2('u_selectionEnd', endUV.x, endUV.y);
-    } else {
-        renderShader.setVec2('u_selectionStart', 0.0, 0.0);
-        renderShader.setVec2('u_selectionEnd', 0.0, 0.0);
-    }
-    
-    renderShader.dispatch();
-
-    requestAnimationFrame(renderLoop);
+// Auto-connect if room URL param is present
+if (roomParam && !isOnGitHub) {
+    networkManager.autoConnect(roomParam, playerParam, spectatorParam);
 }
 
-// Start render loop (simulation runs here if synced, or separately if fast)
-requestAnimationFrame(renderLoop);
+// Expose for debugging
+window.game = game;
+window.toggleMultiplayer = () => networkManager.toggleMultiplayer();
+window.networkSync = networkSync;
+window.switchPlayer = (p) => game.switchPlayer(p);
 
-// If starting in fast mode, kick off the fast loop
-if (!SYNC_SIM_WITH_RENDER) {
-    fastSimulationLoop();
-}
+console.log(`Room ID: ${networkManager.getRoomId()} - Click network indicator or call toggleMultiplayer() to connect`);
