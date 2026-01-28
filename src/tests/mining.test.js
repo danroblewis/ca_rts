@@ -2369,4 +2369,243 @@ export async function runUnitMovementNearFactoryTests() {
         
         sim.destroy();
     });
+    
+    // ========================================================================
+    // UNIT RANDOM WALK BIAS TESTS
+    // ========================================================================
+    
+    logSection('Mining Game - Unit Random Walk Bias');
+    
+    await runTest('Random walk: units do not drift toward bottom-left or any corner', async () => {
+        // Use a larger grid to give units room to wander
+        const GRID_SIZE = 64;
+        const NUM_UNITS = 16;
+        const STEPS = 200;  // Keep well below MAX_AGE (500) to avoid starvation deaths
+        
+        const sim = createMiningSimulation(GRID_SIZE, GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create units in a grid pattern near the center - no factory, no resources, no memory
+        // These units should random walk without any directional bias
+        const centerX = GRID_SIZE / 2;
+        const centerY = GRID_SIZE / 2;
+        let unitCount = 0;
+        
+        for (let dy = -2; dy <= 1; dy++) {
+            for (let dx = -2; dx <= 1; dx++) {
+                const x = Math.floor(centerX + dx * 3);
+                const y = Math.floor(centerY + dy * 3);
+                // No factory reference (-1, -1), no memory, no holding
+                sim.setCell(data, x, y, createMiningUnit(false, 0, -1, -1, -1, -1, 0, 0));
+                unitCount++;
+                if (unitCount >= NUM_UNITS) break;
+            }
+            if (unitCount >= NUM_UNITS) break;
+        }
+        
+        // Calculate initial center of mass
+        let initialSumX = 0, initialSumY = 0, initialCount = 0;
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                const cell = sim.getCell(data, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    initialSumX += x;
+                    initialSumY += y;
+                    initialCount++;
+                }
+            }
+        }
+        const initialCenterX = initialSumX / initialCount;
+        const initialCenterY = initialSumY / initialCount;
+        
+        console.log(`  Initial: ${initialCount} units, center at (${initialCenterX.toFixed(1)}, ${initialCenterY.toFixed(1)})`);
+        
+        sim.upload(data);
+        
+        // Run simulation
+        sim.stepN(STEPS);
+        
+        const result = sim.download();
+        
+        // Calculate final center of mass
+        let finalSumX = 0, finalSumY = 0, finalCount = 0;
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    finalSumX += x;
+                    finalSumY += y;
+                    finalCount++;
+                }
+            }
+        }
+        
+        // Units might die from starvation - that's OK, check we have at least some
+        assert(finalCount >= 1, `All units died (${initialCount} -> ${finalCount})`);
+        
+        const finalCenterX = finalSumX / finalCount;
+        const finalCenterY = finalSumY / finalCount;
+        
+        // Calculate drift
+        const driftX = finalCenterX - initialCenterX;
+        const driftY = finalCenterY - initialCenterY;
+        const driftMagnitude = Math.sqrt(driftX * driftX + driftY * driftY);
+        
+        console.log(`  Final: ${finalCount} units, center at (${finalCenterX.toFixed(1)}, ${finalCenterY.toFixed(1)})`);
+        console.log(`  Drift: (${driftX.toFixed(1)}, ${driftY.toFixed(1)}), magnitude: ${driftMagnitude.toFixed(1)}`);
+        
+        // Check for directional bias - center of mass shouldn't drift too far
+        // Allow up to 10 cells of random drift, but flag systematic bias
+        const MAX_ALLOWED_DRIFT = 15;
+        assert(driftMagnitude < MAX_ALLOWED_DRIFT, 
+            `Units drifted too far: ${driftMagnitude.toFixed(1)} cells (drift: ${driftX.toFixed(1)}, ${driftY.toFixed(1)})`);
+        
+        // Check specifically for bottom-left bias
+        if (driftX < -5 && driftY < -5) {
+            assert(false, `Strong bottom-left bias detected: drift (${driftX.toFixed(1)}, ${driftY.toFixed(1)})`);
+        }
+        
+        sim.destroy();
+    });
+    
+    await runTest('Random walk: units spread evenly, not clustering at edges', async () => {
+        const GRID_SIZE = 48;
+        const NUM_UNITS = 9;
+        const STEPS = 150;  // Keep below MAX_AGE to avoid starvation
+        
+        const sim = createMiningSimulation(GRID_SIZE, GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create units in center
+        const centerX = GRID_SIZE / 2;
+        const centerY = GRID_SIZE / 2;
+        
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const x = Math.floor(centerX + dx * 2);
+                const y = Math.floor(centerY + dy * 2);
+                sim.setCell(data, x, y, createMiningUnit(false, 0, -1, -1, -1, -1, 0, 0));
+            }
+        }
+        
+        sim.upload(data);
+        sim.stepN(STEPS);
+        
+        const result = sim.download();
+        
+        // Count units in each quadrant and at edges
+        let topLeft = 0, topRight = 0, bottomLeft = 0, bottomRight = 0;
+        let atEdge = 0;
+        let totalUnits = 0;
+        
+        const EDGE_MARGIN = 3;
+        
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    totalUnits++;
+                    
+                    // Check edge proximity
+                    if (x < EDGE_MARGIN || x >= GRID_SIZE - EDGE_MARGIN ||
+                        y < EDGE_MARGIN || y >= GRID_SIZE - EDGE_MARGIN) {
+                        atEdge++;
+                    }
+                    
+                    // Count by quadrant
+                    if (x < GRID_SIZE / 2) {
+                        if (y < GRID_SIZE / 2) bottomLeft++;
+                        else topLeft++;
+                    } else {
+                        if (y < GRID_SIZE / 2) bottomRight++;
+                        else topRight++;
+                    }
+                }
+            }
+        }
+        
+        console.log(`  Units: ${totalUnits} remaining`);
+        console.log(`  Quadrants: TL=${topLeft}, TR=${topRight}, BL=${bottomLeft}, BR=${bottomRight}`);
+        console.log(`  At edge: ${atEdge}`);
+        
+        // Skip distribution checks if too many units died
+        if (totalUnits >= 3) {
+            // No quadrant should have all the units (strong clustering)
+            const maxInQuadrant = Math.max(topLeft, topRight, bottomLeft, bottomRight);
+            assert(maxInQuadrant < totalUnits, 
+                `All ${totalUnits} units clustered in one quadrant`);
+            
+            // Not all units should be at the edge
+            assert(atEdge < totalUnits, 
+                `All ${totalUnits} units stuck at edges`);
+        }
+        
+        sim.destroy();
+    });
+    
+    await runTest('Random walk: direction distribution is roughly uniform', async () => {
+        // Test that over many steps, units choose all 8 directions roughly equally
+        // We do this by running many short simulations and counting moves
+        const GRID_SIZE = 32;
+        const TRIALS = 30;
+        const STEPS_PER_TRIAL = 30;  // Short trials to avoid starvation
+        
+        const sim = createMiningSimulation(GRID_SIZE, GRID_SIZE);
+        await sim.init();
+        
+        // Track overall movement direction
+        let totalDeltaX = 0, totalDeltaY = 0;
+        let totalMoves = 0;
+        
+        for (let trial = 0; trial < TRIALS; trial++) {
+            const data = sim.createEmptyGrid();
+            
+            // Single unit in center, no factory
+            const startX = GRID_SIZE / 2;
+            const startY = GRID_SIZE / 2;
+            sim.setCell(data, startX, startY, createMiningUnit(false, 0, -1, -1, -1, -1, 0, 0));
+            
+            // Set different time seed for each trial
+            sim.setTime(trial * 1000 + 12345);
+            sim.upload(data);
+            
+            sim.stepN(STEPS_PER_TRIAL);
+            
+            const result = sim.download();
+            
+            // Find where unit ended up
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = sim.getCell(result, x, y);
+                    if (getCellType(cell) === CELL_MINING_UNIT) {
+                        totalDeltaX += (x - startX);
+                        totalDeltaY += (y - startY);
+                        totalMoves++;
+                    }
+                }
+            }
+        }
+        
+        if (totalMoves > 0) {
+            const avgDeltaX = totalDeltaX / totalMoves;
+            const avgDeltaY = totalDeltaY / totalMoves;
+            const avgBias = Math.sqrt(avgDeltaX * avgDeltaX + avgDeltaY * avgDeltaY);
+            
+            console.log(`  ${totalMoves} trials completed`);
+            console.log(`  Average displacement: (${avgDeltaX.toFixed(2)}, ${avgDeltaY.toFixed(2)})`);
+            console.log(`  Average bias magnitude: ${avgBias.toFixed(2)}`);
+            
+            // With truly random movement, average displacement should be near 0
+            // Allow some statistical variance but flag strong bias
+            const MAX_AVG_BIAS = 5.0;  // cells per trial
+            assert(avgBias < MAX_AVG_BIAS, 
+                `Systematic direction bias detected: avg displacement (${avgDeltaX.toFixed(2)}, ${avgDeltaY.toFixed(2)})`);
+        }
+        
+        sim.destroy();
+    });
 }
