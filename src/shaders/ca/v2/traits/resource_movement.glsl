@@ -122,9 +122,16 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
         return DIR_NONE;  // Somewhat stable, only 30% move
     }
     
-    // Collect all valid (empty) directions
+    // Collect all valid (empty) directions with their weights
+    // Weight = base + density score (additive to ensure all directions have some probability)
     int validDirs[8];
+    float weights[8];
+    float totalWeight = 0.0;
     int numValid = 0;
+    
+    // Base weight ensures every direction has some probability
+    // This prevents positive feedback that causes line formation
+    const float BASE_WEIGHT = 1.0;
     
     for (int d = 1; d <= 8; d++) {
         vec2 offset = dirToOffset(d);
@@ -140,7 +147,16 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
         vec2 uv = (targetPos + 0.5) / resolution;
         vec4 targetCell = texture(state, uv);
         if (getType(targetCell) == TYPE_EMPTY) {
+            // Calculate density score for this direction
+            float densityScore = countResourcesInDirection(pos, d, state, resolution);
+            
+            // Weight = base + density (additive, not multiplicative)
+            // This ensures low-density directions still have probability
+            float weight = BASE_WEIGHT + densityScore;
+            
             validDirs[numValid] = d;
+            weights[numValid] = weight;
+            totalWeight += weight;
             numValid++;
         }
     }
@@ -149,12 +165,19 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
         return DIR_NONE;  // No valid moves
     }
     
-    // Pick a random valid direction - purely random, no clumping bias
-    // This prevents the positive feedback loop that causes line formation
-    int pick = int(seed2 * float(numValid));
-    if (pick >= numValid) pick = numValid - 1;
+    // Weighted random selection - biased toward denser areas but with randomness
+    float pick = seed2 * totalWeight;
+    float cumulative = 0.0;
     
-    return validDirs[pick];
+    for (int i = 0; i < numValid; i++) {
+        cumulative += weights[i];
+        if (pick < cumulative) {
+            return validDirs[i];
+        }
+    }
+    
+    // Fallback to last valid direction
+    return validDirs[numValid - 1];
 }
 
 // ============================================================================
