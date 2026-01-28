@@ -100,7 +100,7 @@ int hashPosTime(vec2 pos, float time) {
     py = safeMod(py, 1013);
     t = safeMod(t, 10007);
     
-    int h = px * 73 + py * 19 + t * 83;
+    int h = px * 73 + py * 71 + t * 83;
     return ihash(h);
 }
 
@@ -158,7 +158,7 @@ int hashPosTime(vec2 pos, float time) {
     py = safeMod(py, 1013);
     t = safeMod(t, 10007);
     
-    int h = px * 73 + py * 19 + t * 83;
+    int h = px * 73 + py * 71 + t * 83;
     return ihash(h);
 }
 
@@ -217,7 +217,7 @@ int hashPosTime(vec2 pos, float time) {
     py = safeMod(py, 1013);
     t = safeMod(t, 10007);
     
-    int h = px * 73 + py * 19 + t * 83;
+    int h = px * 73 + py * 71 + t * 83;
     return ihash(h);
 }
 
@@ -249,7 +249,7 @@ function jsHashPosTime(px, py, t) {
     px = ((px % 1009) + 1009) % 1009;
     py = ((py % 1013) + 1013) % 1013;
     t = ((t % 10007) + 10007) % 10007;
-    const h = px * 73 + py * 19 + t * 83;
+    const h = px * 73 + py * 71 + t * 83;  // Must match random.glsl coefficients
     return jsHash(h);
 }
 
