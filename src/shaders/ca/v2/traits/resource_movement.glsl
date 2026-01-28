@@ -112,14 +112,19 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
     
     // Resources with many neighbors are very stable - rarely move
     // This prevents the core of the blob from destabilizing
-    if (currentNeighbors >= 5.0) {
+    // Stricter thresholds to prevent excessive spreading
+    if (currentNeighbors >= 4.0) {
         return DIR_NONE;  // Very stable, never move
     }
-    if (currentNeighbors >= 3.0 && seed1 > 0.1) {
-        return DIR_NONE;  // Mostly stable, only 10% move
+    if (currentNeighbors >= 2.0 && seed1 > 0.08) {
+        return DIR_NONE;  // Mostly stable, only 8% move
     }
-    if (currentNeighbors >= 1.0 && seed1 > 0.3) {
-        return DIR_NONE;  // Somewhat stable, only 30% move
+    if (currentNeighbors >= 1.0 && seed1 > 0.15) {
+        return DIR_NONE;  // Has neighbor, only 15% move
+    }
+    // Isolated resources (0 neighbors) - only move 40% of the time
+    if (currentNeighbors < 1.0 && seed1 > 0.40) {
+        return DIR_NONE;
     }
     
     // Collect all valid (empty) directions with their weights
@@ -130,8 +135,8 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
     int numValid = 0;
     
     // Base weight ensures every direction has some probability
-    // This prevents positive feedback that causes line formation
-    const float BASE_WEIGHT = 1.0;
+    // Reduced to make density dominate more, but non-zero to avoid line formation
+    const float BASE_WEIGHT = 0.3;
     
     for (int d = 1; d <= 8; d++) {
         vec2 offset = dirToOffset(d);
@@ -150,9 +155,10 @@ int getResourceDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 r
             // Calculate density score for this direction
             float densityScore = countResourcesInDirection(pos, d, state, resolution);
             
-            // Weight = base + density (additive, not multiplicative)
+            // Weight = base + density * multiplier
             // This ensures low-density directions still have probability
-            float weight = BASE_WEIGHT + densityScore;
+            // but density is amplified to attract resources toward blob
+            float weight = BASE_WEIGHT + densityScore * 2.0;
             
             validDirs[numValid] = d;
             weights[numValid] = weight;

@@ -466,5 +466,58 @@ export async function runResourceMovementTests() {
         
         sim.destroy();
     });
+    
+    await runTest('Resource movement: blob stays cohesive (no excessive spreading)', async () => {
+        // Test that blobs don't dissolve/spread too much
+        // Measures total variance (λ1 + λ2) which increases as blob spreads
+        const extendedSteps = 1000;
+        
+        const sim = createResourceSimulation(BIAS_TEST_GRID_SIZE, BIAS_TEST_GRID_SIZE);
+        await sim.init();
+        
+        const data = sim.createEmptyGrid();
+        
+        // Create a 7x7 square blob of resources
+        createResourceBlob(sim, data, 7);
+        
+        // Calculate initial spread (total variance = λ1 + λ2)
+        const initialAnalysis = getStretchRatio(sim, data);
+        const initialSpread = initialAnalysis.lambda1 + initialAnalysis.lambda2;
+        console.log(`  Initial spread (λ1+λ2): ${initialSpread.toFixed(2)}`);
+        
+        sim.upload(data);
+        
+        // Run extended simulation, checking periodically
+        const checkpoints = [250, 500, 750, 1000];
+        let worstSpreadRatio = 1.0;
+        
+        for (const checkpoint of checkpoints) {
+            // Run to this checkpoint
+            const stepsToRun = checkpoint - (checkpoint === 250 ? 0 : checkpoints[checkpoints.indexOf(checkpoint) - 1]);
+            sim.stepN(stepsToRun);
+            
+            const checkData = sim.download();
+            const analysis = getStretchRatio(sim, checkData);
+            const currentSpread = analysis.lambda1 + analysis.lambda2;
+            const spreadRatio = currentSpread / initialSpread;
+            
+            console.log(`  Step ${checkpoint}: spread ratio ${spreadRatio.toFixed(2)} (λ1+λ2=${currentSpread.toFixed(2)})`);
+            
+            if (spreadRatio > worstSpreadRatio) {
+                worstSpreadRatio = spreadRatio;
+            }
+            
+            // Re-upload for next checkpoint
+            sim.upload(checkData);
+        }
+        
+        // Spread should not increase more than 3x over 1000 steps
+        // If blobs are cohesive, they stay compact
+        const MAX_SPREAD_RATIO = 3.0;
+        assert(worstSpreadRatio < MAX_SPREAD_RATIO, 
+            `Blob spread too much: worst spread ratio ${worstSpreadRatio.toFixed(2)} > ${MAX_SPREAD_RATIO}`);
+        
+        sim.destroy();
+    });
 }
 

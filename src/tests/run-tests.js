@@ -35,11 +35,11 @@ import { runNetworkManagerTests } from './networkmanager.test.js';
 const skipGPU = shouldSkipGPU();
 
 // Total test count:
-// GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) + resourceMovement(4) = 88
+// GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) + resourceMovement(5) = 89
 // Unit tests: GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 + 
 //             RollbackManager:15 + AudioManager:15 + WinCondition:15 + NetworkIndicator:12 + 
 //             SpeedToggle:14 + NetworkManager:18 = 171
-const gpuTestCount = 88;
+const gpuTestCount = 89;
 const unitTestCount = 171;
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
