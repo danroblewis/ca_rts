@@ -1134,25 +1134,29 @@ export async function runMiningTests() {
         await sim.init();
         
         const data = sim.createEmptyGrid();
-        // Factory in corner, unit far away (no resources nearby)
-        sim.setCell(data, 0, 0, createMiningFactory(10, 0, 0));
-        sim.setCell(data, 10, 10, createMiningUnit(false, 0, 0, 0));  // Far from factory
+        // Create a proper 3x3 factory with 0 resources (can't spawn)
+        create3x3Factory(sim, data, 2, 2, 0);
+        // Unit far from factory, not holding, with factory reference
+        sim.setCell(data, 14, 14, createMiningUnit(false, 0, 2, 2));  // Far from factory at (2,2)
         sim.upload(data);
         
-        // Run a few steps
+        // Run a few steps - unit is 17+ cells from factory (well beyond FACTORY_SAFE_ZONE of 10)
         sim.stepN(10);
         const result = sim.download();
         
         // Find the unit and check its age
+        let foundUnit = false;
         for (let y = 0; y < TEST_GRID_SIZE; y++) {
             for (let x = 0; x < TEST_GRID_SIZE; x++) {
                 const cell = sim.getCell(result, x, y);
                 if (getCellType(cell) === CELL_MINING_UNIT) {
                     const age = getUnitAge(cell);
                     assert(age > 0, `Unit age should increase when empty-handed (age: ${age})`);
+                    foundUnit = true;
                 }
             }
         }
+        assert(foundUnit, 'Unit should still exist');
         
         sim.destroy();
     });
