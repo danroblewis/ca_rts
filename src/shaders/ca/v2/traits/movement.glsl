@@ -141,6 +141,25 @@ bool isAdjacentToBuildableFactory(vec2 pos, int myPlayer, sampler2D state, vec2 
     return false;
 }
 
+// Check if adjacent to a BUILDING missile of same player (for holding units to build)
+bool isAdjacentToBuildingMissile(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
+    for (int d = 1; d <= 4; d++) {  // Cardinal directions only (matches countMissileBuilders)
+        vec2 checkPos = pos + dirToOffset(d);
+        vec2 uv = (checkPos + 0.5) / resolution;
+        vec4 cell = texture(state, uv);
+        int cellType = getType(cell);
+        
+        // Check for missile of same player in BUILDING state
+        if (isMissile(cellType) && getPlayer(cellType) == myPlayer) {
+            int missileState = getMissileState(cell);
+            if (missileState == MISSILE_BUILDING) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Find nearest unbuilt factory OF SAME PLAYER that needs building within vision range
 // Returns the position of the nearest buildable factory cell, or (-1, -1) if none found
 vec2 findVisibleUnbuiltFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
@@ -255,6 +274,11 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     // If holding and adjacent to buildable (unbuilt) factory OF SAME PLAYER, don't move (build instead)
     if (holding && isAdjacentToBuildableFactory(pos, myPlayer, state, resolution)) {
         return DIR_NONE;  // Will build, not move
+    }
+    
+    // If holding and adjacent to a BUILDING missile OF SAME PLAYER, don't move (build the missile)
+    if (holding && isAdjacentToBuildingMissile(pos, myPlayer, state, resolution)) {
+        return DIR_NONE;  // Will build missile, not move
     }
     
     // If NOT holding and adjacent to enemy factory, don't move (attack instead)
