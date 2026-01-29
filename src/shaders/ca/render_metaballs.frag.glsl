@@ -248,6 +248,22 @@ AllDensities calcAllStaticDensities(vec2 uv) {
                     }
                 }
             }
+            else if (isMissileCell(cellSample)) {
+                float player = getPlayerFromCell(cellSample);
+                float state = getMissileState(cellSample);
+                
+                if (player == PLAYER_1) {
+                    if (state == MISSILE_BUILDING) d.p1MissileBuilding += weight;
+                    else if (state == MISSILE_ARMED) d.p1MissileArmed += weight;
+                    else if (state == MISSILE_MOVING) d.p1MissileMoving += weight;
+                    else if (state == MISSILE_EXPLODING) d.p1MissileExploding += weight;
+                } else {
+                    if (state == MISSILE_BUILDING) d.p2MissileBuilding += weight;
+                    else if (state == MISSILE_ARMED) d.p2MissileArmed += weight;
+                    else if (state == MISSILE_MOVING) d.p2MissileMoving += weight;
+                    else if (state == MISSILE_EXPLODING) d.p2MissileExploding += weight;
+                }
+            }
         }
     }
     
@@ -663,6 +679,12 @@ void main() {
     float builtFactoryDensity = p1BuiltFactoryDensity + p2BuiltFactoryDensity;
     float unbuiltFactoryDensity = p1UnbuiltFactoryDensity + p2UnbuiltFactoryDensity;
     float buildProgress = max(p1BuildProgress, p2BuildProgress);
+    
+    // Missiles
+    float p1MissileDensity = d.p1MissileBuilding + d.p1MissileArmed + d.p1MissileMoving + d.p1MissileExploding;
+    float p2MissileDensity = d.p2MissileBuilding + d.p2MissileArmed + d.p2MissileMoving + d.p2MissileExploding;
+    float p1MissileExplosion = d.p1MissileExploding;
+    float p2MissileExplosion = d.p2MissileExploding;
     
     // Player 1 units (purple/magenta)
     vec3 p1UnitInfo = calcUnitDensityForPlayer(worldUV, PLAYER_1);
