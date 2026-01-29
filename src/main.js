@@ -167,6 +167,7 @@ console.timeEnd('⏱️ Total shader initialization');
 // Create Game instance
 // ============================================================================
 
+console.time('🎮 Create Game instance');
 const game = new Game({
     ...CONFIG,
     gl,
@@ -179,6 +180,7 @@ const game = new Game({
     performanceMode,
     isOnGitHub
 });
+console.timeEnd('🎮 Create Game instance');
 
 // ============================================================================
 // Create Renderer

@@ -61,6 +61,7 @@ export class Game {
     
     _initializeComponents() {
         const { gridSize, deleteRadius, firstFactoryResources } = this.config;
+        console.time('🎮 Game._initializeComponents');
         
         // Camera
         this.camera = initCamera({
@@ -73,10 +74,16 @@ export class Game {
         });
         this.camera.setCanvas(this.canvas);
         
-        // Grid and world
+        // Grid and world - creates 8 textures + framebuffers
+        console.time('  📦 CAGrid (8x 512x512 RGBA32F textures)');
         this.grid = new CAGrid(gridSize, gridSize);
+        console.timeEnd('  📦 CAGrid (8x 512x512 RGBA32F textures)');
+        
         this.gridActions = new GridActions(gridSize);
+        
+        console.time('  📦 Float32Array data buffer');
         this.data = new Float32Array(gridSize * gridSize * 4);
+        console.timeEnd('  📦 Float32Array data buffer');
         
         // Map generator
         this.mapGenerator = new MapGenerator(gridSize, {
@@ -99,13 +106,16 @@ export class Game {
             onStateChange: (changes) => this._handleStateChange(changes)
         });
         
-        // Rollback netcode
+        // Rollback netcode - creates more textures for checkpoints
+        console.time('  📦 CheckpointBuffer (30x checkpoints)');
         this.checkpointBuffer = new CheckpointBuffer(
             gridSize, gridSize,
             { format: 'float' },
             this.config.maxCheckpoints,
             this.config.checkpointInterval
         );
+        console.timeEnd('  📦 CheckpointBuffer (30x checkpoints)');
+        
         this.actionQueue = new ActionQueue();
         
         // RollbackManager (initialized with callbacks that reference this)
@@ -174,6 +184,8 @@ export class Game {
             markUnitsInRegion: (region) => this.markUnitsInRegion(region),
             clearAllSelections: () => this.clearAllSelections()
         });
+        
+        console.timeEnd('🎮 Game._initializeComponents');
     }
     
     // ========================================================================
