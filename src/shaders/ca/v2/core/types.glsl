@@ -33,10 +33,10 @@ bool isFactory(int cellType) {
     return cellType == TYPE_FACTORY || cellType == TYPE_FACTORY_P2;
 }
 
-// Get player ID from a unit or factory type (returns 0 for non-owned types)
+// Get player ID from a unit, factory, or missile type (returns 0 for non-owned types)
 int getPlayer(int cellType) {
-    if (cellType == TYPE_UNIT || cellType == TYPE_FACTORY) return PLAYER_1;
-    if (cellType == TYPE_UNIT_P2 || cellType == TYPE_FACTORY_P2) return PLAYER_2;
+    if (cellType == TYPE_UNIT || cellType == TYPE_FACTORY || cellType == TYPE_MISSILE) return PLAYER_1;
+    if (cellType == TYPE_UNIT_P2 || cellType == TYPE_FACTORY_P2 || cellType == TYPE_MISSILE_P2) return PLAYER_2;
     return 0;
 }
 
@@ -271,6 +271,141 @@ vec2 getDemolishCenter(vec4 raw) {
 
 vec4 encodeDemolish(vec2 centerPos) {
     return vec4(float(TYPE_DEMOLISH), 0.0, centerPos.x, centerPos.y);
+}
+
+// ============================================================================
+// MISSILE
+// R = TYPE_MISSILE or TYPE_MISSILE_P2
+// G = buildProgress (bits 0-3) + state*16 (bits 4-5) + explosionTimer*64 (bits 6-9) + selected*1024 (bit 10)
+//     buildProgress: 0-8 (4 bits)
+//     state: MISSILE_BUILDING, MISSILE_ARMED, MISSILE_MOVING, MISSILE_EXPLODING (2 bits)
+//     explosionTimer: 0-10 frames (4 bits)
+//     selected: 0 or 1 (1 bit)
+// B = packed destination coords (or -1 if no destination)
+// A = packed center coords (like factory)
+// 
+// Missile lifecycle:
+// 1. BUILDING: Mining units deposit resources to build it layer by layer
+// 2. ARMED: Fully built, can be selected and given a destination (once only)
+// 3. MOVING: Has destination, moves toward it destroying everything in path
+// 4. EXPLODING: Reached destination, explodes over 10 frames destroying 5-cell radius
+// ============================================================================
+
+const float MISSILE_SELECTED_PACK_BASE = 1024.0;  // Selection bit at position 10
+
+// Check if a cell is a missile (any player)
+bool isMissile(int cellType) {
+    return cellType == TYPE_MISSILE || cellType == TYPE_MISSILE_P2;
+}
+
+// Get the missile type for a specific player
+int getMissileTypeForPlayer(int player) {
+    return player == PLAYER_2 ? TYPE_MISSILE_P2 : TYPE_MISSILE;
+}
+
+// Get missile build progress (0-8)
+float getMissileBuildProgress(vec4 raw) {
+    return mod(floor(raw.g), 16.0);  // bits 0-3
+}
+
+// Get missile state (BUILDING, ARMED, MOVING, EXPLODING)
+int getMissileState(vec4 raw) {
+    return int(mod(floor(raw.g / 16.0), 4.0));  // bits 4-5
+}
+
+// Get missile explosion timer (0-10)
+int getMissileExplosionTimer(vec4 raw) {
+    return int(mod(floor(raw.g / 64.0), 16.0));  // bits 6-9
+}
+
+// Get missile selected state
+bool getMissileSelected(vec4 raw) {
+    return mod(floor(raw.g / MISSILE_SELECTED_PACK_BASE), 2.0) > 0.5;  // bit 10
+}
+
+// Get missile destination (packed coords in B channel)
+vec2 getMissileDestination(vec4 raw) {
+    return unpackCoords(raw.b);
+}
+
+// Get missile center position (packed coords in A channel)
+vec2 getMissileCenter(vec4 raw) {
+    return unpackCoords(raw.a);
+}
+
+// Check if missile has a valid destination
+bool missileHasDestination(vec4 raw) {
+    return raw.b >= 0.0;
+}
+
+// Encode a missile cell with all parameters
+vec4 encodeMissile(float buildProgress, int state, int explosionTimer, bool selected, vec2 destination, vec2 center, int player) {
+    int missileType = getMissileTypeForPlayer(player);
+    float g = buildProgress + float(state) * 16.0 + float(explosionTimer) * 64.0 + (selected ? MISSILE_SELECTED_PACK_BASE : 0.0);
+    float b = packCoords(destination);
+    float a = packCoords(center);
+    return vec4(float(missileType), g, b, a);
+}
+
+// Encode a missile cell being built (never selected)
+vec4 encodeMissileBuilding(float buildProgress, vec2 center, int player) {
+    return encodeMissile(buildProgress, MISSILE_BUILDING, 0, false, vec2(-1.0), center, player);
+}
+
+// Encode an armed missile ready for targeting (preserves selection)
+vec4 encodeMissileArmed(vec2 center, int player, bool selected) {
+    return encodeMissile(float(MISSILE_BUILD_THRESHOLD), MISSILE_ARMED, 0, selected, vec2(-1.0), center, player);
+}
+
+// Encode a missile moving toward destination (clears selection once launched)
+vec4 encodeMissileMoving(vec2 destination, vec2 center, int player) {
+    return encodeMissile(float(MISSILE_BUILD_THRESHOLD), MISSILE_MOVING, 0, false, destination, center, player);
+}
+
+// Encode an exploding missile
+vec4 encodeMissileExploding(int timer, vec2 center, int player) {
+    return encodeMissile(float(MISSILE_BUILD_THRESHOLD), MISSILE_EXPLODING, timer, false, center, center, player);
+}
+
+// Sum build progress across all 8 outer cells of a 3x3 missile
+float sumMissileBuildProgress(vec2 centerPos, sampler2D state, vec2 resolution) {
+    float total = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;  // Skip center
+            vec2 cellPos = centerPos + vec2(float(dx), float(dy));
+            vec4 cellRaw = texture(state, (cellPos + 0.5) / resolution);
+            if (isMissile(getType(cellRaw))) {
+                total += getMissileBuildProgress(cellRaw);
+            }
+        }
+    }
+    return total;
+}
+
+// Check if a missile at centerPos is fully built
+bool isMissileBuilt(vec2 centerPos, sampler2D state, vec2 resolution) {
+    return sumMissileBuildProgress(centerPos, state, resolution) >= MISSILE_BUILD_THRESHOLD;
+}
+
+// ============================================================================
+// EXPLOSION PARTICLE
+// R = TYPE_EXPLOSION
+// G = lifetime (frames remaining)
+// B = unused
+// A = unused
+// ============================================================================
+
+bool isExplosion(int cellType) {
+    return cellType == TYPE_EXPLOSION;
+}
+
+int getExplosionLifetime(vec4 raw) {
+    return int(raw.g);
+}
+
+vec4 encodeExplosion(int lifetime) {
+    return vec4(float(TYPE_EXPLOSION), float(lifetime), 0.0, 0.0);
 }
 
 #endif

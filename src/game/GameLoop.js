@@ -9,6 +9,11 @@
  */
 
 import { Logger } from '../utils/Logger.js';
+import { 
+    CELL_MISSILE, CELL_MISSILE_P2, 
+    MISSILE_BUILDING, MISSILE_ARMED, MISSILE_MOVING, MISSILE_EXPLODING,
+    getMissileStateFromG 
+} from '../utils/GameUtils.js';
 
 export class GameLoop {
     /**
@@ -104,6 +109,9 @@ export class GameLoop {
         
         // Update network (heartbeat, periodic sync)
         this._updateNetwork();
+        
+        // Track missile state changes for sounds
+        this._updateMissileSounds();
         
         // Update audio
         this.game.audioManager.update(this.game.grid.getReadTexture());
@@ -255,6 +263,84 @@ export class GameLoop {
         if (!syncWithRender) {
             this._fastLoop();
         }
+    }
+    
+    /**
+     * Track missile state changes and trigger sounds
+     */
+    _updateMissileSounds() {
+        const game = this.game;
+        const audioManager = game.audioManager;
+        
+        if (!audioManager.isInitialized()) return;
+        
+        // Scan grid for missiles every few frames (performance optimization)
+        this.missileCheckCounter = (this.missileCheckCounter || 0) + 1;
+        if (this.missileCheckCounter % 5 !== 0) return;
+        
+        const gridSize = game.config.gridSize;
+        const data = game.grid.download();
+        
+        const newMissileStates = new Map();
+        let hasMovingMissile = false;
+        let hasExplodingMissile = false;
+        
+        // Scan for missiles
+        for (let y = 0; y < gridSize; y++) {
+            for (let x = 0; x < gridSize; x++) {
+                const idx = (y * gridSize + x) * 4;
+                const cellType = Math.floor(data[idx] + 0.5);
+                
+                if (cellType === CELL_MISSILE || cellType === CELL_MISSILE_P2) {
+                    const g = data[idx + 1];
+                    const state = getMissileStateFromG(g);
+                    const key = `${x},${y}`;
+                    
+                    newMissileStates.set(key, state);
+                    
+                    if (state === MISSILE_MOVING) {
+                        hasMovingMissile = true;
+                    }
+                    if (state === MISSILE_EXPLODING) {
+                        hasExplodingMissile = true;
+                    }
+                    
+                    // Check for state changes
+                    const prevState = game.missileStates.get(key);
+                    if (prevState !== undefined && prevState !== state) {
+                        // State changed!
+                        if (state === MISSILE_ARMED && prevState === MISSILE_BUILDING) {
+                            audioManager.playMissileArmed();
+                        }
+                        if (state === MISSILE_EXPLODING && prevState === MISSILE_MOVING) {
+                            audioManager.playMissileExplosion();
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Check for newly armed missiles (weren't tracked before)
+        for (const [key, state] of newMissileStates) {
+            if (state === MISSILE_ARMED && !game.missileStates.has(key)) {
+                // New armed missile detected
+                audioManager.playMissileArmed();
+            }
+        }
+        
+        // Update moving sound loop
+        if (hasMovingMissile && !game.hasMovingMissile) {
+            audioManager.startMissileMoving();
+        } else if (!hasMovingMissile && game.hasMovingMissile) {
+            // No more moving missiles - stop the loop (if not exploding)
+            if (!hasExplodingMissile) {
+                audioManager.stopMissileMoving();
+            }
+        }
+        
+        // Update tracked state
+        game.missileStates = newMissileStates;
+        game.hasMovingMissile = hasMovingMissile;
     }
 }
 

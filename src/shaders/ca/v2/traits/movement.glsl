@@ -141,6 +141,31 @@ bool isAdjacentToBuildableFactory(vec2 pos, int myPlayer, sampler2D state, vec2 
     return false;
 }
 
+// Check if near a BUILDING missile of same player (for holding units to build)
+// Checks up to distance 2 to match the building range
+bool isNearBuildingMissile(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
+    // Check in a 5x5 area (distance up to 2)
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            vec2 checkPos = pos + vec2(float(dx), float(dy));
+            vec2 uv = (checkPos + 0.5) / resolution;
+            vec4 cell = texture(state, uv);
+            int cellType = getType(cell);
+            
+            // Check for missile of same player in BUILDING state
+            if (isMissile(cellType) && getPlayer(cellType) == myPlayer) {
+                int missileState = getMissileState(cell);
+                if (missileState == MISSILE_BUILDING) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 // Find nearest unbuilt factory OF SAME PLAYER that needs building within vision range
 // Returns the position of the nearest buildable factory cell, or (-1, -1) if none found
 vec2 findVisibleUnbuiltFactory(vec2 pos, int myPlayer, sampler2D state, vec2 resolution) {
@@ -255,6 +280,11 @@ int getUnitDirection(vec2 pos, vec4 raw, float time, sampler2D state, vec2 resol
     // If holding and adjacent to buildable (unbuilt) factory OF SAME PLAYER, don't move (build instead)
     if (holding && isAdjacentToBuildableFactory(pos, myPlayer, state, resolution)) {
         return DIR_NONE;  // Will build, not move
+    }
+    
+    // If holding and near a BUILDING missile OF SAME PLAYER, don't move (build the missile)
+    if (holding && isNearBuildingMissile(pos, myPlayer, state, resolution)) {
+        return DIR_NONE;  // Will build missile, not move
     }
     
     // If NOT holding and adjacent to enemy factory, don't move (attack instead)

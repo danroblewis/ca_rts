@@ -4,9 +4,12 @@
 import {
     CELL_EMPTY, CELL_RESOURCE, CELL_MINING_UNIT, CELL_MINING_FACTORY,
     CELL_WALL, CELL_MINING_UNIT_P2, CELL_DEMOLISH, CELL_MINING_FACTORY_P2,
+    CELL_MISSILE, CELL_MISSILE_P2,
     PLAYER_1, PLAYER_2,
     COORD_PACK_BASE, MEMORY_PACK_BASE, COMMAND_FRESHNESS,
-    getUnitSelectedFromG, setUnitSelectionInG, packCoords
+    MISSILE_ARMED,
+    getUnitSelectedFromG, setUnitSelectionInG, packCoords,
+    getMissileStateFromG, getMissileSelectedFromG, setMissileSelectionInG
 } from '../utils/GameUtils.js';
 
 /**
@@ -26,6 +29,13 @@ export class GridActions {
     }
 
     /**
+     * Get the missile type for a given player
+     */
+    getMissileType(player) {
+        return player === PLAYER_2 ? CELL_MISSILE_P2 : CELL_MISSILE;
+    }
+
+    /**
      * Get the factory type for a given player
      */
     getFactoryType(player) {
@@ -33,15 +43,17 @@ export class GridActions {
     }
 
     /**
-     * Mark units in a region as selected
+     * Mark units and ARMED missiles in a region as selected
      * @param {Float32Array} data - Grid data
      * @param {Object} region - {x1, y1, x2, y2}
      * @param {number} player - Player number (1 or 2)
-     * @returns {number} Number of units marked
+     * @returns {number} Number of units/missiles marked
      */
     markUnitsInRegion(data, region, player) {
         const unitType = this.getUnitType(player);
+        const missileType = this.getMissileType(player);
         let unitsMarked = 0;
+        let missilesMarked = 0;
 
         for (let y = Math.max(0, region.y1); y <= Math.min(this.gridSize - 1, region.y2); y++) {
             for (let x = Math.max(0, region.x1); x <= Math.min(this.gridSize - 1, region.x2); x++) {
@@ -52,21 +64,36 @@ export class GridActions {
                     data[idx + 1] = setUnitSelectionInG(data[idx + 1], true);
                     unitsMarked++;
                 }
+                
+                // Also select ARMED missiles
+                if (cellType === missileType) {
+                    const missileState = getMissileStateFromG(data[idx + 1]);
+                    if (missileState === MISSILE_ARMED) {
+                        data[idx + 1] = setMissileSelectionInG(data[idx + 1], true);
+                        missilesMarked++;
+                    }
+                }
             }
         }
 
-        return unitsMarked;
+        if (missilesMarked > 0) {
+            console.log(`[GridActions] Selected ${unitsMarked} units and ${missilesMarked} missiles`);
+        }
+
+        return unitsMarked + missilesMarked;
     }
 
     /**
-     * Clear all selections for a player's units
+     * Clear all selections for a player's units and missiles
      * @param {Float32Array} data - Grid data
      * @param {number} player - Player number (1 or 2)
-     * @returns {number} Number of units cleared
+     * @returns {number} Number of units/missiles cleared
      */
     clearAllSelections(data, player) {
         const unitType = this.getUnitType(player);
+        const missileType = this.getMissileType(player);
         let unitsCleared = 0;
+        let missilesCleared = 0;
 
         for (let y = 0; y < this.gridSize; y++) {
             for (let x = 0; x < this.gridSize; x++) {
@@ -77,23 +104,31 @@ export class GridActions {
                     data[idx + 1] = setUnitSelectionInG(data[idx + 1], false);
                     unitsCleared++;
                 }
+                
+                // Also clear missile selections
+                if (cellType === missileType && getMissileSelectedFromG(data[idx + 1])) {
+                    data[idx + 1] = setMissileSelectionInG(data[idx + 1], false);
+                    missilesCleared++;
+                }
             }
         }
 
-        return unitsCleared;
+        return unitsCleared + missilesCleared;
     }
 
     /**
-     * Apply a command to selected units (set destination)
+     * Apply a command to selected units and missiles (set destination)
      * @param {Float32Array} data - Grid data
      * @param {number} destX - Destination X
      * @param {number} destY - Destination Y
      * @param {number} player - Player number
-     * @returns {number} Number of units commanded
+     * @returns {number} Number of units/missiles commanded
      */
     applyUnitCommand(data, destX, destY, player) {
         const unitType = this.getUnitType(player);
+        const missileType = this.getMissileType(player);
         let unitsCommanded = 0;
+        let missilesLaunched = 0;
 
         for (let y = 0; y < this.gridSize; y++) {
             for (let x = 0; x < this.gridSize; x++) {
@@ -111,10 +146,39 @@ export class GridActions {
 
                     unitsCommanded++;
                 }
+                
+                // Also launch selected ARMED missiles
+                if (cellType === missileType && getMissileSelectedFromG(data[idx + 1])) {
+                    const missileState = getMissileStateFromG(data[idx + 1]);
+                    
+                    // Only ARMED missiles can receive destinations (one-time only)
+                    if (missileState === MISSILE_ARMED) {
+                        const oldG = data[idx + 1];
+                        
+                        // Set destination in B channel
+                        const destPacked = packCoords(destX, destY);
+                        data[idx + 2] = destPacked;
+                        
+                        // Update G channel: change state from ARMED (1) to MOVING (2)
+                        // G = buildProgress + state*16 + explosionTimer*64 + selected*1024
+                        // We need to: clear selection and change state from 1 to 2 (+16)
+                        let newG = setMissileSelectionInG(oldG, false);  // Clear selection
+                        newG = newG + 16;  // Increment state from ARMED(1) to MOVING(2)
+                        data[idx + 1] = newG;
+                        
+                        console.log(`[GridActions] Launching missile cell at (${x}, ${y}), dest=${destPacked}, oldG=${oldG}, newG=${newG}`);
+                        
+                        missilesLaunched++;
+                    }
+                }
             }
         }
 
-        return unitsCommanded;
+        if (missilesLaunched > 0) {
+            console.log(`[GridActions] Commanded ${unitsCommanded} units, launched ${missilesLaunched} missiles to (${destX}, ${destY})`);
+        }
+
+        return { unitsCommanded, missilesLaunched, total: unitsCommanded + missilesLaunched };
     }
 
     /**

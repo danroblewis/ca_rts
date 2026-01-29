@@ -29,8 +29,14 @@ export class AudioEngine {
         this.oneShotPools = {
             spawn: { sounds: [], maxVoices: 3, lastPlayed: 0, cooldown: 100 },
             explosion: { sounds: [], maxVoices: 2, lastPlayed: 0, cooldown: 200 },
-            depletion: { sounds: [], maxVoices: 2, lastPlayed: 0, cooldown: 300 }  // Resource blob depleted
+            depletion: { sounds: [], maxVoices: 2, lastPlayed: 0, cooldown: 300 },  // Resource blob depleted
+            missileArmed: { sounds: [], maxVoices: 1, lastPlayed: 0, cooldown: 500 },
+            missileExplosion: { sounds: [], maxVoices: 2, lastPlayed: 0, cooldown: 100 }
         };
+        
+        // Missile moving loop (separate from main loops - manually controlled)
+        this.missileLoop = null;
+        this.missileLoopActive = false;
         
         // Current target volumes (for smooth transitions)
         this.targetVolumes = {
@@ -98,6 +104,69 @@ export class AudioEngine {
                 loop.start();
             }
         });
+        
+        // Create missile moving loop (starts silent, activated on demand)
+        this.missileLoop = this.createMissileMovingLoop();
+        this.missileLoop.gainNode.gain.value = 0;
+        this.missileLoop.start();
+    }
+    
+    /**
+     * Create an ominous missile moving sound - low rumbling with ascending pitch
+     */
+    createMissileMovingLoop() {
+        const osc1 = this.audioContext.createOscillator();
+        const osc2 = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        const filter = this.audioContext.createBiquadFilter();
+        
+        // Low ominous rumble
+        osc1.type = 'sawtooth';
+        osc1.frequency.value = 40;
+        
+        // Higher harmonic for menace
+        osc2.type = 'square';
+        osc2.frequency.value = 80;
+        
+        // Pulsing LFO for drama
+        const lfo = this.audioContext.createOscillator();
+        const lfoGain = this.audioContext.createGain();
+        lfo.type = 'sine';
+        lfo.frequency.value = 2;  // Slow throb
+        lfoGain.gain.value = 15;
+        lfo.connect(lfoGain);
+        lfoGain.connect(osc1.frequency);
+        lfoGain.connect(osc2.frequency);
+        lfo.start();
+        
+        // Rumbling filter
+        filter.type = 'lowpass';
+        filter.frequency.value = 200;
+        filter.Q.value = 3;
+        
+        gain.gain.value = 0;
+        
+        const osc1Gain = this.audioContext.createGain();
+        const osc2Gain = this.audioContext.createGain();
+        osc1Gain.gain.value = 0.5;
+        osc2Gain.gain.value = 0.3;
+        
+        osc1.connect(osc1Gain);
+        osc2.connect(osc2Gain);
+        osc1Gain.connect(filter);
+        osc2Gain.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.masterGain);
+        
+        return {
+            oscillators: [osc1, osc2],
+            gainNode: gain,
+            filter: filter,
+            lfo: lfo,
+            baseVolume: 0.25,
+            start: () => { osc1.start(); osc2.start(); },
+            stop: () => { osc1.stop(); osc2.stop(); lfo.stop(); }
+        };
     }
     
     /**
@@ -566,14 +635,46 @@ export class AudioEngine {
             filter.frequency.linearRampToValueAtTime(100, this.audioContext.currentTime + 0.3);
             gain.gain.value = volume * 0.3;
             gain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.4);
+        } else if (type === 'missileArmed') {
+            // Dramatic power-up sound - rising pitch with resonance
+            osc.type = 'sawtooth';
+            osc.frequency.value = 100;
+            osc.frequency.exponentialRampToValueAtTime(400, this.audioContext.currentTime + 0.5);
+            osc.frequency.exponentialRampToValueAtTime(200, this.audioContext.currentTime + 0.8);
+            filter.type = 'bandpass';
+            filter.frequency.value = 300;
+            filter.frequency.exponentialRampToValueAtTime(800, this.audioContext.currentTime + 0.5);
+            filter.frequency.exponentialRampToValueAtTime(400, this.audioContext.currentTime + 0.8);
+            filter.Q.value = 5;
+            gain.gain.value = volume * 0.25;
+            gain.gain.linearRampToValueAtTime(volume * 0.4, this.audioContext.currentTime + 0.4);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 1.0);
+        } else if (type === 'missileExplosion') {
+            // HUGE explosion - much bigger than normal
+            osc.type = 'sawtooth';
+            osc.frequency.value = 50;
+            osc.frequency.exponentialRampToValueAtTime(20, this.audioContext.currentTime + 0.8);
+            filter.type = 'lowpass';
+            filter.frequency.value = 600;
+            filter.frequency.linearRampToValueAtTime(80, this.audioContext.currentTime + 1.0);
+            filter.Q.value = 2;
+            // Much louder and longer than regular explosion
+            gain.gain.value = volume * 0.6;
+            gain.gain.linearRampToValueAtTime(volume * 0.3, this.audioContext.currentTime + 0.3);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 1.5);
         }
         
         osc.connect(filter);
         filter.connect(gain);
         gain.connect(this.masterGain);
         
+        // Determine sound duration
+        let duration = 0.5;
+        if (type === 'missileArmed') duration = 1.2;
+        else if (type === 'missileExplosion') duration = 2.0;
+        
         osc.start();
-        osc.stop(this.audioContext.currentTime + 0.5);
+        osc.stop(this.audioContext.currentTime + duration);
     }
     
     /**
@@ -636,6 +737,54 @@ export class AudioEngine {
         
         osc.start(now);
         osc.stop(now + 0.15);
+    }
+    
+    /**
+     * Play missile armed sound (when missile becomes ready to launch)
+     */
+    playMissileArmed() {
+        if (!this.initialized || this.muted) return;
+        this.playGeneratedOneShot('missileArmed', 1.0);
+        console.log('[AudioEngine] Missile armed sound');
+    }
+    
+    /**
+     * Start missile moving loop (call when missile starts flying)
+     */
+    startMissileMoving() {
+        if (!this.initialized || this.muted || !this.missileLoop) return;
+        if (this.missileLoopActive) return;  // Already playing
+        
+        const now = this.audioContext.currentTime;
+        this.missileLoop.gainNode.gain.cancelScheduledValues(now);
+        this.missileLoop.gainNode.gain.setValueAtTime(0, now);
+        this.missileLoop.gainNode.gain.linearRampToValueAtTime(this.missileLoop.baseVolume, now + 0.3);
+        this.missileLoopActive = true;
+        console.log('[AudioEngine] Missile moving loop started');
+    }
+    
+    /**
+     * Stop missile moving loop (call when missile explodes or is destroyed)
+     */
+    stopMissileMoving() {
+        if (!this.initialized || !this.missileLoop) return;
+        if (!this.missileLoopActive) return;  // Already stopped
+        
+        const now = this.audioContext.currentTime;
+        this.missileLoop.gainNode.gain.cancelScheduledValues(now);
+        this.missileLoop.gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+        this.missileLoopActive = false;
+        console.log('[AudioEngine] Missile moving loop stopped');
+    }
+    
+    /**
+     * Play missile explosion sound (big dramatic explosion)
+     */
+    playMissileExplosion() {
+        if (!this.initialized || this.muted) return;
+        this.stopMissileMoving();  // Stop moving sound first
+        this.playGeneratedOneShot('missileExplosion', 1.0);
+        console.log('[AudioEngine] Missile explosion sound');
     }
     
     /**

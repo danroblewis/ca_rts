@@ -17,6 +17,12 @@ const float CELL_WALL = 4.0;
 const float CELL_MINING_UNIT_P2 = 5.0;    // Player 2 unit
 const float CELL_DEMOLISH = 6.0;
 const float CELL_MINING_FACTORY_P2 = 7.0; // Player 2 factory (built or unbuilt)
+const float CELL_MISSILE = 8.0;           // Player 1 missile
+const float CELL_MISSILE_P2 = 9.0;        // Player 2 missile
+const float CELL_EXPLOSION = 10.0;        // Explosion particle
+
+// Explosion particle constants
+const float EXPLOSION_PARTICLE_LIFETIME = 30.0;
 
 // Player constants
 const float PLAYER_1 = 1.0;
@@ -76,21 +82,56 @@ bool isMiningFactory(vec4 cell) {
 // Get player ID from cell (1 or 2, 0 for non-owned)
 float getPlayerFromCell(vec4 cell) {
     float t = getCellType(cell);
-    if (t == CELL_MINING_UNIT || t == CELL_MINING_FACTORY) return PLAYER_1;
-    if (t == CELL_MINING_UNIT_P2 || t == CELL_MINING_FACTORY_P2) return PLAYER_2;
+    if (t == CELL_MINING_UNIT || t == CELL_MINING_FACTORY || t == CELL_MISSILE) return PLAYER_1;
+    if (t == CELL_MINING_UNIT_P2 || t == CELL_MINING_FACTORY_P2 || t == CELL_MISSILE_P2) return PLAYER_2;
     return 0.0;
 }
 
 // Check if cell belongs to player 1
 bool isPlayer1(vec4 cell) {
     float t = getCellType(cell);
-    return t == CELL_MINING_UNIT || t == CELL_MINING_FACTORY;
+    return t == CELL_MINING_UNIT || t == CELL_MINING_FACTORY || t == CELL_MISSILE;
 }
 
 // Check if cell belongs to player 2
 bool isPlayer2(vec4 cell) {
     float t = getCellType(cell);
-    return t == CELL_MINING_UNIT_P2 || t == CELL_MINING_FACTORY_P2;
+    return t == CELL_MINING_UNIT_P2 || t == CELL_MINING_FACTORY_P2 || t == CELL_MISSILE_P2;
+}
+
+// Check if cell is a missile (any player)
+bool isMissileCell(vec4 cell) {
+    float t = getCellType(cell);
+    return t == CELL_MISSILE || t == CELL_MISSILE_P2;
+}
+
+// Check if cell is an explosion particle
+bool isExplosionCell(vec4 cell) {
+    return getCellType(cell) == CELL_EXPLOSION;
+}
+
+// Get explosion particle lifetime
+float getExplosionLifetimeFromCell(vec4 cell) {
+    return cell.g;
+}
+
+// Missile states (must be before getMissileState)
+const float MISSILE_BUILDING = 0.0;    // Being built by units
+const float MISSILE_ARMED = 1.0;       // Fully built, waiting for destination
+const float MISSILE_MOVING = 2.0;      // Has destination, moving toward it
+const float MISSILE_EXPLODING = 3.0;   // At destination, exploding
+
+// Get missile state (BUILDING, ARMED, MOVING, EXPLODING)
+float getMissileState(vec4 cell) {
+    return mod(floor(cell.g / 16.0), 4.0);  // bits 4-5
+}
+
+// Missile selection bit (at position 10, value 1024)
+const float MISSILE_SELECTED_PACK_BASE = 1024.0;
+
+// Get missile selected state
+bool getMissileSelected(vec4 cell) {
+    return mod(floor(cell.g / MISSILE_SELECTED_PACK_BASE), 2.0) > 0.5;  // bit 10
 }
 
 bool isWall(vec4 cell) {
@@ -321,4 +362,32 @@ vec4 createEmpty() {
 
 vec4 createWall() {
     return vec4(CELL_WALL, 0.0, 0.0, 0.0);
+}
+
+// ============================================================================
+// MISSILE (additional helper functions)
+// R = CELL_MISSILE or CELL_MISSILE_P2
+// G = buildProgress (bits 0-3) + state*16 (bits 4-5) + explosionTimer*64 (bits 6+)
+// B = packed destination coords (or -1 if no destination)
+// A = packed center coords
+// ============================================================================
+
+// Get missile build progress (0-8)
+float getMissileBuildProgress(vec4 cell) {
+    return mod(floor(cell.g), 16.0);  // bits 0-3
+}
+
+// Get missile explosion timer (0-10)
+float getMissileExplosionTimer(vec4 cell) {
+    return floor(cell.g / 64.0);  // bits 6+
+}
+
+// Get missile destination
+vec2 getMissileDestination(vec4 cell) {
+    return unpackCoords(cell.b);
+}
+
+// Get missile center position
+vec2 getMissileCenter(vec4 cell) {
+    return unpackCoords(cell.a);
 }

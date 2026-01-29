@@ -123,6 +123,10 @@ export class Game {
         // Audio
         this.audioManager = new AudioManager({ gridSize: gridSize });
         
+        // Missile tracking for sound effects
+        this.missileStates = new Map();  // Map of position key to state
+        this.hasMovingMissile = false;
+        
         // Win condition manager
         this.winConditionManager = new WinConditionManager({
             countFactories: () => {
@@ -303,14 +307,19 @@ export class Game {
         const activeCommand = { ...command, player: this.currentPlayer };
         
         const currentData = this.grid.download();
-        const unitsCommanded = this.gridActions.applyUnitCommand(
+        const result = this.gridActions.applyUnitCommand(
             currentData, command.destX, command.destY, this.currentPlayer
         );
         
-        if (unitsCommanded > 0) {
+        if (result.total > 0) {
             this.grid.upload(currentData);
             if (this.isMultiplayer && this.networkSync?.isConnected) {
                 this.syncAction({ type: 'unit_command', ...activeCommand });
+            }
+            
+            // Play missile moving sound if missiles were launched
+            if (result.missilesLaunched > 0) {
+                this.audioManager.startMissileMoving();
             }
         }
     }

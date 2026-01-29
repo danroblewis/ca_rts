@@ -184,8 +184,59 @@ void main() {
         float pulse = 0.7 + 0.3 * sin(demolishCenter.x * 0.3 + demolishCenter.y * 0.3);
         color = vec3(0.9, 0.3, 0.2) * 0.6 * pulse;  // Red-orange, pulsing
     }
+    else if (isMissile(cellType)) {
+        // Missile - different colors for each state
+        int missileState = getMissileState(raw);
+        int player = getPlayer(cellType);
+        vec2 center = getMissileCenter(raw);
+        float pulse = 0.7 + 0.3 * sin(center.x * 0.5 + center.y * 0.5);
+        
+        if (missileState == MISSILE_BUILDING) {
+            // BUILDING: Orange/yellow, pulsing - needs to be built
+            color = (player == PLAYER_1) 
+                ? vec3(1.0, 0.6, 0.1) * pulse   // Orange for P1
+                : vec3(0.6, 1.0, 0.1) * pulse;  // Yellow-green for P2
+        }
+        else if (missileState == MISSILE_ARMED) {
+            // ARMED: Bright cyan/electric blue, solid - ready to launch
+            color = (player == PLAYER_1)
+                ? vec3(0.0, 1.0, 1.0)   // Cyan for P1
+                : vec3(1.0, 1.0, 0.0);  // Yellow for P2
+        }
+        else if (missileState == MISSILE_MOVING) {
+            // MOVING: White/cyan, fast pulse - in flight
+            float fastPulse = 0.5 + 0.5 * sin(center.x * 2.0 + center.y * 2.0);
+            color = (player == PLAYER_1)
+                ? vec3(1.0, 0.5, 0.5) * fastPulse + vec3(0.5, 0.0, 0.0)  // Red-white for P1
+                : vec3(0.5, 1.0, 0.5) * fastPulse + vec3(0.0, 0.5, 0.0); // Green-white for P2
+        }
+        else if (missileState == MISSILE_EXPLODING) {
+            // EXPLODING: Bright white/yellow flash
+            int timer = getMissileExplosionTimer(raw);
+            float intensity = 1.0 - float(timer) / float(MISSILE_EXPLOSION_DURATION);
+            color = vec3(1.0, 1.0, 0.5) * intensity + vec3(1.0, 0.3, 0.0) * (1.0 - intensity);
+        }
+        else {
+            // Unknown missile state - magenta for debug
+            color = vec3(1.0, 0.0, 1.0);
+        }
+    }
+    else if (isExplosion(cellType)) {
+        // Explosion particle - red/orange/yellow fire effect
+        int lifetime = getExplosionLifetime(raw);
+        float lifeRatio = float(lifetime) / float(EXPLOSION_PARTICLE_LIFETIME);
+        
+        // Color transitions from yellow (young) to red (old)
+        vec3 youngColor = vec3(1.0, 1.0, 0.3);  // Bright yellow
+        vec3 oldColor = vec3(1.0, 0.2, 0.0);     // Deep red
+        color = mix(oldColor, youngColor, lifeRatio);
+        
+        // Add some flicker
+        float flicker = 0.8 + 0.2 * sin(pos.x * 10.0 + pos.y * 7.0 + float(lifetime) * 3.0);
+        color *= flicker;
+    }
     else {
-        color = vec3(1.0, 0.0, 0.0);  // Red = unknown
+        color = vec3(0.0, 0.0, 0.0);  // Black = unknown
     }
     
     fragColor = vec4(color, 1.0);

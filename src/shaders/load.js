@@ -48,12 +48,16 @@ function resolvePath(basePath, includePath) {
  * @param {string} path - Path to the shader file
  * @returns {Promise<string>} - Raw shader source
  */
+// Cache buster timestamp - refreshed on page load to ensure fresh shaders
+const CACHE_BUSTER = Date.now();
+
 async function fetchShader(path) {
     if (shaderCache.has(path)) {
         return shaderCache.get(path);
     }
     
-    const response = await fetch(path);
+    // Add cache-busting parameter to bypass browser cache during development
+    const response = await fetch(`${path}?v=${CACHE_BUSTER}`);
     if (!response.ok) {
         throw new Error(`Failed to load shader: ${path} (${response.status})`);
     }

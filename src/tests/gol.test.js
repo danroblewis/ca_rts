@@ -46,14 +46,22 @@ void main() {
 }
 `;
 
-// Helper: create a GOL simulation
+// Shared shader instance (compiled once, reused across all tests)
+let sharedShader = null;
+
+function initSharedShader() {
+    if (!sharedShader) {
+        sharedShader = new ComputeShader(GOL_SHADER_SOURCE);
+    }
+    return sharedShader;
+}
+
+// Helper: create a GOL simulation (uses shared shader)
 function createGOLSimulation(width, height) {
     const buffer = new PingPongBuffer(width, height, { format: 'float' });
-    const shader = new ComputeShader(GOL_SHADER_SOURCE);
     
     return {
         buffer,
-        shader,
         setCell(data, x, y, alive) {
             const idx = (y * width + x) * 4;
             data[idx] = alive ? 1.0 : 0.0;
@@ -64,10 +72,10 @@ function createGOLSimulation(width, height) {
         },
         step() {
             buffer.getWriteFramebuffer().bind();
-            shader.use();
-            shader.setTexture('u_state', buffer.getReadTexture(), 0);
-            shader.setVec2('u_resolution', width, height);
-            shader.dispatch();
+            sharedShader.use();
+            sharedShader.setTexture('u_state', buffer.getReadTexture(), 0);
+            sharedShader.setVec2('u_resolution', width, height);
+            sharedShader.dispatch();
             buffer.getWriteFramebuffer().unbind();
             buffer.swap();
         },
@@ -78,13 +86,16 @@ function createGOLSimulation(width, height) {
             return buffer.download();
         },
         destroy() {
+            // Only destroy the buffer, not the shared shader
             buffer.destroy();
-            shader.destroy();
         }
     };
 }
 
 export async function runGOLTests() {
+    // Initialize shared shader once for all GOL tests
+    initSharedShader();
+    
     logSection('Game of Life');
 
     await runTest('GOL: isolated cell dies (underpopulation)', async () => {

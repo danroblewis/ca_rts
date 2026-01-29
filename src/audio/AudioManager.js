@@ -125,6 +125,42 @@ export class AudioManager {
     }
     
     /**
+     * Play missile armed sound
+     */
+    playMissileArmed() {
+        if (this.initialized) {
+            this.engine.playMissileArmed();
+        }
+    }
+    
+    /**
+     * Start missile moving loop
+     */
+    startMissileMoving() {
+        if (this.initialized) {
+            this.engine.startMissileMoving();
+        }
+    }
+    
+    /**
+     * Stop missile moving loop
+     */
+    stopMissileMoving() {
+        if (this.initialized) {
+            this.engine.stopMissileMoving();
+        }
+    }
+    
+    /**
+     * Play missile explosion sound
+     */
+    playMissileExplosion() {
+        if (this.initialized) {
+            this.engine.playMissileExplosion();
+        }
+    }
+    
+    /**
      * Run audio update with current game state
      * @param {WebGLTexture} stateTexture - Current grid state texture
      */
@@ -153,6 +189,11 @@ export class AudioManager {
             testExplosion: () => this.engine.tryPlayOneShot('explosion', 1.0),
             testDepletion: () => this.engine.tryPlayOneShot('depletion', 1.0),
             testReject: () => this.engine.playReject(),
+            // Missile sounds
+            testMissileArmed: () => this.engine.playMissileArmed(),
+            testMissileMoving: () => this.engine.startMissileMoving(),
+            testMissileStop: () => this.engine.stopMissileMoving(),
+            testMissileExplosion: () => this.engine.playMissileExplosion(),
             // Set loop volumes (0-1)
             setMining: (v) => {
                 const ctx = this.engine.audioContext;

@@ -151,6 +151,24 @@ struct AllDensities {
     float p2FactoryUnbuilt;
     float p2BuildProgress;
     float p2UnbuiltWeight;
+    
+    // Player 1 missiles
+    float p1MissileBuilding;
+    float p1MissileArmed;
+    float p1MissileMoving;
+    float p1MissileExploding;
+    float p1MissileSelected;  // Armed missiles that are selected
+    
+    // Player 2 missiles
+    float p2MissileBuilding;
+    float p2MissileArmed;
+    float p2MissileMoving;
+    float p2MissileExploding;
+    float p2MissileSelected;  // Armed missiles that are selected
+    
+    // Explosion particles
+    float explosionDensity;
+    float explosionLifeAvg;  // Average lifetime for color calculation
 };
 
 // Calculate all static densities in a single pass (one texture sample per cell)
@@ -167,6 +185,18 @@ AllDensities calcAllStaticDensities(vec2 uv) {
     d.p2FactoryUnbuilt = 0.0;
     d.p2BuildProgress = 0.0;
     d.p2UnbuiltWeight = 0.0;
+    d.p1MissileBuilding = 0.0;
+    d.p1MissileArmed = 0.0;
+    d.p1MissileMoving = 0.0;
+    d.p1MissileExploding = 0.0;
+    d.p1MissileSelected = 0.0;
+    d.p2MissileBuilding = 0.0;
+    d.p2MissileArmed = 0.0;
+    d.p2MissileMoving = 0.0;
+    d.p2MissileExploding = 0.0;
+    d.p2MissileSelected = 0.0;
+    d.explosionDensity = 0.0;
+    d.explosionLifeAvg = 0.0;
     
     vec2 texelSize = 1.0 / u_resolution;
     vec2 gridPos = uv * u_resolution;
@@ -228,7 +258,41 @@ AllDensities calcAllStaticDensities(vec2 uv) {
                     }
                 }
             }
+            else if (isMissileCell(cellSample)) {
+                float player = getPlayerFromCell(cellSample);
+                float state = getMissileState(cellSample);
+                bool isSelected = getMissileSelected(cellSample);
+                
+                if (player == PLAYER_1) {
+                    if (state == MISSILE_BUILDING) d.p1MissileBuilding += weight;
+                    else if (state == MISSILE_ARMED) {
+                        d.p1MissileArmed += weight;
+                        if (isSelected) d.p1MissileSelected += weight;
+                    }
+                    else if (state == MISSILE_MOVING) d.p1MissileMoving += weight;
+                    else if (state == MISSILE_EXPLODING) d.p1MissileExploding += weight;
+                } else {
+                    if (state == MISSILE_BUILDING) d.p2MissileBuilding += weight;
+                    else if (state == MISSILE_ARMED) {
+                        d.p2MissileArmed += weight;
+                        if (isSelected) d.p2MissileSelected += weight;
+                    }
+                    else if (state == MISSILE_MOVING) d.p2MissileMoving += weight;
+                    else if (state == MISSILE_EXPLODING) d.p2MissileExploding += weight;
+                }
+            }
+            else if (isExplosionCell(cellSample)) {
+                // Explosion particle
+                d.explosionDensity += weight;
+                float lifetime = getExplosionLifetimeFromCell(cellSample);
+                d.explosionLifeAvg += lifetime * weight;
+            }
         }
+    }
+    
+    // Normalize explosion life average
+    if (d.explosionDensity > 0.0) {
+        d.explosionLifeAvg /= d.explosionDensity;
     }
     
     return d;
@@ -644,6 +708,12 @@ void main() {
     float unbuiltFactoryDensity = p1UnbuiltFactoryDensity + p2UnbuiltFactoryDensity;
     float buildProgress = max(p1BuildProgress, p2BuildProgress);
     
+    // Missiles
+    float p1MissileDensity = d.p1MissileBuilding + d.p1MissileArmed + d.p1MissileMoving + d.p1MissileExploding;
+    float p2MissileDensity = d.p2MissileBuilding + d.p2MissileArmed + d.p2MissileMoving + d.p2MissileExploding;
+    float p1MissileExplosion = d.p1MissileExploding;
+    float p2MissileExplosion = d.p2MissileExploding;
+    
     // Player 1 units (purple/magenta)
     vec3 p1UnitInfo = calcUnitDensityForPlayer(worldUV, PLAYER_1);
     float p1EmptyUnitDensity = p1UnitInfo.x;
@@ -1033,6 +1103,112 @@ void main() {
         color = mix(color, unbuiltColor, blobStrength);
     }
     
+    // ========================================================================
+    // MISSILES - Dramatic weapon rendering
+    // ========================================================================
+    
+    float missileThreshold = 0.5;
+    
+    // Player 1 Missile - Different colors per state
+    if (p1MissileDensity > missileThreshold) {
+        float blobStrength = smoothstep(missileThreshold, missileThreshold + 2.0, p1MissileDensity);
+        
+        // Throbbing effect - slower, more menacing than factories
+        float throb = sin(u_time * 2.0) * 0.3 + 0.7;
+        float warningPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+        
+        vec3 missileColor;
+        
+        // Different colors for different states
+        if (d.p1MissileArmed > 0.0 || d.p1MissileMoving > 0.0) {
+            // ARMED/MOVING: Cyan/electric blue - ready to launch!
+            vec3 armedBase = vec3(0.0, 0.4, 0.5);
+            vec3 armedGlow = vec3(0.2, 1.0, 1.0);
+            missileColor = mix(armedBase, armedGlow, 0.3 + throb * 0.3);
+            
+            // Add pulsing red warning lights
+            vec3 warningRed = vec3(1.0, 0.2, 0.1);
+            missileColor += warningRed * warningPulse * 0.3;
+        } else {
+            // BUILDING: Purple/magenta - under construction
+            vec3 buildingBase = vec3(0.3, 0.1, 0.4);
+            vec3 buildingGlow = vec3(0.8, 0.3, 1.0);
+            missileColor = mix(buildingBase, buildingGlow, 0.3 + throb * 0.3);
+        }
+        
+        // Selection effect - VERY OBVIOUS bright pulsing for selected missiles
+        if (d.p1MissileSelected > 0.0 && u_currentPlayer == PLAYER_1) {
+            float selectPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+            // Make the whole missile flash bright white/yellow when selected
+            vec3 selectGlow = vec3(1.0, 1.0, 0.5);  // Bright yellow-white
+            missileColor = mix(missileColor, selectGlow, 0.5 + selectPulse * 0.3);
+        }
+        
+        // Explosion effect - bright flash expanding outward
+        if (p1MissileExplosion > 0.0) {
+            float explosionIntensity = smoothstep(0.0, 2.0, p1MissileExplosion);
+            vec3 explosionColor = vec3(1.0, 0.8, 0.3);  // Bright orange-yellow
+            vec3 fireColor = vec3(1.0, 0.3, 0.1);       // Red fire
+            
+            float explosionPhase = fract(u_time * 3.0);
+            missileColor = mix(explosionColor, fireColor, explosionPhase);
+            missileColor *= 1.5 + explosionIntensity;  // HDR overbright
+            blobStrength = 1.0;  // Full opacity during explosion
+        }
+        
+        color = mix(color, missileColor, blobStrength);
+    }
+    
+    // Player 2 Missile - Different colors per state
+    if (p2MissileDensity > missileThreshold) {
+        float blobStrength = smoothstep(missileThreshold, missileThreshold + 2.0, p2MissileDensity);
+        
+        // Throbbing effect
+        float throb = sin(u_time * 2.0) * 0.3 + 0.7;
+        float warningPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+        
+        vec3 missileColor;
+        
+        // Different colors for different states
+        if (d.p2MissileArmed > 0.0 || d.p2MissileMoving > 0.0) {
+            // ARMED/MOVING: Bright yellow/gold - ready to launch!
+            vec3 armedBase = vec3(0.5, 0.4, 0.0);
+            vec3 armedGlow = vec3(1.0, 1.0, 0.2);
+            missileColor = mix(armedBase, armedGlow, 0.3 + throb * 0.3);
+            
+            // Add pulsing red warning lights
+            vec3 warningRed = vec3(1.0, 0.2, 0.1);
+            missileColor += warningRed * warningPulse * 0.3;
+        } else {
+            // BUILDING: Green/teal - under construction
+            vec3 buildingBase = vec3(0.1, 0.3, 0.25);
+            vec3 buildingGlow = vec3(0.3, 1.0, 0.6);
+            missileColor = mix(buildingBase, buildingGlow, 0.3 + throb * 0.3);
+        }
+        
+        // Selection effect - VERY OBVIOUS bright pulsing for selected missiles
+        if (d.p2MissileSelected > 0.0 && u_currentPlayer == PLAYER_2) {
+            float selectPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+            // Make the whole missile flash bright white/yellow when selected
+            vec3 selectGlow = vec3(1.0, 1.0, 0.5);  // Bright yellow-white
+            missileColor = mix(missileColor, selectGlow, 0.5 + selectPulse * 0.3);
+        }
+        
+        // Explosion effect
+        if (p2MissileExplosion > 0.0) {
+            float explosionIntensity = smoothstep(0.0, 2.0, p2MissileExplosion);
+            vec3 explosionColor = vec3(1.0, 0.8, 0.3);
+            vec3 fireColor = vec3(1.0, 0.3, 0.1);
+            
+            float explosionPhase = fract(u_time * 3.0);
+            missileColor = mix(explosionColor, fireColor, explosionPhase);
+            missileColor *= 1.5 + explosionIntensity;
+            blobStrength = 1.0;
+        }
+        
+        color = mix(color, missileColor, blobStrength);
+    }
+    
     // Demolish cells - red/orange warning color with flashing (using unified density)
     float demolishDensity = d.demolishDens;
     if (demolishDensity > factoryThreshold) {
@@ -1051,6 +1227,27 @@ void main() {
         }
         
         color = mix(color, demolishColor, blobStrength);
+    }
+    
+    // Explosion particles - fiery random walk particles
+    float explosionThreshold = 0.3;
+    if (d.explosionDensity > explosionThreshold) {
+        float blobStrength = smoothstep(explosionThreshold, explosionThreshold + 2.0, d.explosionDensity);
+        
+        // Color based on lifetime - young = bright yellow, old = deep red
+        float lifeRatio = d.explosionLifeAvg / EXPLOSION_PARTICLE_LIFETIME;
+        vec3 youngColor = vec3(1.0, 1.0, 0.3);  // Bright yellow-white
+        vec3 oldColor = vec3(1.0, 0.15, 0.0);    // Deep red-orange
+        vec3 fireColor = mix(oldColor, youngColor, lifeRatio);
+        
+        // Add flickering effect
+        float flicker = 0.7 + 0.3 * sin(pixelPos.x * 15.0 + pixelPos.y * 11.0 + u_time * 20.0);
+        fireColor *= flicker;
+        
+        // Make it bright/HDR
+        fireColor *= 1.3;
+        
+        color = mix(color, fireColor, blobStrength);
     }
     
     } // end of if (!outOfBounds) block for world rendering
