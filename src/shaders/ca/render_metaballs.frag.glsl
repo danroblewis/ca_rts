@@ -165,6 +165,10 @@ struct AllDensities {
     float p2MissileMoving;
     float p2MissileExploding;
     float p2MissileSelected;  // Armed missiles that are selected
+    
+    // Explosion particles
+    float explosionDensity;
+    float explosionLifeAvg;  // Average lifetime for color calculation
 };
 
 // Calculate all static densities in a single pass (one texture sample per cell)
@@ -191,6 +195,8 @@ AllDensities calcAllStaticDensities(vec2 uv) {
     d.p2MissileMoving = 0.0;
     d.p2MissileExploding = 0.0;
     d.p2MissileSelected = 0.0;
+    d.explosionDensity = 0.0;
+    d.explosionLifeAvg = 0.0;
     
     vec2 texelSize = 1.0 / u_resolution;
     vec2 gridPos = uv * u_resolution;
@@ -275,7 +281,18 @@ AllDensities calcAllStaticDensities(vec2 uv) {
                     else if (state == MISSILE_EXPLODING) d.p2MissileExploding += weight;
                 }
             }
+            else if (isExplosionCell(cellSample)) {
+                // Explosion particle
+                d.explosionDensity += weight;
+                float lifetime = getExplosionLifetimeFromCell(cellSample);
+                d.explosionLifeAvg += lifetime * weight;
+            }
         }
+    }
+    
+    // Normalize explosion life average
+    if (d.explosionDensity > 0.0) {
+        d.explosionLifeAvg /= d.explosionDensity;
     }
     
     return d;
@@ -1210,6 +1227,27 @@ void main() {
         }
         
         color = mix(color, demolishColor, blobStrength);
+    }
+    
+    // Explosion particles - fiery random walk particles
+    float explosionThreshold = 0.3;
+    if (d.explosionDensity > explosionThreshold) {
+        float blobStrength = smoothstep(explosionThreshold, explosionThreshold + 2.0, d.explosionDensity);
+        
+        // Color based on lifetime - young = bright yellow, old = deep red
+        float lifeRatio = d.explosionLifeAvg / EXPLOSION_PARTICLE_LIFETIME;
+        vec3 youngColor = vec3(1.0, 1.0, 0.3);  // Bright yellow-white
+        vec3 oldColor = vec3(1.0, 0.15, 0.0);    // Deep red-orange
+        vec3 fireColor = mix(oldColor, youngColor, lifeRatio);
+        
+        // Add flickering effect
+        float flicker = 0.7 + 0.3 * sin(pixelPos.x * 15.0 + pixelPos.y * 11.0 + u_time * 20.0);
+        fireColor *= flicker;
+        
+        // Make it bright/HDR
+        fireColor *= 1.3;
+        
+        color = mix(color, fireColor, blobStrength);
     }
     
     } // end of if (!outOfBounds) block for world rendering

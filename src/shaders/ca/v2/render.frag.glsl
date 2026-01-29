@@ -221,8 +221,22 @@ void main() {
             color = vec3(1.0, 0.0, 1.0);
         }
     }
+    else if (isExplosion(cellType)) {
+        // Explosion particle - red/orange/yellow fire effect
+        int lifetime = getExplosionLifetime(raw);
+        float lifeRatio = float(lifetime) / float(EXPLOSION_PARTICLE_LIFETIME);
+        
+        // Color transitions from yellow (young) to red (old)
+        vec3 youngColor = vec3(1.0, 1.0, 0.3);  // Bright yellow
+        vec3 oldColor = vec3(1.0, 0.2, 0.0);     // Deep red
+        color = mix(oldColor, youngColor, lifeRatio);
+        
+        // Add some flicker
+        float flicker = 0.8 + 0.2 * sin(pos.x * 10.0 + pos.y * 7.0 + float(lifetime) * 3.0);
+        color *= flicker;
+    }
     else {
-        color = vec3(0.0, 0.0, 0.0);  // Red = unknown
+        color = vec3(0.0, 0.0, 0.0);  // Black = unknown
     }
     
     fragColor = vec4(color, 1.0);

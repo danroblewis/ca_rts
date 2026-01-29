@@ -388,4 +388,24 @@ bool isMissileBuilt(vec2 centerPos, sampler2D state, vec2 resolution) {
     return sumMissileBuildProgress(centerPos, state, resolution) >= MISSILE_BUILD_THRESHOLD;
 }
 
+// ============================================================================
+// EXPLOSION PARTICLE
+// R = TYPE_EXPLOSION
+// G = lifetime (frames remaining)
+// B = unused
+// A = unused
+// ============================================================================
+
+bool isExplosion(int cellType) {
+    return cellType == TYPE_EXPLOSION;
+}
+
+int getExplosionLifetime(vec4 raw) {
+    return int(raw.g);
+}
+
+vec4 encodeExplosion(int lifetime) {
+    return vec4(float(TYPE_EXPLOSION), float(lifetime), 0.0, 0.0);
+}
+
 #endif

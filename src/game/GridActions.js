@@ -178,7 +178,7 @@ export class GridActions {
             console.log(`[GridActions] Commanded ${unitsCommanded} units, launched ${missilesLaunched} missiles to (${destX}, ${destY})`);
         }
 
-        return unitsCommanded + missilesLaunched;
+        return { unitsCommanded, missilesLaunched, total: unitsCommanded + missilesLaunched };
     }
 
     /**

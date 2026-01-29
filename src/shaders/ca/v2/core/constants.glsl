@@ -22,6 +22,7 @@ const int TYPE_DEMOLISH = 6;    // Marked for destruction by units
 const int TYPE_FACTORY_P2 = 7;  // Player 2 factory (built or unbuilt)
 const int TYPE_MISSILE = 8;     // Player 1 missile
 const int TYPE_MISSILE_P2 = 9;  // Player 2 missile
+const int TYPE_EXPLOSION = 10;  // Explosion particle (random walk, destroys things)
 
 // ============================================================================
 // PLAYER CONSTANTS
@@ -115,9 +116,15 @@ const int MISSILE_EXPLODING = 3;   // At destination, exploding
 
 // Missile parameters
 const float MISSILE_BUILD_THRESHOLD = 8.0;   // Total build count to complete missile
-const float MISSILE_EXPLOSION_RADIUS = 5.0;  // Cells destroyed on explosion
-const int MISSILE_EXPLOSION_DURATION = 10;   // Frames to complete explosion
+const float MISSILE_EXPLOSION_RADIUS = 10.0; // Max explosion radius (for compatibility)
+const int MISSILE_EXPLOSION_DURATION = 15;   // Frames to emit explosion particles (max 15 due to 4-bit storage)
 const int MISSILE_SURROUND_REQUIRED = 8;     // Units needed around factory to spawn missile
+const float MISSILE_PATH_WIDTH = 3.0;        // Width of destruction as missile moves
+const int MISSILE_MOVE_DELAY = 6;            // Frames between each movement step (1 = every frame, 6 = comically slow)
+
+// Explosion particle parameters
+const int EXPLOSION_PARTICLE_LIFETIME = 30;  // Frames before particle dies
+const int EXPLOSION_PARTICLES_PER_FRAME = 3; // Particles emitted per frame while exploding
 
 #endif
 

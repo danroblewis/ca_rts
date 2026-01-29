@@ -19,6 +19,10 @@ const float CELL_DEMOLISH = 6.0;
 const float CELL_MINING_FACTORY_P2 = 7.0; // Player 2 factory (built or unbuilt)
 const float CELL_MISSILE = 8.0;           // Player 1 missile
 const float CELL_MISSILE_P2 = 9.0;        // Player 2 missile
+const float CELL_EXPLOSION = 10.0;        // Explosion particle
+
+// Explosion particle constants
+const float EXPLOSION_PARTICLE_LIFETIME = 30.0;
 
 // Player constants
 const float PLAYER_1 = 1.0;
@@ -99,6 +103,16 @@ bool isPlayer2(vec4 cell) {
 bool isMissileCell(vec4 cell) {
     float t = getCellType(cell);
     return t == CELL_MISSILE || t == CELL_MISSILE_P2;
+}
+
+// Check if cell is an explosion particle
+bool isExplosionCell(vec4 cell) {
+    return getCellType(cell) == CELL_EXPLOSION;
+}
+
+// Get explosion particle lifetime
+float getExplosionLifetimeFromCell(vec4 cell) {
+    return cell.g;
 }
 
 // Missile states (must be before getMissileState)

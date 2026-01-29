@@ -275,6 +275,12 @@ vec4 updateMissileCell(vec4 myRaw, vec2 myPos, float time, sampler2D state, vec2
             return encodeMissileExploding(0, center, player);
         }
         
+        // Only move on certain frames (comically slow missile)
+        bool shouldMove = int(mod(time, float(MISSILE_MOVE_DELAY))) == 0;
+        if (!shouldMove) {
+            return myRaw;  // Not a move frame - stay in place
+        }
+        
         // Move toward destination - the cell becomes empty, arrival handled separately
         int dir = getMissileDirection(center, destination);
         if (dir != DIR_NONE) {
@@ -324,10 +330,16 @@ struct MissileMovementResult {
  * Check if a moving missile is arriving at this position.
  * Returns the arriving missile cell if so.
  */
-MissileMovementResult checkMissileArrival(vec2 myPos, sampler2D state, vec2 resolution) {
+MissileMovementResult checkMissileArrival(vec2 myPos, float time, sampler2D state, vec2 resolution) {
     MissileMovementResult result;
     result.happened = false;
     result.arrivingCell = vec4(0.0);
+    
+    // Only check for arrivals on move frames
+    bool shouldMove = int(mod(time, float(MISSILE_MOVE_DELAY))) == 0;
+    if (!shouldMove) {
+        return result;  // Not a move frame
+    }
     
     // Check adjacent positions for moving missiles that would arrive here
     for (int dy = -2; dy <= 2; dy++) {
@@ -411,12 +423,20 @@ FactoryToMissileResult checkFactoryToMissile(vec2 myPos, vec4 myRaw, sampler2D s
 
 /**
  * Check if a position should be destroyed by a moving missile.
- * Returns true if the position is in the path of a moving missile.
+ * Returns true if the position is within MISSILE_PATH_WIDTH of the missile's path.
  */
-bool isInMissilePath(vec2 pos, sampler2D state, vec2 resolution) {
+bool isInMissilePath(vec2 pos, float time, sampler2D state, vec2 resolution) {
+    // Only destroy on move frames
+    bool shouldMove = int(mod(time, float(MISSILE_MOVE_DELAY))) == 0;
+    if (!shouldMove) {
+        return false;  // Not a move frame
+    }
+    
+    int searchRadius = int(MISSILE_PATH_WIDTH) + 3;
+    
     // Scan for moving missiles that might be about to hit this position
-    for (int dy = -3; dy <= 3; dy++) {
-        for (int dx = -3; dx <= 3; dx++) {
+    for (int dy = -searchRadius; dy <= searchRadius; dy++) {
+        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
             vec2 checkPos = pos + vec2(float(dx), float(dy));
             if (checkPos.x < 0.0 || checkPos.y < 0.0 || 
                 checkPos.x >= resolution.x || checkPos.y >= resolution.y) continue;
@@ -433,8 +453,9 @@ bool isInMissilePath(vec2 pos, sampler2D state, vec2 resolution) {
                     vec2 offset = dirToOffset(dir);
                     vec2 nextCenter = center + offset;
                     
-                    // Check if pos would be part of missile's next position
-                    if (isPartOfMissile(pos, nextCenter)) {
+                    // Check if pos is within destruction radius of missile's next center
+                    float distToNextCenter = distance(pos, nextCenter);
+                    if (distToNextCenter <= MISSILE_PATH_WIDTH) {
                         return true;
                     }
                 }
