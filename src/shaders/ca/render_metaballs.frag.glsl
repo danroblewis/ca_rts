@@ -157,12 +157,14 @@ struct AllDensities {
     float p1MissileArmed;
     float p1MissileMoving;
     float p1MissileExploding;
+    float p1MissileSelected;  // Armed missiles that are selected
     
     // Player 2 missiles
     float p2MissileBuilding;
     float p2MissileArmed;
     float p2MissileMoving;
     float p2MissileExploding;
+    float p2MissileSelected;  // Armed missiles that are selected
 };
 
 // Calculate all static densities in a single pass (one texture sample per cell)
@@ -183,10 +185,12 @@ AllDensities calcAllStaticDensities(vec2 uv) {
     d.p1MissileArmed = 0.0;
     d.p1MissileMoving = 0.0;
     d.p1MissileExploding = 0.0;
+    d.p1MissileSelected = 0.0;
     d.p2MissileBuilding = 0.0;
     d.p2MissileArmed = 0.0;
     d.p2MissileMoving = 0.0;
     d.p2MissileExploding = 0.0;
+    d.p2MissileSelected = 0.0;
     
     vec2 texelSize = 1.0 / u_resolution;
     vec2 gridPos = uv * u_resolution;
@@ -251,15 +255,22 @@ AllDensities calcAllStaticDensities(vec2 uv) {
             else if (isMissileCell(cellSample)) {
                 float player = getPlayerFromCell(cellSample);
                 float state = getMissileState(cellSample);
+                bool isSelected = getMissileSelected(cellSample);
                 
                 if (player == PLAYER_1) {
                     if (state == MISSILE_BUILDING) d.p1MissileBuilding += weight;
-                    else if (state == MISSILE_ARMED) d.p1MissileArmed += weight;
+                    else if (state == MISSILE_ARMED) {
+                        d.p1MissileArmed += weight;
+                        if (isSelected) d.p1MissileSelected += weight;
+                    }
                     else if (state == MISSILE_MOVING) d.p1MissileMoving += weight;
                     else if (state == MISSILE_EXPLODING) d.p1MissileExploding += weight;
                 } else {
                     if (state == MISSILE_BUILDING) d.p2MissileBuilding += weight;
-                    else if (state == MISSILE_ARMED) d.p2MissileArmed += weight;
+                    else if (state == MISSILE_ARMED) {
+                        d.p2MissileArmed += weight;
+                        if (isSelected) d.p2MissileSelected += weight;
+                    }
                     else if (state == MISSILE_MOVING) d.p2MissileMoving += weight;
                     else if (state == MISSILE_EXPLODING) d.p2MissileExploding += weight;
                 }
@@ -1101,6 +1112,16 @@ void main() {
             missileColor += warningRed * warningPulse * 0.4;
         }
         
+        // Selection effect - bright white pulsing outline for selected armed missiles
+        if (d.p1MissileSelected > 0.0 && u_currentPlayer == PLAYER_1) {
+            float selectPulse = sin(u_time * 6.0) * 0.3 + 0.7;
+            vec3 selectGlow = vec3(1.0, 1.0, 1.0);
+            missileColor += selectGlow * selectPulse * 0.5;
+            // White outline/halo effect
+            float haloStrength = smoothstep(missileThreshold * 0.3, missileThreshold, p1MissileDensity);
+            missileColor = mix(missileColor, selectGlow, haloStrength * 0.3);
+        }
+        
         // Explosion effect - bright flash expanding outward
         if (p1MissileExplosion > 0.0) {
             float explosionIntensity = smoothstep(0.0, 2.0, p1MissileExplosion);
@@ -1134,6 +1155,16 @@ void main() {
         if (d.p2MissileArmed > 0.0 || d.p2MissileMoving > 0.0) {
             vec3 warningRed = vec3(1.0, 0.2, 0.1);
             missileColor += warningRed * warningPulse * 0.4;
+        }
+        
+        // Selection effect - bright white pulsing outline for selected armed missiles
+        if (d.p2MissileSelected > 0.0 && u_currentPlayer == PLAYER_2) {
+            float selectPulse = sin(u_time * 6.0) * 0.3 + 0.7;
+            vec3 selectGlow = vec3(1.0, 1.0, 1.0);
+            missileColor += selectGlow * selectPulse * 0.5;
+            // White outline/halo effect
+            float haloStrength = smoothstep(missileThreshold * 0.3, missileThreshold, p2MissileDensity);
+            missileColor = mix(missileColor, selectGlow, haloStrength * 0.3);
         }
         
         // Explosion effect

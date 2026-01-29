@@ -265,6 +265,20 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         return encodeEmpty();
     }
     
+    // --- MISSILE ARRIVAL (moving missile cells arriving at this position) ---
+    MissileMovementResult missileArrival = checkMissileArrival(myPos, u_state, u_resolution);
+    if (missileArrival.happened) {
+        return missileArrival.arrivingCell;
+    }
+    
+    // --- FACTORY → MISSILE TRANSFORMATION ---
+    if (isFactory(myType)) {
+        FactoryToMissileResult transformation = checkFactoryToMissile(myPos, myRaw, u_state, u_resolution);
+        if (transformation.shouldTransform) {
+            return transformation.missileCell;
+        }
+    }
+    
     // ========================================================================
     // No trait affected me - handle staying in place
     // ========================================================================

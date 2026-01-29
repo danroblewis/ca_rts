@@ -276,10 +276,11 @@ vec4 encodeDemolish(vec2 centerPos) {
 // ============================================================================
 // MISSILE
 // R = TYPE_MISSILE or TYPE_MISSILE_P2
-// G = buildProgress (bits 0-3) + state*16 (bits 4-5) + explosionTimer*64 (bits 6+)
+// G = buildProgress (bits 0-3) + state*16 (bits 4-5) + explosionTimer*64 (bits 6-9) + selected*1024 (bit 10)
 //     buildProgress: 0-8 (4 bits)
 //     state: MISSILE_BUILDING, MISSILE_ARMED, MISSILE_MOVING, MISSILE_EXPLODING (2 bits)
-//     explosionTimer: 0-10 frames
+//     explosionTimer: 0-10 frames (4 bits)
+//     selected: 0 or 1 (1 bit)
 // B = packed destination coords (or -1 if no destination)
 // A = packed center coords (like factory)
 // 
@@ -289,6 +290,8 @@ vec4 encodeDemolish(vec2 centerPos) {
 // 3. MOVING: Has destination, moves toward it destroying everything in path
 // 4. EXPLODING: Reached destination, explodes over 10 frames destroying 5-cell radius
 // ============================================================================
+
+const float MISSILE_SELECTED_PACK_BASE = 1024.0;  // Selection bit at position 10
 
 // Check if a cell is a missile (any player)
 bool isMissile(int cellType) {
@@ -312,7 +315,12 @@ int getMissileState(vec4 raw) {
 
 // Get missile explosion timer (0-10)
 int getMissileExplosionTimer(vec4 raw) {
-    return int(floor(raw.g / 64.0));  // bits 6+
+    return int(mod(floor(raw.g / 64.0), 16.0));  // bits 6-9
+}
+
+// Get missile selected state
+bool getMissileSelected(vec4 raw) {
+    return mod(floor(raw.g / MISSILE_SELECTED_PACK_BASE), 2.0) > 0.5;  // bit 10
 }
 
 // Get missile destination (packed coords in B channel)
@@ -330,33 +338,33 @@ bool missileHasDestination(vec4 raw) {
     return raw.b >= 0.0;
 }
 
-// Encode a missile cell
-vec4 encodeMissile(float buildProgress, int state, int explosionTimer, vec2 destination, vec2 center, int player) {
+// Encode a missile cell with all parameters
+vec4 encodeMissile(float buildProgress, int state, int explosionTimer, bool selected, vec2 destination, vec2 center, int player) {
     int missileType = getMissileTypeForPlayer(player);
-    float g = buildProgress + float(state) * 16.0 + float(explosionTimer) * 64.0;
+    float g = buildProgress + float(state) * 16.0 + float(explosionTimer) * 64.0 + (selected ? MISSILE_SELECTED_PACK_BASE : 0.0);
     float b = packCoords(destination);
     float a = packCoords(center);
     return vec4(float(missileType), g, b, a);
 }
 
-// Encode a missile cell being built
+// Encode a missile cell being built (never selected)
 vec4 encodeMissileBuilding(float buildProgress, vec2 center, int player) {
-    return encodeMissile(buildProgress, MISSILE_BUILDING, 0, vec2(-1.0), center, player);
+    return encodeMissile(buildProgress, MISSILE_BUILDING, 0, false, vec2(-1.0), center, player);
 }
 
-// Encode an armed missile ready for targeting
-vec4 encodeMissileArmed(vec2 center, int player) {
-    return encodeMissile(MISSILE_BUILD_THRESHOLD, MISSILE_ARMED, 0, vec2(-1.0), center, player);
+// Encode an armed missile ready for targeting (preserves selection)
+vec4 encodeMissileArmed(vec2 center, int player, bool selected) {
+    return encodeMissile(float(MISSILE_BUILD_THRESHOLD), MISSILE_ARMED, 0, selected, vec2(-1.0), center, player);
 }
 
-// Encode a missile moving toward destination
+// Encode a missile moving toward destination (clears selection once launched)
 vec4 encodeMissileMoving(vec2 destination, vec2 center, int player) {
-    return encodeMissile(MISSILE_BUILD_THRESHOLD, MISSILE_MOVING, 0, destination, center, player);
+    return encodeMissile(float(MISSILE_BUILD_THRESHOLD), MISSILE_MOVING, 0, false, destination, center, player);
 }
 
 // Encode an exploding missile
 vec4 encodeMissileExploding(int timer, vec2 center, int player) {
-    return encodeMissile(MISSILE_BUILD_THRESHOLD, MISSILE_EXPLODING, timer, center, center, player);
+    return encodeMissile(float(MISSILE_BUILD_THRESHOLD), MISSILE_EXPLODING, timer, false, center, center, player);
 }
 
 // Sum build progress across all 8 outer cells of a 3x3 missile

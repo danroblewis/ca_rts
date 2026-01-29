@@ -27,6 +27,20 @@ export const CELL_WALL = 4;
 export const CELL_MINING_UNIT_P2 = 5;    // Player 2 unit
 export const CELL_DEMOLISH = 6;
 export const CELL_MINING_FACTORY_P2 = 7; // Player 2 factory (built or unbuilt)
+export const CELL_MISSILE = 8;           // Player 1 missile
+export const CELL_MISSILE_P2 = 9;        // Player 2 missile
+
+// ============================================================================
+// Missile Constants
+// ============================================================================
+
+export const MISSILE_BUILDING = 0;       // Being built by units
+export const MISSILE_ARMED = 1;          // Fully built, waiting for destination
+export const MISSILE_MOVING = 2;         // Has destination, moving
+export const MISSILE_EXPLODING = 3;      // At destination, exploding
+
+// Missile G channel encoding
+export const MISSILE_SELECTED_PACK_BASE = 1024.0;  // Selection bit at position 10
 
 // ============================================================================
 // Player Constants
@@ -230,10 +244,79 @@ export function getFactoryTypeForPlayer(player) {
  */
 export function isCellOwnedByPlayer(cellType, player) {
     if (player === PLAYER_1) {
-        return cellType === CELL_MINING_UNIT || cellType === CELL_MINING_FACTORY;
+        return cellType === CELL_MINING_UNIT || cellType === CELL_MINING_FACTORY || cellType === CELL_MISSILE;
     } else {
-        return cellType === CELL_MINING_UNIT_P2 || cellType === CELL_MINING_FACTORY_P2;
+        return cellType === CELL_MINING_UNIT_P2 || cellType === CELL_MINING_FACTORY_P2 || cellType === CELL_MISSILE_P2;
     }
+}
+
+/**
+ * Get the missile type for a given player.
+ * 
+ * @param {number} player - Player number (1 or 2)
+ * @returns {number} Cell type constant for that player's missiles
+ */
+export function getMissileTypeForPlayer(player) {
+    return player === PLAYER_2 ? CELL_MISSILE_P2 : CELL_MISSILE;
+}
+
+/**
+ * Check if a cell type is a missile.
+ * 
+ * @param {number} cellType - The cell type
+ * @returns {boolean} True if the cell is a missile
+ */
+export function isMissile(cellType) {
+    return cellType === CELL_MISSILE || cellType === CELL_MISSILE_P2;
+}
+
+/**
+ * Get the missile state from G channel.
+ * 
+ * @param {number} g - The G channel value
+ * @returns {number} Missile state (MISSILE_BUILDING, MISSILE_ARMED, MISSILE_MOVING, MISSILE_EXPLODING)
+ */
+export function getMissileStateFromG(g) {
+    return Math.floor((g / 16) % 4);
+}
+
+/**
+ * Get missile selected state from G channel.
+ * 
+ * @param {number} g - The G channel value
+ * @returns {boolean} True if missile is selected
+ */
+export function getMissileSelectedFromG(g) {
+    return Math.floor(g / MISSILE_SELECTED_PACK_BASE) % 2 === 1;
+}
+
+/**
+ * Set missile selection in G channel.
+ * 
+ * @param {number} g - The current G channel value
+ * @param {boolean} selected - Whether missile should be selected
+ * @returns {number} The new G channel value with updated selection
+ */
+export function setMissileSelectionInG(g, selected) {
+    const currentSelected = getMissileSelectedFromG(g);
+    if (currentSelected === selected) return g;
+    
+    if (selected) {
+        return g + MISSILE_SELECTED_PACK_BASE;
+    } else {
+        return g - MISSILE_SELECTED_PACK_BASE;
+    }
+}
+
+/**
+ * Set missile destination in B channel (packed coords).
+ * 
+ * @param {number} destX - Destination X coordinate
+ * @param {number} destY - Destination Y coordinate
+ * @returns {number} Packed destination coordinates for B channel
+ */
+export function packMissileDestination(destX, destY) {
+    return packCoords(destX, destY);
 }
 
 // ============================================================================

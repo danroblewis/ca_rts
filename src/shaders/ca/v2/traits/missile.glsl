@@ -262,23 +262,13 @@ vec4 updateMissileCell(vec4 myRaw, vec2 myPos, float time, sampler2D state, vec2
             return encodeMissileExploding(0, center, player);
         }
         
-        // Move toward destination
+        // Move toward destination - the cell becomes empty, arrival handled separately
         int dir = getMissileDirection(center, destination);
         if (dir != DIR_NONE) {
-            vec2 offset = dirToOffset(dir);
-            vec2 newCenter = center + offset;
-            
-            // Calculate new position for this cell
-            vec2 myOffset = myPos - center;
-            vec2 newMyPos = newCenter + myOffset;
-            
-            // If we're moving out, become empty
-            if (distance(newMyPos, myPos) > 0.5) {
-                return encodeEmpty();
-            }
+            return encodeEmpty();  // This cell vacates as missile moves
         }
         
-        return myRaw;  // Stay as-is for now
+        return myRaw;  // Stay as-is if no direction
     }
     
     // ARMED: Waiting for destination (handled by command system)
@@ -296,13 +286,111 @@ vec4 updateMissileCell(vec4 myRaw, vec2 myPos, float time, sampler2D state, vec2
         // Check if entire missile is now built
         float totalProgress = sumMissileBuildProgress(center, state, resolution);
         if (totalProgress + float(builders) >= MISSILE_BUILD_THRESHOLD) {
-            return encodeMissileArmed(center, player);
+            return encodeMissileArmed(center, player, false);  // Newly armed, not selected yet
         }
         
         return encodeMissileBuilding(newProgress, center, player);
     }
     
     return myRaw;
+}
+
+// ============================================================================
+// Missile Movement Result (for coordinated movement)
+// ============================================================================
+
+struct MissileMovementResult {
+    bool happened;       // Did a missile arrive at this position?
+    vec4 arrivingCell;   // The missile cell that's arriving
+};
+
+/**
+ * Check if a moving missile is arriving at this position.
+ * Returns the arriving missile cell if so.
+ */
+MissileMovementResult checkMissileArrival(vec2 myPos, sampler2D state, vec2 resolution) {
+    MissileMovementResult result;
+    result.happened = false;
+    result.arrivingCell = vec4(0.0);
+    
+    // Check adjacent positions for moving missiles that would arrive here
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            vec2 checkPos = myPos + vec2(float(dx), float(dy));
+            if (checkPos.x < 0.0 || checkPos.y < 0.0 || 
+                checkPos.x >= resolution.x || checkPos.y >= resolution.y) continue;
+            
+            vec4 cellRaw = texture(state, (checkPos + 0.5) / resolution);
+            int cellType = getType(cellRaw);
+            
+            if (isMissile(cellType) && getMissileState(cellRaw) == MISSILE_MOVING) {
+                vec2 center = getMissileCenter(cellRaw);
+                vec2 destination = getMissileDestination(cellRaw);
+                
+                // Only process if not at destination yet
+                if (distance(center, destination) >= 1.5) {
+                    int dir = getMissileDirection(center, destination);
+                    if (dir != DIR_NONE) {
+                        vec2 offset = dirToOffset(dir);
+                        vec2 newCenter = center + offset;
+                        
+                        // Check if myPos is part of the missile's new position
+                        vec2 cellOffset = checkPos - center;
+                        vec2 newCellPos = newCenter + cellOffset;
+                        
+                        if (distance(newCellPos, myPos) < 0.5) {
+                            // This missile is arriving at myPos
+                            result.happened = true;
+                            int player = getPlayer(cellType);
+                            result.arrivingCell = encodeMissileMoving(destination, newCenter, player);
+                            return result;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return result;
+}
+
+// ============================================================================
+// Factory → Missile Transformation
+// ============================================================================
+
+struct FactoryToMissileResult {
+    bool shouldTransform;  // Should this factory cell become a missile?
+    vec4 missileCell;      // The missile cell to become
+};
+
+/**
+ * Check if a factory cell should transform into a missile cell.
+ * Called for each factory cell.
+ */
+FactoryToMissileResult checkFactoryToMissile(vec2 myPos, vec4 myRaw, sampler2D state, vec2 resolution) {
+    FactoryToMissileResult result;
+    result.shouldTransform = false;
+    result.missileCell = vec4(0.0);
+    
+    int myType = getType(myRaw);
+    if (!isFactory(myType)) return result;
+    
+    vec2 factoryCenter = getFactoryPos(myRaw);
+    int player = getPlayer(myType);
+    
+    // Skip center cell (will stay empty)
+    if (distance(myPos, factoryCenter) < 0.5) return result;
+    
+    // Check spawn conditions
+    if (!canSpawnMissile(factoryCenter, player, state, resolution)) return result;
+    
+    // This factory cell should become a missile cell!
+    result.shouldTransform = true;
+    result.missileCell = encodeMissileBuilding(0.0, factoryCenter, player);
+    
+    return result;
 }
 
 /**

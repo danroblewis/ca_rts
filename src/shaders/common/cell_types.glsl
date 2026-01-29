@@ -112,6 +112,14 @@ float getMissileState(vec4 cell) {
     return mod(floor(cell.g / 16.0), 4.0);  // bits 4-5
 }
 
+// Missile selection bit (at position 10, value 1024)
+const float MISSILE_SELECTED_PACK_BASE = 1024.0;
+
+// Get missile selected state
+bool getMissileSelected(vec4 cell) {
+    return mod(floor(cell.g / MISSILE_SELECTED_PACK_BASE), 2.0) > 0.5;  // bit 10
+}
+
 bool isWall(vec4 cell) {
     return getCellType(cell) == CELL_WALL;
 }

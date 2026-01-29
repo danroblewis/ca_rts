@@ -5,9 +5,13 @@ import {
     CELL_EMPTY, CELL_DEMOLISH,
     CELL_MINING_UNIT, CELL_MINING_UNIT_P2,
     CELL_MINING_FACTORY, CELL_MINING_FACTORY_P2,
+    CELL_MISSILE, CELL_MISSILE_P2,
+    MISSILE_ARMED,
     PLAYER_1, PLAYER_2,
     MEMORY_PACK_BASE, COMMAND_FRESHNESS,
-    packCoords, getUnitSelectedFromG, setUnitSelectionInG
+    packCoords, getUnitSelectedFromG, setUnitSelectionInG,
+    isMissile, getMissileTypeForPlayer, getMissileStateFromG,
+    getMissileSelectedFromG, setMissileSelectionInG
 } from '../utils/GameUtils.js';
 
 /**
@@ -45,6 +49,13 @@ export class ActionApplier {
      */
     getFactoryType(playerId) {
         return playerId === PLAYER_2 ? CELL_MINING_FACTORY_P2 : CELL_MINING_FACTORY;
+    }
+    
+    /**
+     * Get the missile cell type for a player.
+     */
+    getMissileType(playerId) {
+        return playerId === PLAYER_2 ? CELL_MISSILE_P2 : CELL_MISSILE;
     }
     
     /**
@@ -191,13 +202,17 @@ export class ActionApplier {
     
     /**
      * Apply unit_command action.
+     * This also handles missile targeting for ARMED missiles.
      */
     applyUnitCommand(data, action, playerId) {
         const { destX, destY } = action;
         const unitType = this.getUnitType(playerId);
+        const missileType = this.getMissileType(playerId);
         const gridSize = this.gridSize;
         
         let unitsCommanded = 0;
+        let missilesLaunched = 0;
+        
         for (let y = 0; y < gridSize; y++) {
             for (let x = 0; x < gridSize; x++) {
                 const idx = (y * gridSize + x) * 4;
@@ -215,11 +230,33 @@ export class ActionApplier {
                     
                     unitsCommanded++;
                 }
+                
+                // Check if this is our ARMED missile and selected
+                if (cellType === missileType && getMissileSelectedFromG(data[idx + 1])) {
+                    const missileState = getMissileStateFromG(data[idx + 1]);
+                    
+                    // Only ARMED missiles can receive destinations (one-time only)
+                    if (missileState === MISSILE_ARMED) {
+                        // Set destination in B channel
+                        const destPacked = packCoords(destX, destY);
+                        data[idx + 2] = destPacked;
+                        
+                        // Update G channel: change state from ARMED to MOVING (add 16 for state increment)
+                        // Also clear selection
+                        // Current G: buildProgress + state*16 + explosionTimer*64 + selected*1024
+                        // New G: buildProgress + (state+1)*16 + 0 (moving state, no selection)
+                        const buildProgress = data[idx + 1] % 16;
+                        const newState = 2;  // MISSILE_MOVING
+                        data[idx + 1] = buildProgress + newState * 16;  // No selection bit
+                        
+                        missilesLaunched++;
+                    }
+                }
             }
         }
         
-        if (unitsCommanded > 0) {
-            console.log(`[ActionApplier] unit_command to ${unitsCommanded} units, target (${destX}, ${destY})`);
+        if (unitsCommanded > 0 || missilesLaunched > 0) {
+            console.log(`[ActionApplier] unit_command to ${unitsCommanded} units, ${missilesLaunched} missiles launched, target (${destX}, ${destY})`);
             return true;
         }
         
@@ -228,13 +265,17 @@ export class ActionApplier {
     
     /**
      * Apply unit_selection action.
+     * This also selects ARMED missiles in the region.
      */
     applyUnitSelection(data, action, playerId) {
         const { region } = action;
         const unitType = this.getUnitType(playerId);
+        const missileType = this.getMissileType(playerId);
         const gridSize = this.gridSize;
         
         let unitsSelected = 0;
+        let missilesSelected = 0;
+        
         for (let y = Math.max(0, region.y1); y <= Math.min(gridSize - 1, region.y2); y++) {
             for (let x = Math.max(0, region.x1); x <= Math.min(gridSize - 1, region.x2); x++) {
                 const idx = (y * gridSize + x) * 4;
@@ -244,11 +285,20 @@ export class ActionApplier {
                     data[idx + 1] = setUnitSelectionInG(data[idx + 1], true);
                     unitsSelected++;
                 }
+                
+                // Also select ARMED missiles
+                if (cellType === missileType) {
+                    const missileState = getMissileStateFromG(data[idx + 1]);
+                    if (missileState === MISSILE_ARMED) {
+                        data[idx + 1] = setMissileSelectionInG(data[idx + 1], true);
+                        missilesSelected++;
+                    }
+                }
             }
         }
         
-        if (unitsSelected > 0) {
-            console.log(`[ActionApplier] unit_selection, ${unitsSelected} units selected`);
+        if (unitsSelected > 0 || missilesSelected > 0) {
+            console.log(`[ActionApplier] unit_selection, ${unitsSelected} units and ${missilesSelected} missiles selected`);
             return true;
         }
         
@@ -257,12 +307,16 @@ export class ActionApplier {
     
     /**
      * Apply clear_selection action.
+     * This also clears selection from missiles.
      */
     applyClearSelection(data, action, playerId) {
         const unitType = this.getUnitType(playerId);
+        const missileType = this.getMissileType(playerId);
         const gridSize = this.gridSize;
         
         let unitsCleared = 0;
+        let missilesCleared = 0;
+        
         for (let y = 0; y < gridSize; y++) {
             for (let x = 0; x < gridSize; x++) {
                 const idx = (y * gridSize + x) * 4;
@@ -272,11 +326,17 @@ export class ActionApplier {
                     data[idx + 1] = setUnitSelectionInG(data[idx + 1], false);
                     unitsCleared++;
                 }
+                
+                // Also clear missile selection
+                if (cellType === missileType && getMissileSelectedFromG(data[idx + 1])) {
+                    data[idx + 1] = setMissileSelectionInG(data[idx + 1], false);
+                    missilesCleared++;
+                }
             }
         }
         
-        if (unitsCleared > 0) {
-            console.log(`[ActionApplier] clear_selection, ${unitsCleared} units deselected`);
+        if (unitsCleared > 0 || missilesCleared > 0) {
+            console.log(`[ActionApplier] clear_selection, ${unitsCleared} units and ${missilesCleared} missiles deselected`);
             return true;
         }
         
