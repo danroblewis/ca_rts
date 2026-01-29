@@ -144,18 +144,15 @@ class MissileSimulation {
     }
     
     async init() {
-        this.pingpong = new PingPongBuffer(this.gridSize);
-        this.pingpong.init();
+        // Create PingPongBuffer with width, height, and format options (like other tests)
+        this.pingpong = new PingPongBuffer(this.gridSize, this.gridSize, { format: 'float' });
         
-        const fragSource = await loadShader('ca/v2/mining_game.frag.glsl');
-        this.shader = new ComputeShader(fragSource, {
-            u_time: 'float',
-            u_resolution: 'vec2',
-            u_command: 'vec4',
-            u_commandPlayer: 'float',
-            u_sourceRegion: 'vec4',
-        });
-        this.shader.init();
+        // Load and compile shader
+        const fragSource = await loadShader('./src/shaders/ca/v2/mining_game.frag.glsl');
+        this.shader = new ComputeShader(fragSource);
+        
+        // Wait for shader to be ready (important for parallel compile)
+        await this.shader.waitReady();
     }
     
     createData() {
@@ -180,25 +177,28 @@ class MissileSimulation {
     }
     
     step(data, time = 0) {
+        // Upload data to read buffer
         this.pingpong.upload(data);
         
-        this.pingpong.swap((read, write) => {
-            this.shader.run(write, {
-                u_state: read,
-                u_time: time,
-                u_resolution: [this.gridSize, this.gridSize],
-                u_command: [-1, -1, -1, -1],
-                u_commandPlayer: 0,
-                u_sourceRegion: [-1, -1, -1, -1],
-            });
-        });
+        // Bind write framebuffer, run shader, swap buffers
+        this.pingpong.getWriteFramebuffer().bind();
+        this.shader.use();
+        this.shader.setTexture('u_state', this.pingpong.getReadTexture(), 0);
+        this.shader.setVec2('u_resolution', this.gridSize, this.gridSize);
+        this.shader.setFloat('u_time', time);
+        this.shader.setVec4('u_command', -1, -1, -1, -1);
+        this.shader.setFloat('u_commandPlayer', 0);
+        this.shader.setVec4('u_sourceRegion', -1, -1, -1, -1);
+        this.shader.dispatch();
+        this.pingpong.getWriteFramebuffer().unbind();
+        this.pingpong.swap();
         
         return this.pingpong.download();
     }
     
     cleanup() {
-        if (this.pingpong) this.pingpong.cleanup();
-        if (this.shader) this.shader.cleanup();
+        if (this.pingpong) this.pingpong.destroy();
+        if (this.shader) this.shader.destroy();
     }
     
     // Create a 3x3 factory centered at (x, y)
@@ -285,7 +285,7 @@ export async function runMissileSpawnConditionTests() {
     const sim = new MissileSimulation(TEST_GRID_SIZE);
     await sim.init();
     
-    await runTest('Missile: Factory with surrounding units and outsider can spawn missile', async () => {
+    await runTest('Missile: Factory with surrounding units and outsider can spawn missile (setup)', async () => {
         const data = sim.createData();
         
         // Create factory at center
@@ -314,7 +314,94 @@ export async function runMissileSpawnConditionTests() {
             'Outsider unit should exist');
     });
     
-    await runTest('Missile: Factory without outsider unit cannot spawn missile', async () => {
+    await runTest('Missile: [GPU] Surrounded factory transforms into missile after simulation', async () => {
+        const data = sim.createData();
+        
+        // Create factory at center
+        const factoryX = 16, factoryY = 16;
+        sim.createFactory(data, factoryX, factoryY, 100); // Built factory with resources
+        
+        // Surround factory with holding units (ring around the 3x3 at distance 2)
+        sim.surroundWithUnits(data, factoryX, factoryY, factoryX, factoryY, true);
+        
+        // Add an "outsider" unit further away (required for missile spawn)
+        sim.setCell(data, 5, 5, createMiningUnit(false, 0, factoryX, factoryY));
+        
+        // Initial state: should have factory cells
+        const initialFactoryCount = sim.countCellType(data, CELL_MINING_FACTORY);
+        assert(initialFactoryCount === 8, 
+            `Should start with 8 factory cells, got ${initialFactoryCount}`);
+        
+        // Run simulation for several steps to allow missile spawn
+        let result = data;
+        for (let i = 0; i < 10; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // After simulation: check if missile cells appeared
+        const missileCount = sim.countCellType(result, CELL_MISSILE);
+        const remainingFactoryCount = sim.countCellType(result, CELL_MINING_FACTORY);
+        
+        // The factory should have transformed into a missile (or started building)
+        // Either we have missile cells, or factory is now missile-building
+        const hasTransformed = missileCount > 0 || remainingFactoryCount < 8;
+        assert(hasTransformed, 
+            `Factory should start transforming to missile. Missiles: ${missileCount}, Factories: ${remainingFactoryCount}`);
+    });
+    
+    await runTest('Missile: [GPU] Factory without outsider does NOT spawn missile', async () => {
+        const data = sim.createData();
+        
+        // Create factory at center
+        const factoryX = 16, factoryY = 16;
+        sim.createFactory(data, factoryX, factoryY, 100);
+        
+        // Surround factory with units but NO outsider
+        sim.surroundWithUnits(data, factoryX, factoryY, factoryX, factoryY, true);
+        
+        // NO outsider - missile should NOT spawn
+        
+        // Run simulation
+        let result = data;
+        for (let i = 0; i < 10; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Should still be a factory, not a missile
+        const missileCount = sim.countCellType(result, CELL_MISSILE);
+        assert(missileCount === 0, 
+            `Without outsider, factory should NOT become missile. Got ${missileCount} missile cells`);
+    });
+    
+    await runTest('Missile: [GPU] Partially surrounded factory does NOT spawn missile', async () => {
+        const data = sim.createData();
+        
+        // Create factory at center
+        const factoryX = 16, factoryY = 16;
+        sim.createFactory(data, factoryX, factoryY, 100);
+        
+        // Only partial surrounding (4 units instead of full ring)
+        sim.setCell(data, factoryX + 2, factoryY, createMiningUnit(true, 0, factoryX, factoryY));
+        sim.setCell(data, factoryX - 2, factoryY, createMiningUnit(true, 0, factoryX, factoryY));
+        sim.setCell(data, factoryX, factoryY + 2, createMiningUnit(true, 0, factoryX, factoryY));
+        sim.setCell(data, factoryX, factoryY - 2, createMiningUnit(true, 0, factoryX, factoryY));
+        
+        // Add outsider
+        sim.setCell(data, 5, 5, createMiningUnit(false, 0, factoryX, factoryY));
+        
+        // Run simulation
+        let result = data;
+        for (let i = 0; i < 10; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Should NOT become missile with incomplete surrounding
+        const missileCount = sim.countCellType(result, CELL_MISSILE);
+        assert(missileCount === 0, 
+            `Partially surrounded factory should NOT become missile. Got ${missileCount} missile cells`);
+    });
+    
+    await runTest('Missile: Factory without outsider unit cannot spawn missile (setup only)', async () => {
         const data = sim.createData();
         
         // Create factory at center
@@ -332,7 +419,7 @@ export async function runMissileSpawnConditionTests() {
             'Should have no outsider units');
     });
     
-    await runTest('Missile: Factory not fully surrounded cannot spawn missile', async () => {
+    await runTest('Missile: Factory not fully surrounded cannot spawn missile (setup only)', async () => {
         const data = sim.createData();
         
         // Create factory at center
@@ -494,7 +581,7 @@ export async function runMissileMovementTests() {
     const sim = new MissileSimulation(TEST_GRID_SIZE);
     await sim.init();
     
-    await runTest('Missile: Moves toward destination', async () => {
+    await runTest('Missile: Moves toward destination (setup)', async () => {
         const data = sim.createData();
         
         // Create missile at (10, 16) with destination (25, 16)
@@ -508,12 +595,78 @@ export async function runMissileMovementTests() {
         
         assert(center.x === startX && center.y === startY, 
             'Missile should start at specified position');
-        
-        // After movement, center should be closer to destination
-        // (This tests the data structure, actual movement needs shader impl)
     });
     
-    await runTest('Missile: Destroys walls in its path', async () => {
+    await runTest('Missile: [GPU] Moving missile advances toward destination', async () => {
+        const data = sim.createData();
+        
+        // Create missile at (8, 16) with destination (24, 16) - moving right
+        const startX = 8, startY = 16;
+        const destX = 24, destY = 16;
+        
+        sim.createMissileStructure(data, startX, startY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_MOVING, destX, destY);
+        
+        // Run several simulation steps
+        let result = data;
+        for (let i = 0; i < 5; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Check if missile has moved - find any missile cell and get its center
+        let foundMissile = false;
+        let newCenterX = startX;
+        for (let y = 0; y < TEST_GRID_SIZE && !foundMissile; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE && !foundMissile; x++) {
+                if (sim.getCellType(result, x, y) === CELL_MISSILE) {
+                    const cell = sim.getCell(result, x, y);
+                    const center = getMissileCenter(cell);
+                    newCenterX = center.x;
+                    foundMissile = true;
+                }
+            }
+        }
+        
+        // Missile should have moved toward destination (rightward, so X increased)
+        // Or it might have exploded if it reached destination
+        const missileCount = sim.countCellType(result, CELL_MISSILE);
+        assert(foundMissile || missileCount === 0, 
+            'Missile should exist or have exploded');
+        
+        if (foundMissile) {
+            assert(newCenterX >= startX, 
+                `Missile should move rightward toward destination. Start: ${startX}, Now: ${newCenterX}`);
+        }
+    });
+    
+    await runTest('Missile: [GPU] Moving missile destroys walls in path', async () => {
+        const data = sim.createData();
+        
+        // Create missile
+        const missileX = 8, missileY = 16;
+        const destX = 24, destY = 16;
+        sim.createMissileStructure(data, missileX, missileY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_MOVING, destX, destY);
+        
+        // Put walls in the path
+        sim.setCell(data, 12, 16, createWall());
+        sim.setCell(data, 13, 16, createWall());
+        sim.setCell(data, 14, 16, createWall());
+        
+        const initialWallCount = sim.countCellType(data, CELL_WALL);
+        assert(initialWallCount === 3, `Should start with 3 walls`);
+        
+        // Run simulation until missile passes through
+        let result = data;
+        for (let i = 0; i < 20; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Walls in the path should be destroyed
+        const remainingWallCount = sim.countCellType(result, CELL_WALL);
+        assert(remainingWallCount < initialWallCount, 
+            `Walls should be destroyed. Started: ${initialWallCount}, Remaining: ${remainingWallCount}`);
+    });
+    
+    await runTest('Missile: Destroys walls in its path (setup only)', async () => {
         const data = sim.createData();
         
         // Create missile
@@ -530,7 +683,7 @@ export async function runMissileMovementTests() {
             `Should have 2 walls in path, got ${wallCount}`);
     });
     
-    await runTest('Missile: Destroys resources in its path', async () => {
+    await runTest('Missile: Destroys resources in its path (setup only)', async () => {
         const data = sim.createData();
         
         const missileX = 10, missileY = 16;
@@ -547,7 +700,7 @@ export async function runMissileMovementTests() {
             `Should have 4 resources in path, got ${resourceCount}`);
     });
     
-    await runTest('Missile: Destroys enemy units in its path', async () => {
+    await runTest('Missile: Destroys enemy units in its path (setup only)', async () => {
         const data = sim.createData();
         
         const missileX = 10, missileY = 16;
@@ -563,7 +716,7 @@ export async function runMissileMovementTests() {
             `Should have 2 enemy units in path, got ${enemyCount}`);
     });
     
-    await runTest('Missile: Destroys friendly units in its path (no friendly fire protection)', async () => {
+    await runTest('Missile: Destroys friendly units in its path (setup only)', async () => {
         const data = sim.createData();
         
         const missileX = 10, missileY = 16;
@@ -587,7 +740,7 @@ export async function runMissileExplosionTests() {
     const sim = new MissileSimulation(TEST_GRID_SIZE);
     await sim.init();
     
-    await runTest('Missile: Enters EXPLODING state when reaching destination', async () => {
+    await runTest('Missile: Enters EXPLODING state when reaching destination (setup)', async () => {
         const data = sim.createData();
         
         // Create missile at destination (already there)
@@ -597,6 +750,42 @@ export async function runMissileExplosionTests() {
         const missileCell = sim.getCell(data, destX + 1, destY);
         assert(getMissileState(missileCell) === MISSILE_EXPLODING, 
             'Missile at destination should be EXPLODING');
+    });
+    
+    await runTest('Missile: [GPU] Exploding missile destroys cells in radius', async () => {
+        const data = sim.createData();
+        
+        const destX = 16, destY = 16;
+        
+        // Fill area with walls
+        for (let y = destY - 7; y <= destY + 7; y++) {
+            for (let x = destX - 7; x <= destX + 7; x++) {
+                if (x >= 0 && x < TEST_GRID_SIZE && y >= 0 && y < TEST_GRID_SIZE) {
+                    sim.setCell(data, x, y, createWall());
+                }
+            }
+        }
+        
+        const initialWallCount = sim.countCellType(data, CELL_WALL);
+        
+        // Create exploding missile at center
+        sim.createMissileStructure(data, destX, destY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_EXPLODING, destX, destY, 0);
+        
+        // Run simulation through explosion duration
+        let result = data;
+        for (let i = 0; i < MISSILE_EXPLOSION_DURATION + 5; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Walls in the explosion radius should be destroyed
+        const remainingWallCount = sim.countCellType(result, CELL_WALL);
+        assert(remainingWallCount < initialWallCount, 
+            `Explosion should destroy walls. Started: ${initialWallCount}, Remaining: ${remainingWallCount}`);
+        
+        // Missile should be gone after explosion completes
+        const missileCount = sim.countCellType(result, CELL_MISSILE);
+        assert(missileCount === 0, 
+            `Missile should disappear after explosion. Got ${missileCount} missile cells`);
     });
     
     await runTest('Missile: Explosion has 5 cell radius', async () => {

@@ -60,7 +60,11 @@ export class GPU {
         // Check for required extensions
         this.extColorBufferFloat = this.gl.getExtension('EXT_color_buffer_float');
         if (!this.extColorBufferFloat) {
-            console.warn('EXT_color_buffer_float not available - float textures may not work as render targets');
+            console.error('CRITICAL: EXT_color_buffer_float not available - float textures will NOT work as render targets!');
+            console.error('This extension is required for GPU compute operations.');
+            console.error('Your GPU/driver may not support rendering to float textures.');
+        } else {
+            console.log('EXT_color_buffer_float enabled - float texture rendering supported');
         }
 
         // Check for parallel shader compile extension (for faster loading)

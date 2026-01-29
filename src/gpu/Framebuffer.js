@@ -44,7 +44,17 @@ export class Framebuffer {
         // Check framebuffer status
         const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
         if (status !== gl.FRAMEBUFFER_COMPLETE) {
-            throw new Error(`Framebuffer incomplete: ${status}`);
+            // Provide detailed error message based on status code
+            const statusNames = {
+                36054: 'GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT - texture format not renderable (check EXT_color_buffer_float)',
+                36055: 'GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT - no attachments',
+                36057: 'GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS - attachment sizes differ',
+                36061: 'GL_FRAMEBUFFER_UNSUPPORTED - format combination not supported'
+            };
+            const details = statusNames[status] || `Unknown status ${status}`;
+            const gpu = GPU.get();
+            const extStatus = gpu.extColorBufferFloat ? 'available' : 'NOT AVAILABLE';
+            throw new Error(`Framebuffer incomplete: ${status}\n${details}\nTexture: ${texture.width}x${texture.height}, format: ${texture.format}\nEXT_color_buffer_float: ${extStatus}`);
         }
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);

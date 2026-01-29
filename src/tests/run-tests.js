@@ -40,7 +40,7 @@ const skipGPU = shouldSkipGPU();
 // Unit tests: GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 + 
 //             RollbackManager:15 + AudioManager:15 + WinCondition:15 + NetworkIndicator:12 + 
 //             SpeedToggle:14 + NetworkManager:18 = 171
-const gpuTestCount = 113;
+const gpuTestCount = 119;  // Added 6 GPU missile behavior tests
 const unitTestCount = 171;
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
