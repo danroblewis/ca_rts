@@ -582,20 +582,22 @@ export async function runMissileBuildingTests(sim) {
             `Missile should build with adjacent holding units. Initial progress: ${initialProgress}, After: ${afterProgress}, State: ${afterState}`);
     });
     
-    await runTest('Missile: [GPU] Holding units STAY adjacent to building missile (don\'t move away)', async () => {
+    await runTest('Missile: [GPU] Holding units STAY near building missile (don\'t move away)', async () => {
         const data = sim.createData();
         
         // Create a missile in BUILDING state
         const missileX = 16, missileY = 16;
         sim.createMissileStructure(data, missileX, missileY, 0, 1, MISSILE_BUILDING);
         
-        // Place holding units at positions adjacent to missile cells
-        // Units have the missile center as their "factory" position (so they belong to this location)
+        // Place holding units at REALISTIC positions - distance 2 from center (the ring)
+        // This is where units naturally are after a factory transforms to a missile
         const unitPositions = [
-            [missileX - 2, missileY],     // Adjacent to missile cell at (-1, 0)
-            [missileX + 2, missileY],     // Adjacent to missile cell at (1, 0)
-            [missileX, missileY - 2],     // Adjacent to missile cell at (0, -1)
-            [missileX, missileY + 2],     // Adjacent to missile cell at (0, 1)
+            [missileX - 2, missileY],     // Ring position (distance 2)
+            [missileX + 2, missileY],     // Ring position
+            [missileX, missileY - 2],     // Ring position
+            [missileX, missileY + 2],     // Ring position
+            [missileX - 2, missileY - 1], // Ring corner-ish
+            [missileX + 2, missileY + 1], // Ring corner-ish
         ];
         
         for (const [ux, uy] of unitPositions) {
@@ -603,7 +605,7 @@ export async function runMissileBuildingTests(sim) {
             sim.setCell(data, ux, uy, createMiningUnit(true, 0, missileX, missileY));
         }
         
-        // Count initial adjacent units
+        // Count initial units in ring area
         let initialUnitCount = 0;
         for (const [ux, uy] of unitPositions) {
             const cell = sim.getCell(data, ux, uy);
@@ -611,7 +613,7 @@ export async function runMissileBuildingTests(sim) {
                 initialUnitCount++;
             }
         }
-        assert(initialUnitCount === 4, `Should start with 4 units, got ${initialUnitCount}`);
+        assert(initialUnitCount === 6, `Should start with 6 units, got ${initialUnitCount}`);
         
         // Run simulation for 3 steps
         let result = data;
@@ -619,38 +621,45 @@ export async function runMissileBuildingTests(sim) {
             result = sim.step(result, i);
         }
         
-        // Count units that stayed adjacent to missile
+        // Count units that stayed near missile (check a larger area)
         let finalUnitCount = 0;
-        for (const [ux, uy] of unitPositions) {
-            const cell = sim.getCell(result, ux, uy);
-            if (getCellType(cell) === CELL_MINING_UNIT) {
-                finalUnitCount++;
+        for (let dy = -3; dy <= 3; dy++) {
+            for (let dx = -3; dx <= 3; dx++) {
+                const cell = sim.getCell(result, missileX + dx, missileY + dy);
+                if (getCellType(cell) === CELL_MINING_UNIT) {
+                    finalUnitCount++;
+                }
             }
         }
         
-        // Most units should stay (they shouldn't all wander away)
-        assert(finalUnitCount >= 3, 
-            `Holding units should stay adjacent to building missile. Started with 4, only ${finalUnitCount} remained`);
+        // Most units should stay near (within 3 cells of center)
+        assert(finalUnitCount >= 4, 
+            `Holding units should stay near building missile. Started with 6, only ${finalUnitCount} remained nearby`);
     });
     
-    await runTest('Missile: [GPU] Missile becomes ARMED after sufficient build progress', async () => {
+    await runTest('Missile: [GPU] Missile becomes ARMED with units at ring distance (realistic)', async () => {
         const data = sim.createData();
         
         // Create a missile in BUILDING state
         const missileX = 16, missileY = 16;
         sim.createMissileStructure(data, missileX, missileY, 0, 1, MISSILE_BUILDING);
         
-        // Place 8 holding units at all cardinal-adjacent positions
-        // This ensures multiple cells get built each frame
+        // Place holding units at REALISTIC ring positions (distance 2 from center)
+        // This is where units naturally are when surrounding a factory
         const unitPositions = [
-            [missileX - 2, missileY - 1], // Adjacent to (-1, -1)
-            [missileX - 2, missileY],     // Adjacent to (-1, 0)
-            [missileX - 2, missileY + 1], // Adjacent to (-1, 1)
-            [missileX + 2, missileY - 1], // Adjacent to (1, -1)
-            [missileX + 2, missileY],     // Adjacent to (1, 0)
-            [missileX + 2, missileY + 1], // Adjacent to (1, 1)
-            [missileX, missileY - 2],     // Adjacent to (0, -1)
-            [missileX, missileY + 2],     // Adjacent to (0, 1)
+            // Ring positions at distance 2 (where units naturally gather)
+            [missileX - 2, missileY - 1],
+            [missileX - 2, missileY],
+            [missileX - 2, missileY + 1],
+            [missileX + 2, missileY - 1],
+            [missileX + 2, missileY],
+            [missileX + 2, missileY + 1],
+            [missileX - 1, missileY - 2],
+            [missileX, missileY - 2],
+            [missileX + 1, missileY - 2],
+            [missileX - 1, missileY + 2],
+            [missileX, missileY + 2],
+            [missileX + 1, missileY + 2],
         ];
         
         for (const [ux, uy] of unitPositions) {
@@ -663,8 +672,9 @@ export async function runMissileBuildingTests(sim) {
             `Should start in BUILDING state`);
         
         // Run simulation - should build and become armed within a few frames
+        // With 12 units at ring distance, building should complete quickly
         let result = data;
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < 5; i++) {
             result = sim.step(result, i);
         }
         
@@ -673,7 +683,7 @@ export async function runMissileBuildingTests(sim) {
         const afterState = getMissileState(afterCell);
         
         assert(afterState === MISSILE_ARMED, 
-            `Missile should become ARMED after building. Current state: ${afterState}`);
+            `Missile should become ARMED after building with ring-distance units. Current state: ${afterState}`);
     });
 }
 

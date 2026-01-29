@@ -119,24 +119,30 @@ struct MissileBuildResult {
 };
 
 /**
- * Count adjacent holding units that can build a missile cell.
+ * Count nearby holding units that can build a missile cell.
+ * Checks both adjacent (distance 1) and ring (distance 2) positions.
+ * Units don't need to be perfectly adjacent - they contribute from nearby.
  */
 int countMissileBuilders(vec2 missilePos, int missilePlayer, sampler2D state, vec2 resolution) {
     int count = 0;
     
-    for (int dir = 1; dir <= 4; dir++) {  // Cardinal directions only
-        vec2 offset = dirToOffset(dir);
-        vec2 checkPos = missilePos + offset;
-        
-        if (checkPos.x < 0.0 || checkPos.y < 0.0 || 
-            checkPos.x >= resolution.x || checkPos.y >= resolution.y) continue;
-        
-        vec4 cellRaw = texture(state, (checkPos + 0.5) / resolution);
-        int cellType = getType(cellRaw);
-        
-        // Only same-player holding units can build
-        if (isUnit(cellType) && getPlayer(cellType) == missilePlayer && getUnitHolding(cellRaw)) {
-            count++;
+    // Check in a 5x5 area centered on the missile cell (distance up to 2)
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            if (dx == 0 && dy == 0) continue;  // Skip self
+            
+            vec2 checkPos = missilePos + vec2(float(dx), float(dy));
+            
+            if (checkPos.x < 0.0 || checkPos.y < 0.0 || 
+                checkPos.x >= resolution.x || checkPos.y >= resolution.y) continue;
+            
+            vec4 cellRaw = texture(state, (checkPos + 0.5) / resolution);
+            int cellType = getType(cellRaw);
+            
+            // Only same-player holding units can build
+            if (isUnit(cellType) && getPlayer(cellType) == missilePlayer && getUnitHolding(cellRaw)) {
+                count++;
+            }
         }
     }
     
