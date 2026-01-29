@@ -52,14 +52,12 @@ function resolvePath(basePath, includePath) {
 const CACHE_BUSTER = Date.now();
 
 async function fetchShader(path) {
-    // DISABLED: In-memory cache - always fetch fresh for debugging
-    // if (shaderCache.has(path)) {
-    //     return shaderCache.get(path);
-    // }
+    if (shaderCache.has(path)) {
+        return shaderCache.get(path);
+    }
     
-    // Add cache-busting parameter to bypass browser cache
-    const cacheBuster = Date.now() + Math.random(); // Extra randomness
-    const response = await fetch(`${path}?v=${cacheBuster}`);
+    // Add cache-busting parameter to bypass browser cache during development
+    const response = await fetch(`${path}?v=${CACHE_BUSTER}`);
     if (!response.ok) {
         throw new Error(`Failed to load shader: ${path} (${response.status})`);
     }
@@ -108,9 +106,6 @@ async function processIncludes(source, filePath, ancestorChain = new Set()) {
     
     // Resolve all paths
     const resolvedPaths = matches.map(m => resolvePath(filePath, m.path));
-    
-    // Debug: log resolved paths
-    console.log('Including from:', filePath, '→', resolvedPaths);
     
     // Fetch ALL includes in parallel (cache handles network efficiency)
     const fetchPromises = resolvedPaths.map(path => fetchShader(path));
