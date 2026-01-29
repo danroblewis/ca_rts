@@ -35,8 +35,13 @@ const MISSILE_EXPLODING = 3;   // At destination, exploding
 // Missile constants
 const MISSILE_SIZE = 3;                    // 3x3 structure like factory
 const MISSILE_BUILD_THRESHOLD = 8;         // Total build count to complete
-const MISSILE_EXPLOSION_RADIUS = 5;        // Cells destroyed on explosion
-const MISSILE_EXPLOSION_DURATION = 10;     // Frames to complete explosion
+const MISSILE_EXPLOSION_RADIUS = 10;       // Max explosion radius
+const MISSILE_EXPLOSION_DURATION = 15;     // Frames to emit explosion particles (max 15 due to 4-bit storage)
+const MISSILE_MOVE_DELAY = 6;              // Frames between each movement step
+const EXPLOSION_PARTICLE_LIFETIME = 30;    // Frames before particle dies
+
+// Explosion particle type
+const CELL_EXPLOSION = 10;
 
 // Grid size for tests
 const TEST_GRID_SIZE = 32;
@@ -154,6 +159,26 @@ function getMissileDestination(cell) {
 
 function getMissileCenter(cell) {
     return unpackCoords(cell[3]);
+}
+
+/**
+ * Create an explosion particle cell.
+ * Encoding:
+ *   R: TYPE_EXPLOSION
+ *   G: lifetime (frames remaining)
+ *   B: unused
+ *   A: unused
+ */
+function createExplosionParticle(lifetime = EXPLOSION_PARTICLE_LIFETIME) {
+    return [CELL_EXPLOSION, lifetime, 0, 0];
+}
+
+function getExplosionLifetime(cell) {
+    return Math.round(cell[1]);
+}
+
+function isExplosionParticle(cell) {
+    return Math.round(cell[0]) === CELL_EXPLOSION;
 }
 
 // ============================================================================
@@ -942,7 +967,7 @@ export async function runMissileExplosionTests(sim) {
             `Missile should disappear after explosion. Got ${missileCount} missile cells`);
     });
     
-    await runTest('Missile: Explosion has 5 cell radius', async () => {
+    await runTest('Missile: Explosion has 10 cell radius', async () => {
         const data = sim.createData();
         
         const destX = 16, destY = 16;
@@ -958,12 +983,12 @@ export async function runMissileExplosionTests(sim) {
         const cellsInRadius = sim.countCellsInRadius(data, destX, destY, MISSILE_EXPLOSION_RADIUS);
         
         // Pi * r^2 for a circle, but we're on a grid
-        // For r=5, should be roughly 78-81 cells
-        assert(cellsInRadius > 60 && cellsInRadius < 100, 
-            `Explosion radius should cover ~78 cells, got ${cellsInRadius}`);
+        // For r=10, should be roughly 314 cells
+        assert(cellsInRadius > 200 && cellsInRadius < 400, 
+            `Explosion radius should cover ~314 cells, got ${cellsInRadius}`);
     });
     
-    await runTest('Missile: Explosion lasts 10 frames', async () => {
+    await runTest('Missile: Explosion lasts 15 frames', async () => {
         const data = sim.createData();
         
         const destX = 16, destY = 16;
@@ -1025,6 +1050,250 @@ export async function runMissileExplosionTests(sim) {
         const factoryCount = sim.countCellType(data, CELL_MINING_FACTORY);
         assert(factoryCount === 8, 
             `Should have 8 friendly factory cells, got ${factoryCount}`);
+    });
+}
+
+export async function runExplosionParticleTests(sim) {
+    logSection('Explosion Particle Tests');
+    
+    await runTest('Explosion Particle: Has correct type encoding', async () => {
+        const data = sim.createData();
+        
+        sim.setCell(data, 16, 16, createExplosionParticle(25));
+        
+        const cell = sim.getCell(data, 16, 16);
+        assert(Math.round(cell[0]) === CELL_EXPLOSION, 
+            `Should be explosion type, got ${Math.round(cell[0])}`);
+        assert(getExplosionLifetime(cell) === 25, 
+            `Lifetime should be 25, got ${getExplosionLifetime(cell)}`);
+    });
+    
+    await runTest('Explosion Particle: [GPU] Lifetime decrements each frame', async () => {
+        const data = sim.createData();
+        
+        const startLifetime = 20;
+        sim.setCell(data, 16, 16, createExplosionParticle(startLifetime));
+        
+        // Run 1 simulation step
+        let result = sim.step(data, 0);
+        
+        // Find the explosion particle (may have moved)
+        let found = false;
+        let newLifetime = -1;
+        for (let y = 14; y <= 18; y++) {
+            for (let x = 14; x <= 18; x++) {
+                const cell = sim.getCell(result, x, y);
+                if (isExplosionParticle(cell)) {
+                    newLifetime = getExplosionLifetime(cell);
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+        
+        assert(found, 'Explosion particle should still exist');
+        assert(newLifetime === startLifetime - 1, 
+            `Lifetime should decrement from ${startLifetime} to ${startLifetime - 1}, got ${newLifetime}`);
+    });
+    
+    await runTest('Explosion Particle: [GPU] Disappears when lifetime reaches 0', async () => {
+        const data = sim.createData();
+        
+        // Create particle with lifetime of 1 (will die after 1 step)
+        sim.setCell(data, 16, 16, createExplosionParticle(1));
+        
+        // Run 2 simulation steps
+        let result = sim.step(data, 0);
+        result = sim.step(result, 1);
+        
+        // Count explosion particles
+        const explosionCount = sim.countCellType(result, CELL_EXPLOSION);
+        assert(explosionCount === 0, 
+            `Particle should disappear when lifetime ends, got ${explosionCount} particles`);
+    });
+    
+    await runTest('Explosion Particle: [GPU] Destroys adjacent cells', async () => {
+        const data = sim.createData();
+        
+        // Create explosion particle
+        sim.setCell(data, 16, 16, createExplosionParticle(10));
+        
+        // Surround with walls
+        sim.setCell(data, 15, 16, createWall());
+        sim.setCell(data, 17, 16, createWall());
+        sim.setCell(data, 16, 15, createWall());
+        sim.setCell(data, 16, 17, createWall());
+        
+        const initialWallCount = sim.countCellType(data, CELL_WALL);
+        assert(initialWallCount === 4, `Should start with 4 walls`);
+        
+        // Run simulation
+        let result = sim.step(data, 0);
+        
+        // Some walls should be destroyed
+        const remainingWallCount = sim.countCellType(result, CELL_WALL);
+        assert(remainingWallCount < initialWallCount, 
+            `Explosion should destroy adjacent walls. Started: ${initialWallCount}, Remaining: ${remainingWallCount}`);
+    });
+    
+    await runTest('Explosion Particle: [GPU] Spawns from exploding missile', async () => {
+        const data = sim.createData();
+        
+        // Create exploding missile
+        const missileX = 16, missileY = 16;
+        sim.createMissileStructure(data, missileX, missileY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_EXPLODING, missileX, missileY, 0);
+        
+        // Create empty cells around for particles to spawn into
+        for (let dy = -3; dy <= 3; dy++) {
+            for (let dx = -3; dx <= 3; dx++) {
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                    sim.setCell(data, missileX + dx, missileY + dy, createEmpty());
+                }
+            }
+        }
+        
+        // Run simulation for several steps
+        let result = data;
+        for (let i = 0; i < 5; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Check for explosion particles
+        const explosionCount = sim.countCellType(result, CELL_EXPLOSION);
+        assert(explosionCount > 0, 
+            `Exploding missile should spawn explosion particles, got ${explosionCount}`);
+    });
+    
+    await runTest('Explosion Particle: [GPU] Performs random walk movement', async () => {
+        const data = sim.createData();
+        
+        // Create explosion particle with long lifetime
+        const startX = 16, startY = 16;
+        sim.setCell(data, startX, startY, createExplosionParticle(20));
+        
+        // Clear surroundings
+        for (let dy = -5; dy <= 5; dy++) {
+            for (let dx = -5; dx <= 5; dx++) {
+                if (dx !== 0 || dy !== 0) {
+                    sim.setCell(data, startX + dx, startY + dy, createEmpty());
+                }
+            }
+        }
+        
+        // Run several simulation steps
+        let result = data;
+        for (let i = 0; i < 10; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Find the particle's new position
+        let foundX = -1, foundY = -1;
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                if (sim.getCellType(result, x, y) === CELL_EXPLOSION) {
+                    foundX = x;
+                    foundY = y;
+                    break;
+                }
+            }
+            if (foundX >= 0) break;
+        }
+        
+        // Particle should have moved (or disappeared if lifetime ran out)
+        const stillExists = foundX >= 0;
+        const hasMoved = stillExists && (foundX !== startX || foundY !== startY);
+        const expired = !stillExists;  // OK if it expired
+        
+        assert(hasMoved || expired, 
+            `Particle should random walk. Start: (${startX}, ${startY}), Found: (${foundX}, ${foundY})`);
+    });
+}
+
+export async function runMissileSpeedTests(sim) {
+    logSection('Missile Speed Tests');
+    
+    await runTest('Missile: [GPU] Moves slowly (not every frame)', async () => {
+        const data = sim.createData();
+        
+        // Create missile at start position
+        const startX = 8, startY = 16;
+        const destX = 24, destY = 16;
+        sim.createMissileStructure(data, startX, startY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_MOVING, destX, destY);
+        
+        // Run exactly 1 frame (should NOT move on frame 1)
+        let result = sim.step(data, 1);  // Time=1, not a move frame
+        
+        // Find missile center
+        let centerX = -1;
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                if (sim.getCellType(result, x, y) === CELL_MISSILE) {
+                    const cell = sim.getCell(result, x, y);
+                    const center = getMissileCenter(cell);
+                    centerX = center.x;
+                    break;
+                }
+            }
+            if (centerX >= 0) break;
+        }
+        
+        // Missile should not have moved yet (move only happens at time % 6 == 0)
+        assert(centerX === startX, 
+            `Missile should not move on frame 1. Expected X=${startX}, got X=${centerX}`);
+    });
+    
+    await runTest('Missile: [GPU] Moves on move frames (time % 6 == 0)', async () => {
+        const data = sim.createData();
+        
+        // Create missile
+        const startX = 8, startY = 16;
+        const destX = 24, destY = 16;
+        sim.createMissileStructure(data, startX, startY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_MOVING, destX, destY);
+        
+        // Run exactly 6 frames (frame 0 is a move frame, so run time=0)
+        let result = sim.step(data, 0);  // Time=0, IS a move frame
+        
+        // Find missile center
+        let centerX = -1;
+        for (let y = 0; y < TEST_GRID_SIZE; y++) {
+            for (let x = 0; x < TEST_GRID_SIZE; x++) {
+                if (sim.getCellType(result, x, y) === CELL_MISSILE) {
+                    const cell = sim.getCell(result, x, y);
+                    const center = getMissileCenter(cell);
+                    centerX = center.x;
+                    break;
+                }
+            }
+            if (centerX >= 0) break;
+        }
+        
+        // Missile should have moved 1 cell toward destination
+        assert(centerX === startX + 1, 
+            `Missile should move on frame 0. Expected X=${startX + 1}, got X=${centerX}`);
+    });
+    
+    await runTest('Missile: [GPU] Takes multiple frames to travel distance', async () => {
+        const data = sim.createData();
+        
+        // Create missile
+        const startX = 8, startY = 16;
+        const destX = 14, destY = 16;  // 6 cells away
+        sim.createMissileStructure(data, startX, startY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_MOVING, destX, destY);
+        
+        // Run 36 frames (should move 6 cells with MOVE_DELAY of 6)
+        let result = data;
+        for (let i = 0; i < 36; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Missile should have reached destination and be exploding
+        const missileCount = sim.countCellType(result, CELL_MISSILE);
+        const explosionCount = sim.countCellType(result, CELL_EXPLOSION);
+        
+        // Should have exploded or be exploding (missile cells gone or explosion particles present)
+        assert(missileCount === 0 || explosionCount > 0, 
+            `Missile should have reached destination and exploded. Missiles: ${missileCount}, Explosions: ${explosionCount}`);
     });
 }
 
@@ -1094,6 +1363,12 @@ export async function runMissileTests() {
     await delay(50);
     
     await runMissileExplosionTests(sim);
+    await delay(50);
+    
+    await runExplosionParticleTests(sim);
+    await delay(50);
+    
+    await runMissileSpeedTests(sim);
     await delay(50);
     
     await runMissilePlayerTests(sim);

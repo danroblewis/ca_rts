@@ -112,60 +112,95 @@ export class AudioEngine {
     }
     
     /**
-     * Create an ominous missile moving sound - low rumbling with ascending pitch
+     * Create a jet engine sound - filtered noise with high-frequency whine
      */
     createMissileMovingLoop() {
-        const osc1 = this.audioContext.createOscillator();
-        const osc2 = this.audioContext.createOscillator();
-        const gain = this.audioContext.createGain();
-        const filter = this.audioContext.createBiquadFilter();
+        const ctx = this.audioContext;
         
-        // Low ominous rumble
-        osc1.type = 'sawtooth';
-        osc1.frequency.value = 40;
+        // Create noise source using many detuned oscillators (pseudo-noise)
+        const noiseOscs = [];
+        const noiseMixer = ctx.createGain();
+        noiseMixer.gain.value = 0.15;
         
-        // Higher harmonic for menace
-        osc2.type = 'square';
-        osc2.frequency.value = 80;
+        // Multiple detuned sawtooths create noise-like texture
+        const baseFreqs = [67, 73, 89, 97, 113, 131];  // Prime-ish frequencies for inharmonic noise
+        for (const freq of baseFreqs) {
+            const osc = ctx.createOscillator();
+            osc.type = 'sawtooth';
+            osc.frequency.value = freq;
+            const oscGain = ctx.createGain();
+            oscGain.gain.value = 0.1;
+            osc.connect(oscGain);
+            oscGain.connect(noiseMixer);
+            noiseOscs.push(osc);
+        }
         
-        // Pulsing LFO for drama
-        const lfo = this.audioContext.createOscillator();
-        const lfoGain = this.audioContext.createGain();
-        lfo.type = 'sine';
-        lfo.frequency.value = 2;  // Slow throb
-        lfoGain.gain.value = 15;
-        lfo.connect(lfoGain);
-        lfoGain.connect(osc1.frequency);
-        lfoGain.connect(osc2.frequency);
-        lfo.start();
+        // Jet whine - high frequency tone
+        const whineOsc = ctx.createOscillator();
+        whineOsc.type = 'sine';
+        whineOsc.frequency.value = 2200;  // High jet whine
+        const whineGain = ctx.createGain();
+        whineGain.gain.value = 0.04;  // Subtle
         
-        // Rumbling filter
-        filter.type = 'lowpass';
-        filter.frequency.value = 200;
-        filter.Q.value = 3;
+        // Slight pitch wobble on the whine
+        const whineLfo = ctx.createOscillator();
+        whineLfo.type = 'sine';
+        whineLfo.frequency.value = 5;
+        const whineLfoGain = ctx.createGain();
+        whineLfoGain.gain.value = 30;
+        whineLfo.connect(whineLfoGain);
+        whineLfoGain.connect(whineOsc.frequency);
         
-        gain.gain.value = 0;
+        whineOsc.connect(whineGain);
         
-        const osc1Gain = this.audioContext.createGain();
-        const osc2Gain = this.audioContext.createGain();
-        osc1Gain.gain.value = 0.5;
-        osc2Gain.gain.value = 0.3;
+        // Low rumble component
+        const rumbleOsc = ctx.createOscillator();
+        rumbleOsc.type = 'sawtooth';
+        rumbleOsc.frequency.value = 55;
+        const rumbleGain = ctx.createGain();
+        rumbleGain.gain.value = 0.12;
         
-        osc1.connect(osc1Gain);
-        osc2.connect(osc2Gain);
-        osc1Gain.connect(filter);
-        osc2Gain.connect(filter);
-        filter.connect(gain);
-        gain.connect(this.masterGain);
+        const rumbleFilter = ctx.createBiquadFilter();
+        rumbleFilter.type = 'lowpass';
+        rumbleFilter.frequency.value = 150;
+        rumbleFilter.Q.value = 1;
+        
+        rumbleOsc.connect(rumbleFilter);
+        rumbleFilter.connect(rumbleGain);
+        
+        // Bandpass filter for jet "whoosh" character
+        const jetFilter = ctx.createBiquadFilter();
+        jetFilter.type = 'bandpass';
+        jetFilter.frequency.value = 800;
+        jetFilter.Q.value = 0.8;
+        
+        // Final output
+        const outputGain = ctx.createGain();
+        outputGain.gain.value = 0;
+        
+        noiseMixer.connect(jetFilter);
+        jetFilter.connect(outputGain);
+        whineGain.connect(outputGain);
+        rumbleGain.connect(outputGain);
+        outputGain.connect(this.masterGain);
         
         return {
-            oscillators: [osc1, osc2],
-            gainNode: gain,
-            filter: filter,
-            lfo: lfo,
-            baseVolume: 0.25,
-            start: () => { osc1.start(); osc2.start(); },
-            stop: () => { osc1.stop(); osc2.stop(); lfo.stop(); }
+            oscillators: [...noiseOscs, whineOsc, rumbleOsc],
+            gainNode: outputGain,
+            whineLfo: whineLfo,
+            baseVolume: 0.2,
+            start: () => {
+                noiseOscs.forEach(o => o.start());
+                whineOsc.start();
+                rumbleOsc.start();
+                whineLfo.start();
+            },
+            stop: () => {
+                noiseOscs.forEach(o => o.stop());
+                whineOsc.stop();
+                rumbleOsc.stop();
+                whineLfo.stop();
+            }
         };
     }
     
@@ -650,18 +685,17 @@ export class AudioEngine {
             gain.gain.linearRampToValueAtTime(volume * 0.4, this.audioContext.currentTime + 0.4);
             gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 1.0);
         } else if (type === 'missileExplosion') {
-            // HUGE explosion - much bigger than normal
-            osc.type = 'sawtooth';
-            osc.frequency.value = 50;
-            osc.frequency.exponentialRampToValueAtTime(20, this.audioContext.currentTime + 0.8);
+            // BIG NOISY explosion - use noise-like multi-oscillator approach
+            // The single osc won't be enough, so we'll create additional noise sources
+            this._playMissileExplosionNoise(volume);
+            // Still use the main osc for low-end thump
+            osc.type = 'sine';
+            osc.frequency.value = 40;
+            osc.frequency.exponentialRampToValueAtTime(20, this.audioContext.currentTime + 0.5);
             filter.type = 'lowpass';
-            filter.frequency.value = 600;
-            filter.frequency.linearRampToValueAtTime(80, this.audioContext.currentTime + 1.0);
-            filter.Q.value = 2;
-            // Much louder and longer than regular explosion
-            gain.gain.value = volume * 0.6;
-            gain.gain.linearRampToValueAtTime(volume * 0.3, this.audioContext.currentTime + 0.3);
-            gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 1.5);
+            filter.frequency.value = 100;
+            gain.gain.value = volume * 0.5;
+            gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 1.0);
         }
         
         osc.connect(filter);
@@ -785,6 +819,60 @@ export class AudioEngine {
         this.stopMissileMoving();  // Stop moving sound first
         this.playGeneratedOneShot('missileExplosion', 1.0);
         console.log('[AudioEngine] Missile explosion sound');
+    }
+    
+    /**
+     * Create noisy explosion effect for missile
+     */
+    _playMissileExplosionNoise(volume) {
+        if (!this.audioContext) return;
+        
+        const ctx = this.audioContext;
+        const now = ctx.currentTime;
+        
+        // Create noise buffer
+        const bufferSize = ctx.sampleRate * 2;  // 2 seconds
+        const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            output[i] = Math.random() * 2 - 1;
+        }
+        
+        // Noise source
+        const noise = ctx.createBufferSource();
+        noise.buffer = noiseBuffer;
+        
+        // Bandpass filter - sweeps down for explosion character
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = 1000;
+        filter.frequency.exponentialRampToValueAtTime(100, now + 1.5);
+        filter.Q.value = 1;
+        
+        // Gain envelope - sharp attack, long decay
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(volume * 0.4, now);
+        gain.gain.exponentialRampToValueAtTime(volume * 0.2, now + 0.1);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+        
+        // Distortion for crunch
+        const distortion = ctx.createWaveShaper();
+        const curve = new Float32Array(256);
+        for (let i = 0; i < 256; i++) {
+            const x = (i / 128) - 1;
+            curve[i] = Math.tanh(x * 2);  // Soft clip
+        }
+        distortion.curve = curve;
+        
+        // Connect
+        noise.connect(filter);
+        filter.connect(distortion);
+        distortion.connect(gain);
+        gain.connect(this.masterGain);
+        
+        // Play
+        noise.start(now);
+        noise.stop(now + 2.0);
     }
     
     /**
