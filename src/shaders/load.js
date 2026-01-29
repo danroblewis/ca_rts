@@ -107,6 +107,9 @@ async function processIncludes(source, filePath, ancestorChain = new Set()) {
     // Resolve all paths
     const resolvedPaths = matches.map(m => resolvePath(filePath, m.path));
     
+    // Debug: log resolved paths
+    console.log('Including from:', filePath, '→', resolvedPaths);
+    
     // Fetch ALL includes in parallel (cache handles network efficiency)
     const fetchPromises = resolvedPaths.map(path => fetchShader(path));
     const includeSources = await Promise.all(fetchPromises);
