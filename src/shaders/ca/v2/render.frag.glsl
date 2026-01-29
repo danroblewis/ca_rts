@@ -27,6 +27,7 @@ uniform float u_temporalBlend;    // Not used but declared for compatibility
 // Camera/viewport uniforms for pan and zoom
 uniform vec2 u_cameraPos;         // Camera center in grid coordinates
 uniform float u_cameraZoom;       // Zoom level (1.0 = full map visible, 2.0 = half map visible)
+uniform float u_aspectRatio;      // Canvas aspect ratio (width / height)
 
 // UI uniforms (declared for compatibility, not all used in debug shader)
 uniform float u_currentPlayer;
@@ -46,8 +47,20 @@ vec2 screenToWorldUV(vec2 screenUV) {
     // Convert screen UV to centered coords (-0.5 to 0.5)
     vec2 centered = screenUV - 0.5;
     
-    // Scale by zoom (higher zoom = smaller visible area)
-    vec2 scaled = centered / u_cameraZoom;
+    // Apply aspect ratio correction
+    // The shorter dimension determines the base scale
+    // The longer dimension extends to show more of the sim
+    vec2 aspectScale;
+    if (u_aspectRatio >= 1.0) {
+        // Wider than tall: X extends, Y is base
+        aspectScale = vec2(u_aspectRatio, 1.0);
+    } else {
+        // Taller than wide: Y extends, X is base
+        aspectScale = vec2(1.0, 1.0 / u_aspectRatio);
+    }
+    
+    // Scale by zoom and aspect (higher zoom = smaller visible area)
+    vec2 scaled = centered * aspectScale / u_cameraZoom;
     
     // Offset by camera position (convert camera pos from grid coords to UV)
     vec2 cameraUV = u_cameraPos / u_resolution;

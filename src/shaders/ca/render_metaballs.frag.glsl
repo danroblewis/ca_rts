@@ -66,6 +66,7 @@ uniform float u_deleteRadius;    // Delete radius in grid cells
 // Camera/viewport uniforms for pan and zoom
 uniform vec2 u_cameraPos;        // Camera center in grid coordinates
 uniform float u_cameraZoom;      // Zoom level (1.0 = full map visible, 2.0 = half map visible)
+uniform float u_aspectRatio;     // Canvas aspect ratio (width / height)
 
 // Performance mode uniforms
 uniform float u_showMinimap;     // 1.0 = show minimap, 0.0 = hide minimap
@@ -77,8 +78,20 @@ vec2 screenToWorldUV(vec2 screenUV) {
     // Convert screen UV to centered coords (-0.5 to 0.5)
     vec2 centered = screenUV - 0.5;
     
-    // Scale by zoom (higher zoom = smaller visible area)
-    vec2 scaled = centered / u_cameraZoom;
+    // Apply aspect ratio correction
+    // The shorter dimension determines the base scale
+    // The longer dimension extends to show more of the sim
+    vec2 aspectScale;
+    if (u_aspectRatio >= 1.0) {
+        // Wider than tall: X extends, Y is base
+        aspectScale = vec2(u_aspectRatio, 1.0);
+    } else {
+        // Taller than wide: Y extends, X is base
+        aspectScale = vec2(1.0, 1.0 / u_aspectRatio);
+    }
+    
+    // Scale by zoom and aspect (higher zoom = smaller visible area)
+    vec2 scaled = centered * aspectScale / u_cameraZoom;
     
     // Offset by camera position (convert camera pos from grid coords to UV)
     vec2 cameraUV = u_cameraPos / u_resolution;
@@ -1103,10 +1116,19 @@ void main() {
     
     // Delete mode indicator (red box showing delete radius when shift is held)
     if (u_shiftHeld > 0.5) {
-        // Calculate the box in UV coords
-        float radiusUV = u_deleteRadius / u_resolution.x;
-        vec2 boxMin = u_mousePos - vec2(radiusUV);
-        vec2 boxMax = u_mousePos + vec2(radiusUV);
+        // Calculate the box in UV coords - adjusted for aspect ratio and zoom
+        // The delete radius is in grid cells, convert to screen UV
+        float baseRadiusUV = u_deleteRadius / u_resolution.x / u_cameraZoom;
+        vec2 radiusUV;
+        if (u_aspectRatio >= 1.0) {
+            // Wide screen: X shows more grid, needs less UV per cell
+            radiusUV = vec2(baseRadiusUV / u_aspectRatio, baseRadiusUV);
+        } else {
+            // Tall screen: Y shows more grid, needs less UV per cell
+            radiusUV = vec2(baseRadiusUV, baseRadiusUV * u_aspectRatio);
+        }
+        vec2 boxMin = u_mousePos - radiusUV;
+        vec2 boxMax = u_mousePos + radiusUV;
         
         float borderWidth = 2.0 / u_canvasResolution.x;
         
@@ -1134,9 +1156,21 @@ void main() {
     // MINIMAP - Bottom-left corner, fast low-res sampling
     // ========================================================================
     {  // Always show minimap (it's useful even in performance mode)
-        // Minimap parameters
-        float minimapSize = 0.2;  // 20% of screen width/height
+        // Minimap parameters - size is based on screen height to stay consistent
+        float minimapBaseSize = 0.2;  // 20% of screen height
         float minimapMargin = 0.02;  // 2% margin from edges
+        
+        // Calculate minimap dimensions to be square in screen pixels
+        // Width in UV needs to account for aspect ratio
+        vec2 minimapSize;
+        if (u_aspectRatio >= 1.0) {
+            // Wide screen: width in UV needs to be smaller to appear square
+            minimapSize = vec2(minimapBaseSize / u_aspectRatio, minimapBaseSize);
+        } else {
+            // Tall screen: height in UV needs to be smaller to appear square
+            minimapSize = vec2(minimapBaseSize, minimapBaseSize * u_aspectRatio);
+        }
+        
         vec2 minimapOrigin = vec2(minimapMargin, minimapMargin);  // Bottom-left
         
         // Check if we're in the minimap region
@@ -1264,11 +1298,17 @@ void main() {
                 }
                 
                 // Show current viewport as a white rectangle
-                // Calculate the viewport bounds on the minimap
+                // Calculate the viewport bounds on the minimap with aspect ratio
                 vec2 viewportCenter = u_cameraPos / u_resolution;
-                float viewportSize = 1.0 / u_cameraZoom;
-                vec2 viewportMin = viewportCenter - vec2(viewportSize * 0.5);
-                vec2 viewportMax = viewportCenter + vec2(viewportSize * 0.5);
+                float baseViewportSize = 1.0 / u_cameraZoom;
+                vec2 viewportSize;
+                if (u_aspectRatio >= 1.0) {
+                    viewportSize = vec2(baseViewportSize * u_aspectRatio, baseViewportSize);
+                } else {
+                    viewportSize = vec2(baseViewportSize, baseViewportSize / u_aspectRatio);
+                }
+                vec2 viewportMin = viewportCenter - viewportSize * 0.5;
+                vec2 viewportMax = viewportCenter + viewportSize * 0.5;
                 
                 float viewBorderWidth = 0.01;
                 bool onViewBorder = false;

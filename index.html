@@ -20,12 +20,10 @@
         }
         canvas {
             display: block;
-            /* Size is set dynamically by JavaScript to maintain square aspect ratio */
-            /* Center the canvas */
+            /* Fullscreen canvas - size set by JavaScript */
             position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
+            left: 0;
+            top: 0;
         }
         /* Cursor overlay is now rendered in shader (u_shiftHeld, u_deleteRadius) */
         

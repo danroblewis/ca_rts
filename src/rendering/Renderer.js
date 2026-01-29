@@ -87,6 +87,7 @@ export class Renderer {
         // Camera uniforms
         shader.setVec2('u_cameraPos', game.camera.x, game.camera.y);
         shader.setFloat('u_cameraZoom', game.camera.zoom);
+        shader.setFloat('u_aspectRatio', game.camera.getAspectRatio());
         
         // Performance mode uniforms
         shader.setFloat('u_showMinimap', game.showMinimap ? 1.0 : 0.0);

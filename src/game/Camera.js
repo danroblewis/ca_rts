@@ -70,18 +70,54 @@ export class Camera {
     
     /**
      * Get visible grid size based on current zoom.
+     * Returns the base visible size (for the shorter dimension).
      */
     getVisibleGridSize() {
         return this.gridSize / this.zoom;
     }
     
     /**
+     * Get aspect ratio of the canvas (width / height).
+     */
+    getAspectRatio() {
+        if (!this.canvas) return 1.0;
+        const rect = this.canvas.getBoundingClientRect();
+        return rect.width / rect.height;
+    }
+    
+    /**
+     * Get visible width and height in grid units.
+     * The shorter dimension uses the base visible size,
+     * the longer dimension extends to show more of the sim.
+     */
+    getVisibleDimensions() {
+        const baseSize = this.getVisibleGridSize();
+        const aspect = this.getAspectRatio();
+        
+        if (aspect >= 1.0) {
+            // Wider than tall: height is base, width extends
+            return {
+                width: baseSize * aspect,
+                height: baseSize
+            };
+        } else {
+            // Taller than wide: width is base, height extends
+            return {
+                width: baseSize,
+                height: baseSize / aspect
+            };
+        }
+    }
+    
+    /**
      * Clamp camera position to keep view within map bounds.
      */
     clamp() {
-        const halfVisible = this.getVisibleGridSize() / 2;
-        this.x = clamp(this.x, halfVisible, this.gridSize - halfVisible);
-        this.y = clamp(this.y, halfVisible, this.gridSize - halfVisible);
+        const dims = this.getVisibleDimensions();
+        const halfWidth = dims.width / 2;
+        const halfHeight = dims.height / 2;
+        this.x = clamp(this.x, halfWidth, this.gridSize - halfWidth);
+        this.y = clamp(this.y, halfHeight, this.gridSize - halfHeight);
     }
     
     /**
@@ -152,11 +188,11 @@ export class Camera {
         if (!this.isPanning || !this.canvas) return;
         
         const rect = this.canvas.getBoundingClientRect();
-        const visibleSize = this.getVisibleGridSize();
+        const dims = this.getVisibleDimensions();
         
-        // Calculate delta in grid units
-        const dx = (screenX - this.panStartX) / rect.width * visibleSize;
-        const dy = (screenY - this.panStartY) / rect.height * visibleSize;
+        // Calculate delta in grid units using aspect-correct dimensions
+        const dx = (screenX - this.panStartX) / rect.width * dims.width;
+        const dy = (screenY - this.panStartY) / rect.height * dims.height;
         
         // Apply delta (inverted because dragging moves the view, not the camera)
         this.x = this.panStartCameraX - dx;
@@ -185,6 +221,7 @@ export class Camera {
         }
         
         const rect = this.canvas.getBoundingClientRect();
+        const dims = this.getVisibleDimensions();
         
         // Normalized screen position (0-1)
         const normalizedX = (screenX - rect.left) / rect.width;
@@ -194,10 +231,9 @@ export class Camera {
         const centeredX = normalizedX - 0.5;
         const centeredY = -(normalizedY - 0.5);  // Y is inverted
         
-        // Apply camera transform: centered coords * visible size + camera center
-        const visibleSize = this.getVisibleGridSize();
-        const gridX = Math.floor(this.x + centeredX * visibleSize);
-        const gridY = Math.floor(this.y + centeredY * visibleSize);
+        // Apply camera transform with aspect-correct dimensions
+        const gridX = Math.floor(this.x + centeredX * dims.width);
+        const gridY = Math.floor(this.y + centeredY * dims.height);
         
         return {
             x: clamp(gridX, 0, this.gridSize - 1),
@@ -218,11 +254,11 @@ export class Camera {
         }
         
         const rect = this.canvas.getBoundingClientRect();
-        const visibleSize = this.getVisibleGridSize();
+        const dims = this.getVisibleDimensions();
         
-        // Convert grid to centered coords relative to camera
-        const centeredX = (gridX - this.x) / visibleSize;
-        const centeredY = (gridY - this.y) / visibleSize;
+        // Convert grid to centered coords relative to camera (with aspect)
+        const centeredX = (gridX - this.x) / dims.width;
+        const centeredY = (gridY - this.y) / dims.height;
         
         // Convert to normalized screen position
         const normalizedX = centeredX + 0.5;
@@ -238,21 +274,25 @@ export class Camera {
      * Check if a grid position is visible on screen.
      */
     isVisible(gridX, gridY, margin = 0) {
-        const halfVisible = this.getVisibleGridSize() / 2 + margin;
-        return Math.abs(gridX - this.x) <= halfVisible &&
-               Math.abs(gridY - this.y) <= halfVisible;
+        const dims = this.getVisibleDimensions();
+        const halfWidth = dims.width / 2 + margin;
+        const halfHeight = dims.height / 2 + margin;
+        return Math.abs(gridX - this.x) <= halfWidth &&
+               Math.abs(gridY - this.y) <= halfHeight;
     }
     
     /**
      * Get the visible region in grid coordinates.
      */
     getVisibleRegion() {
-        const halfVisible = this.getVisibleGridSize() / 2;
+        const dims = this.getVisibleDimensions();
+        const halfWidth = dims.width / 2;
+        const halfHeight = dims.height / 2;
         return {
-            x1: Math.max(0, Math.floor(this.x - halfVisible)),
-            y1: Math.max(0, Math.floor(this.y - halfVisible)),
-            x2: Math.min(this.gridSize - 1, Math.ceil(this.x + halfVisible)),
-            y2: Math.min(this.gridSize - 1, Math.ceil(this.y + halfVisible))
+            x1: Math.max(0, Math.floor(this.x - halfWidth)),
+            y1: Math.max(0, Math.floor(this.y - halfHeight)),
+            x2: Math.min(this.gridSize - 1, Math.ceil(this.x + halfWidth)),
+            y2: Math.min(this.gridSize - 1, Math.ceil(this.y + halfHeight))
         };
     }
     
@@ -271,11 +311,15 @@ export class Camera {
      * Get camera state for shader uniforms.
      */
     getUniforms() {
+        const dims = this.getVisibleDimensions();
         return {
             cameraX: this.x,
             cameraY: this.y,
             cameraZoom: this.zoom,
-            visibleSize: this.getVisibleGridSize()
+            visibleSize: this.getVisibleGridSize(),
+            visibleWidth: dims.width,
+            visibleHeight: dims.height,
+            aspectRatio: this.getAspectRatio()
         };
     }
 }
