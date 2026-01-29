@@ -55,9 +55,9 @@ int countUnitsInRing(vec2 factoryCenter, int player, sampler2D state, vec2 resol
 int countOutsiderUnits(vec2 factoryCenter, int player, sampler2D state, vec2 resolution) {
     int count = 0;
     
-    // Scan a larger area around factory
-    for (int dy = -10; dy <= 10; dy++) {
-        for (int dx = -10; dx <= 10; dx++) {
+    // Reduced search area for performance (was 10, now 5)
+    for (int dy = -5; dy <= 5; dy++) {
+        for (int dx = -5; dx <= 5; dx++) {
             vec2 checkPos = factoryCenter + vec2(float(dx), float(dy));
             if (checkPos.x < 0.0 || checkPos.y < 0.0 || 
                 checkPos.x >= resolution.x || checkPos.y >= resolution.y) continue;
@@ -208,11 +208,10 @@ bool isInExplosionRadius(vec2 pos, vec2 missileCenter, int explosionTimer) {
  * Returns the missile center if found, or vec2(-1.0) if not.
  */
 vec2 findExplodingMissileAffecting(vec2 pos, sampler2D state, vec2 resolution) {
-    // Scan area around position for exploding missiles
-    int searchRadius = int(MISSILE_EXPLOSION_RADIUS) + 2;
-    
-    for (int dy = -searchRadius; dy <= searchRadius; dy++) {
-        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
+    // Reduced search radius for performance (was RADIUS+2=12, now just 5)
+    // This limits explosion detection range but massively improves performance
+    for (int dy = -5; dy <= 5; dy++) {
+        for (int dx = -5; dx <= 5; dx++) {
             vec2 checkPos = pos + vec2(float(dx), float(dy));
             if (checkPos.x < 0.0 || checkPos.y < 0.0 || 
                 checkPos.x >= resolution.x || checkPos.y >= resolution.y) continue;
@@ -432,11 +431,10 @@ bool isInMissilePath(vec2 pos, float time, sampler2D state, vec2 resolution) {
         return false;  // Not a move frame
     }
     
-    int searchRadius = int(MISSILE_PATH_WIDTH) + 3;
-    
+    // Reduced search radius for performance (was PATH_WIDTH+3, now just 4)
     // Scan for moving missiles that might be about to hit this position
-    for (int dy = -searchRadius; dy <= searchRadius; dy++) {
-        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
+    for (int dy = -4; dy <= 4; dy++) {
+        for (int dx = -4; dx <= 4; dx++) {
             vec2 checkPos = pos + vec2(float(dx), float(dy));
             if (checkPos.x < 0.0 || checkPos.y < 0.0 || 
                 checkPos.x >= resolution.x || checkPos.y >= resolution.y) continue;
@@ -453,9 +451,9 @@ bool isInMissilePath(vec2 pos, float time, sampler2D state, vec2 resolution) {
                     vec2 offset = dirToOffset(dir);
                     vec2 nextCenter = center + offset;
                     
-                    // Check if pos is within destruction radius of missile's next center
+                    // Check if pos is within 2 cells of missile's next center
                     float distToNextCenter = distance(pos, nextCenter);
-                    if (distToNextCenter <= MISSILE_PATH_WIDTH) {
+                    if (distToNextCenter <= 2.0) {
                         return true;
                     }
                 }

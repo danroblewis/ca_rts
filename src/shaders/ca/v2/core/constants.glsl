@@ -116,7 +116,7 @@ const int MISSILE_EXPLODING = 3;   // At destination, exploding
 
 // Missile parameters
 const float MISSILE_BUILD_THRESHOLD = 8.0;   // Total build count to complete missile
-const float MISSILE_EXPLOSION_RADIUS = 10.0; // Max explosion radius (for compatibility)
+const float MISSILE_EXPLOSION_RADIUS = 5.0;  // Max explosion radius (reduced for performance)
 const int MISSILE_EXPLOSION_DURATION = 15;   // Frames to emit explosion particles (max 15 due to 4-bit storage)
 const int MISSILE_SURROUND_REQUIRED = 8;     // Units needed around factory to spawn missile
 const float MISSILE_PATH_WIDTH = 3.0;        // Width of destruction as missile moves

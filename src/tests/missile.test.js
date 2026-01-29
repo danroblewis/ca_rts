@@ -35,7 +35,7 @@ const MISSILE_EXPLODING = 3;   // At destination, exploding
 // Missile constants
 const MISSILE_SIZE = 3;                    // 3x3 structure like factory
 const MISSILE_BUILD_THRESHOLD = 8;         // Total build count to complete
-const MISSILE_EXPLOSION_RADIUS = 10;       // Max explosion radius
+const MISSILE_EXPLOSION_RADIUS = 5;        // Max explosion radius (reduced for performance)
 const MISSILE_EXPLOSION_DURATION = 15;     // Frames to emit explosion particles (max 15 due to 4-bit storage)
 const MISSILE_MOVE_DELAY = 6;              // Frames between each movement step
 const EXPLOSION_PARTICLE_LIFETIME = 30;    // Frames before particle dies
@@ -967,7 +967,7 @@ export async function runMissileExplosionTests(sim) {
             `Missile should disappear after explosion. Got ${missileCount} missile cells`);
     });
     
-    await runTest('Missile: Explosion has 10 cell radius', async () => {
+    await runTest('Missile: Explosion has 5 cell radius', async () => {
         const data = sim.createData();
         
         const destX = 16, destY = 16;
@@ -983,9 +983,9 @@ export async function runMissileExplosionTests(sim) {
         const cellsInRadius = sim.countCellsInRadius(data, destX, destY, MISSILE_EXPLOSION_RADIUS);
         
         // Pi * r^2 for a circle, but we're on a grid
-        // For r=10, should be roughly 314 cells
-        assert(cellsInRadius > 200 && cellsInRadius < 400, 
-            `Explosion radius should cover ~314 cells, got ${cellsInRadius}`);
+        // For r=5, should be roughly 78 cells
+        assert(cellsInRadius > 60 && cellsInRadius < 100, 
+            `Explosion radius should cover ~78 cells, got ${cellsInRadius}`);
     });
     
     await runTest('Missile: Explosion lasts 15 frames', async () => {

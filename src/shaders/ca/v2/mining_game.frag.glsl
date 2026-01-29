@@ -320,57 +320,42 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         return encodeExplosion(lifetime - 1);
     }
     
-    // --- EXPLOSION PARTICLE SPAWNING (from adjacent exploding missile) ---
+    // --- EXPLOSION PARTICLE LOGIC (combined single pass for performance) ---
+    // Only check 4 cardinal directions instead of 8 to reduce texture lookups
     if (myType == TYPE_EMPTY) {
-        // Check for adjacent exploding missiles that might spawn particles here
-        for (int d = 1; d <= 8; d++) {
+        // Combined check: missile spawning OR particle arrival
+        for (int d = 1; d <= 4; d++) {
             vec2 checkPos = myPos + dirToOffset(d);
             vec4 checkRaw = texture(u_state, (checkPos + 0.5) / u_resolution);
             int checkType = getType(checkRaw);
             
+            // Check for exploding missile spawning particles
             if (isMissile(checkType) && getMissileState(checkRaw) == MISSILE_EXPLODING) {
-                // Exploding missile nearby - chance to spawn a particle here
-                float spawnChance = hash(myPos + vec2(float(d) * 7.3, 0.0), u_time);
-                
-                if (spawnChance < 0.3) {  // 30% chance per adjacent exploding missile cell
+                float spawnChance = hash(myPos, u_time);
+                if (spawnChance < 0.15) {  // Reduced spawn chance
                     return encodeExplosion(EXPLOSION_PARTICLE_LIFETIME);
                 }
             }
-        }
-    }
-    
-    // --- EXPLOSION PARTICLE ARRIVAL (random walk into this cell) ---
-    if (myType == TYPE_EMPTY) {
-        // Check for adjacent explosion particles that might move here
-        for (int d = 1; d <= 8; d++) {
-            vec2 checkPos = myPos + dirToOffset(d);
-            vec4 checkRaw = texture(u_state, (checkPos + 0.5) / u_resolution);
             
-            if (isExplosion(getType(checkRaw))) {
+            // Check for explosion particle arrival
+            if (isExplosion(checkType)) {
                 int lifetime = getExplosionLifetime(checkRaw);
                 if (lifetime > 0) {
-                    // Check if this particle wants to move here
-                    int particleDir = 1 + int(hash(checkPos, u_time) * 8.0);
-                    vec2 particleOffset = dirToOffset(particleDir);
-                    vec2 particleTarget = checkPos + particleOffset;
-                    
+                    int particleDir = 1 + int(hash(checkPos, u_time) * 4.0);  // Only 4 directions
+                    vec2 particleTarget = checkPos + dirToOffset(particleDir);
                     if (distance(particleTarget, myPos) < 0.5) {
-                        // This particle is moving to me
                         return encodeExplosion(lifetime - 1);
                     }
                 }
             }
         }
     }
-    
-    // --- EXPLOSION DESTRUCTION (adjacent explosion particle destroys me) ---
-    if (myType != TYPE_EMPTY && !isExplosion(myType) && !isMissile(myType)) {
-        for (int d = 1; d <= 8; d++) {
+    // Explosion destruction - only check 4 cardinal directions
+    else if (!isExplosion(myType) && !isMissile(myType) && !isFactory(myType)) {
+        for (int d = 1; d <= 4; d++) {
             vec2 checkPos = myPos + dirToOffset(d);
             vec4 checkRaw = texture(u_state, (checkPos + 0.5) / u_resolution);
-            
             if (isExplosion(getType(checkRaw))) {
-                // Adjacent explosion particle - I get destroyed!
                 return encodeEmpty();
             }
         }
