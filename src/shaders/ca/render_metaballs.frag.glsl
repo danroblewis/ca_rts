@@ -1092,34 +1092,39 @@ void main() {
     
     float missileThreshold = 0.5;
     
-    // Player 1 Missile - Purple/magenta with ominous pulsing
+    // Player 1 Missile - Different colors per state
     if (p1MissileDensity > missileThreshold) {
         float blobStrength = smoothstep(missileThreshold, missileThreshold + 2.0, p1MissileDensity);
-        
-        // Base missile color - dark metallic purple
-        vec3 missileBase = vec3(0.3, 0.1, 0.4);
-        vec3 missileGlow = vec3(0.8, 0.3, 1.0);
         
         // Throbbing effect - slower, more menacing than factories
         float throb = sin(u_time * 2.0) * 0.3 + 0.7;
         float warningPulse = sin(u_time * 8.0) * 0.5 + 0.5;
         
-        vec3 missileColor = mix(missileBase, missileGlow, 0.3 + throb * 0.3);
+        vec3 missileColor;
         
-        // Red warning lights when armed or moving
+        // Different colors for different states
         if (d.p1MissileArmed > 0.0 || d.p1MissileMoving > 0.0) {
+            // ARMED/MOVING: Cyan/electric blue - ready to launch!
+            vec3 armedBase = vec3(0.0, 0.4, 0.5);
+            vec3 armedGlow = vec3(0.2, 1.0, 1.0);
+            missileColor = mix(armedBase, armedGlow, 0.3 + throb * 0.3);
+            
+            // Add pulsing red warning lights
             vec3 warningRed = vec3(1.0, 0.2, 0.1);
-            missileColor += warningRed * warningPulse * 0.4;
+            missileColor += warningRed * warningPulse * 0.3;
+        } else {
+            // BUILDING: Purple/magenta - under construction
+            vec3 buildingBase = vec3(0.3, 0.1, 0.4);
+            vec3 buildingGlow = vec3(0.8, 0.3, 1.0);
+            missileColor = mix(buildingBase, buildingGlow, 0.3 + throb * 0.3);
         }
         
-        // Selection effect - bright white pulsing outline for selected armed missiles
+        // Selection effect - VERY OBVIOUS bright pulsing for selected missiles
         if (d.p1MissileSelected > 0.0 && u_currentPlayer == PLAYER_1) {
-            float selectPulse = sin(u_time * 6.0) * 0.3 + 0.7;
-            vec3 selectGlow = vec3(1.0, 1.0, 1.0);
-            missileColor += selectGlow * selectPulse * 0.5;
-            // White outline/halo effect
-            float haloStrength = smoothstep(missileThreshold * 0.3, missileThreshold, p1MissileDensity);
-            missileColor = mix(missileColor, selectGlow, haloStrength * 0.3);
+            float selectPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+            // Make the whole missile flash bright white/yellow when selected
+            vec3 selectGlow = vec3(1.0, 1.0, 0.5);  // Bright yellow-white
+            missileColor = mix(missileColor, selectGlow, 0.5 + selectPulse * 0.3);
         }
         
         // Explosion effect - bright flash expanding outward
@@ -1137,34 +1142,39 @@ void main() {
         color = mix(color, missileColor, blobStrength);
     }
     
-    // Player 2 Missile - Green/teal with ominous pulsing
+    // Player 2 Missile - Different colors per state
     if (p2MissileDensity > missileThreshold) {
         float blobStrength = smoothstep(missileThreshold, missileThreshold + 2.0, p2MissileDensity);
-        
-        // Base missile color - dark metallic green
-        vec3 missileBase = vec3(0.1, 0.3, 0.25);
-        vec3 missileGlow = vec3(0.3, 1.0, 0.6);
         
         // Throbbing effect
         float throb = sin(u_time * 2.0) * 0.3 + 0.7;
         float warningPulse = sin(u_time * 8.0) * 0.5 + 0.5;
         
-        vec3 missileColor = mix(missileBase, missileGlow, 0.3 + throb * 0.3);
+        vec3 missileColor;
         
-        // Red warning lights when armed or moving
+        // Different colors for different states
         if (d.p2MissileArmed > 0.0 || d.p2MissileMoving > 0.0) {
+            // ARMED/MOVING: Bright yellow/gold - ready to launch!
+            vec3 armedBase = vec3(0.5, 0.4, 0.0);
+            vec3 armedGlow = vec3(1.0, 1.0, 0.2);
+            missileColor = mix(armedBase, armedGlow, 0.3 + throb * 0.3);
+            
+            // Add pulsing red warning lights
             vec3 warningRed = vec3(1.0, 0.2, 0.1);
-            missileColor += warningRed * warningPulse * 0.4;
+            missileColor += warningRed * warningPulse * 0.3;
+        } else {
+            // BUILDING: Green/teal - under construction
+            vec3 buildingBase = vec3(0.1, 0.3, 0.25);
+            vec3 buildingGlow = vec3(0.3, 1.0, 0.6);
+            missileColor = mix(buildingBase, buildingGlow, 0.3 + throb * 0.3);
         }
         
-        // Selection effect - bright white pulsing outline for selected armed missiles
+        // Selection effect - VERY OBVIOUS bright pulsing for selected missiles
         if (d.p2MissileSelected > 0.0 && u_currentPlayer == PLAYER_2) {
-            float selectPulse = sin(u_time * 6.0) * 0.3 + 0.7;
-            vec3 selectGlow = vec3(1.0, 1.0, 1.0);
-            missileColor += selectGlow * selectPulse * 0.5;
-            // White outline/halo effect
-            float haloStrength = smoothstep(missileThreshold * 0.3, missileThreshold, p2MissileDensity);
-            missileColor = mix(missileColor, selectGlow, haloStrength * 0.3);
+            float selectPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+            // Make the whole missile flash bright white/yellow when selected
+            vec3 selectGlow = vec3(1.0, 1.0, 0.5);  // Bright yellow-white
+            missileColor = mix(missileColor, selectGlow, 0.5 + selectPulse * 0.3);
         }
         
         // Explosion effect

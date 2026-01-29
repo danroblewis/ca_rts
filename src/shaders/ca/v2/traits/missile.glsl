@@ -221,8 +221,8 @@ vec2 findExplodingMissileAffecting(vec2 pos, sampler2D state, vec2 resolution) {
             int cellType = getType(cellRaw);
             
             if (isMissile(cellType)) {
-                int state = getMissileState(cellRaw);
-                if (state == MISSILE_EXPLODING) {
+                int missileState = getMissileState(cellRaw);
+                if (missileState == MISSILE_EXPLODING) {
                     vec2 missileCenter = getMissileCenter(cellRaw);
                     int timer = getMissileExplosionTimer(cellRaw);
                     
@@ -264,6 +264,12 @@ vec4 updateMissileCell(vec4 myRaw, vec2 myPos, float time, sampler2D state, vec2
     
     // MOVING: Check if at destination, then explode. Otherwise move.
     if (missileState == MISSILE_MOVING) {
+        // Check if destination is valid
+        if (destination.x < 0.0 || destination.y < 0.0) {
+            // No valid destination - stay as MOVING but don't move
+            return myRaw;
+        }
+        
         if (distance(center, destination) < 1.5) {
             // At destination - start exploding
             return encodeMissileExploding(0, center, player);

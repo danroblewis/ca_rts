@@ -268,16 +268,18 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         }
     }
     
-    // --- MISSILE IN PATH (moving missiles destroy everything in front of them) ---
-    if (!isMissile(myType) && isInMissilePath(myPos, u_state, u_resolution)) {
-        // I'm in the path of a moving missile - get destroyed
-        return encodeEmpty();
-    }
-    
     // --- MISSILE ARRIVAL (moving missile cells arriving at this position) ---
+    // Must check BEFORE isInMissilePath, so arriving missile cells aren't destroyed
     MissileMovementResult missileArrival = checkMissileArrival(myPos, u_state, u_resolution);
     if (missileArrival.happened) {
         return missileArrival.arrivingCell;
+    }
+    
+    // --- MISSILE IN PATH (moving missiles destroy everything in front of them) ---
+    // Only destroys cells that AREN'T receiving the missile (checked above)
+    if (!isMissile(myType) && isInMissilePath(myPos, u_state, u_resolution)) {
+        // I'm in the path of a moving missile - get destroyed
+        return encodeEmpty();
     }
     
     // ========================================================================
