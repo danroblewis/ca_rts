@@ -52,12 +52,14 @@ function resolvePath(basePath, includePath) {
 const CACHE_BUSTER = Date.now();
 
 async function fetchShader(path) {
-    if (shaderCache.has(path)) {
-        return shaderCache.get(path);
-    }
+    // DISABLED: In-memory cache - always fetch fresh for debugging
+    // if (shaderCache.has(path)) {
+    //     return shaderCache.get(path);
+    // }
     
     // Add cache-busting parameter to bypass browser cache
-    const response = await fetch(`${path}?v=${CACHE_BUSTER}`);
+    const cacheBuster = Date.now() + Math.random(); // Extra randomness
+    const response = await fetch(`${path}?v=${cacheBuster}`);
     if (!response.ok) {
         throw new Error(`Failed to load shader: ${path} (${response.status})`);
     }
