@@ -124,25 +124,44 @@ console.log('GPU compute framework initialized');
 // Load Shaders
 // ============================================================================
 
-console.time('⏱️ Total shader loading');
+console.time('⏱️ Total shader initialization');
 
+// Phase 1: Load shader source files
+console.time('  📥 Load shader sources');
 const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise.all([
     loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
     loadShader('./src/shaders/ca/render_metaballs.frag.glsl'),
     loadShader('./src/shaders/ca/v2/render.frag.glsl')
 ]);
+console.timeEnd('  📥 Load shader sources');
 
+// Phase 2: Create shader programs (triggers sync compilation + async linking)
+console.time('  🔨 Create simShader');
 const simShader = new ComputeShader(simShaderSource);
+console.timeEnd('  🔨 Create simShader');
+
+console.time('  🔨 Create metaballRenderShader');
 const metaballRenderShader = new ComputeShader(metaballShaderSource);
+console.timeEnd('  🔨 Create metaballRenderShader');
+
+console.time('  🔨 Create debugRenderShader');
 const debugRenderShader = new ComputeShader(debugShaderSource);
+console.timeEnd('  🔨 Create debugRenderShader');
 
-await Promise.all([
-    simShader.waitReady(),
-    metaballRenderShader.waitReady(),
-    debugRenderShader.waitReady()
-]);
+// Phase 3: Wait for GPU compilation to finish
+console.time('  ⏳ GPU compilation (simShader)');
+await simShader.waitReady();
+console.timeEnd('  ⏳ GPU compilation (simShader)');
 
-console.timeEnd('⏱️ Total shader loading');
+console.time('  ⏳ GPU compilation (metaballRenderShader)');
+await metaballRenderShader.waitReady();
+console.timeEnd('  ⏳ GPU compilation (metaballRenderShader)');
+
+console.time('  ⏳ GPU compilation (debugRenderShader)');
+await debugRenderShader.waitReady();
+console.timeEnd('  ⏳ GPU compilation (debugRenderShader)');
+
+console.timeEnd('⏱️ Total shader initialization');
 
 // ============================================================================
 // Create Game instance

@@ -176,9 +176,18 @@ export class GPU {
      */
     compileShader(type, source) {
         const gl = this.gl;
+        const typeName = type === gl.VERTEX_SHADER ? 'vertex' : 'fragment';
+        const lines = source.split('\n').length;
+        
+        const start = performance.now();
         const shader = gl.createShader(type);
         gl.shaderSource(shader, source);
         gl.compileShader(shader);
+        const compileTime = performance.now() - start;
+        
+        if (compileTime > 10) {
+            console.log(`    🔧 ${typeName} shader (${lines} lines): ${compileTime.toFixed(1)}ms`);
+        }
 
         if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
             const info = gl.getShaderInfoLog(shader);
@@ -199,10 +208,17 @@ export class GPU {
      */
     linkProgram(vertexShader, fragmentShader) {
         const gl = this.gl;
+        const start = performance.now();
+        
         const program = gl.createProgram();
         gl.attachShader(program, vertexShader);
         gl.attachShader(program, fragmentShader);
         gl.linkProgram(program);
+
+        const linkTime = performance.now() - start;
+        if (linkTime > 10) {
+            console.log(`    🔗 Program linking: ${linkTime.toFixed(1)}ms`);
+        }
 
         // With parallel compile, don't check status yet - it will block
         // Error checking is deferred to ComputeShader.waitReady()
