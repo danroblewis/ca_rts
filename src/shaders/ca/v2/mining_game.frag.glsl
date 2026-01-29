@@ -31,6 +31,7 @@ precision highp float;
 #include "./traits/attack.glsl"
 #include "./traits/combat.glsl"
 #include "./traits/resource_movement.glsl"
+#include "./traits/missile.glsl"
 
 uniform sampler2D u_state;
 uniform vec2 u_resolution;
