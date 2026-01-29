@@ -282,7 +282,10 @@ vec4 updateMissileCell(vec4 myRaw, vec2 myPos, float time, sampler2D state, vec2
         float currentProgress = getMissileBuildProgress(myRaw);
         int builders = countMissileBuilders(myPos, player, state, resolution);
         
-        float newProgress = min(currentProgress + float(builders), MAX_BUILD_PER_CELL);
+        // Allow cells with adjacent units to contribute more (up to 15.0 per cell, limited by encoding)
+        // This compensates for cells that have no adjacent units
+        float maxProgressPerCell = 15.0;  // Max storable in 4 bits
+        float newProgress = min(currentProgress + float(builders), maxProgressPerCell);
         
         // Check if entire missile is now built
         float totalProgress = sumMissileBuildProgress(center, state, resolution);

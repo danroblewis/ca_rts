@@ -57,19 +57,22 @@ function getCellType(cell) {
 // Resource Movement Simulation Helper
 // ============================================================================
 
-let miningShaderSource = null;
+// Shared shader instance (compiled once, reused across all tests)
+let sharedShader = null;
 
-async function loadMiningShader() {
-    if (!miningShaderSource) {
-        miningShaderSource = await loadShader('./src/shaders/ca/v2/mining_game.frag.glsl');
+/**
+ * Initialize the shared shader. Call once before running tests.
+ */
+async function initSharedShader() {
+    if (!sharedShader) {
+        const source = await loadShader('./src/shaders/ca/v2/mining_game.frag.glsl');
+        sharedShader = new ComputeShader(source);
     }
-    return miningShaderSource;
+    return sharedShader;
 }
 
 function createResourceSimulation(width, height) {
     const buffer = new PingPongBuffer(width, height, { format: 'float' });
-    
-    let shader = null;
     let time = 0;
     
     return {
@@ -77,9 +80,9 @@ function createResourceSimulation(width, height) {
         width,
         height,
         
+        // No-op for backwards compatibility - shader is already initialized
         async init() {
-            const source = await loadMiningShader();
-            shader = new ComputeShader(source);
+            // Shader is shared, no initialization needed per-test
         },
         
         setCell(data, x, y, cellData) {
@@ -97,11 +100,11 @@ function createResourceSimulation(width, height) {
         
         step(timeIncrement = 1) {
             buffer.getWriteFramebuffer().bind();
-            shader.use();
-            shader.setTexture('u_state', buffer.getReadTexture(), 0);
-            shader.setVec2('u_resolution', width, height);
-            shader.setFloat('u_time', time);
-            shader.dispatch();
+            sharedShader.use();
+            sharedShader.setTexture('u_state', buffer.getReadTexture(), 0);
+            sharedShader.setVec2('u_resolution', width, height);
+            sharedShader.setFloat('u_time', time);
+            sharedShader.dispatch();
             buffer.getWriteFramebuffer().unbind();
             buffer.swap();
             time += timeIncrement;
@@ -130,8 +133,8 @@ function createResourceSimulation(width, height) {
         },
         
         destroy() {
+            // Only destroy the buffer, not the shared shader
             buffer.destroy();
-            if (shader) shader.destroy();
         }
     };
 }
@@ -316,6 +319,9 @@ function createResourceBlob(sim, data, blobSize) {
 // ============================================================================
 
 export async function runResourceMovementTests() {
+    // Initialize shared shader once for all resource movement tests
+    await initSharedShader();
+    
     logSection('Resource Movement - Bias Detection');
     
     await runTest('Resource movement: blob stays circular (no directional stretch)', async () => {

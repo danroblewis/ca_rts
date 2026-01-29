@@ -278,26 +278,32 @@ function sumBlueprintBuildCount(sim, data, centerX, centerY) {
 // Mining Simulation Helper
 // ============================================================================
 
-let miningShaderSource = null;
-
 // Toggle this to switch between v1 and v2 shaders for testing
 const SHADER_VERSION = 'v2'; // 'v1' or 'v2'
 
-async function loadMiningShader() {
-    if (!miningShaderSource) {
+// Shared shader instance (compiled once, reused across all tests)
+let sharedShader = null;
+
+/**
+ * Initialize the shared shader. Call once before running tests.
+ */
+async function initSharedShader() {
+    if (!sharedShader) {
         const shaderPath = SHADER_VERSION === 'v2' 
             ? './src/shaders/ca/v2/mining_game.frag.glsl'
             : './src/shaders/ca/v1/mining_game.frag.glsl';
-        miningShaderSource = await loadShader(shaderPath);
+        const source = await loadShader(shaderPath);
+        sharedShader = new ComputeShader(source);
     }
-    return miningShaderSource;
+    return sharedShader;
 }
 
+/**
+ * Create a mining simulation that uses the shared shader.
+ * MUST call initSharedShader() before using this.
+ */
 function createMiningSimulation(width, height) {
     const buffer = new PingPongBuffer(width, height, { format: 'float' });
-    
-    // Shader will be set after async load
-    let shader = null;
     let time = 0;
     
     return {
@@ -305,9 +311,9 @@ function createMiningSimulation(width, height) {
         width,
         height,
         
+        // No-op for backwards compatibility - shader is already initialized
         async init() {
-            const source = await loadMiningShader();
-            shader = new ComputeShader(source);
+            // Shader is shared, no initialization needed per-test
         },
         
         setCell(data, x, y, cellData) {
@@ -325,11 +331,11 @@ function createMiningSimulation(width, height) {
         
         step(timeIncrement = 1) {
             buffer.getWriteFramebuffer().bind();
-            shader.use();
-            shader.setTexture('u_state', buffer.getReadTexture(), 0);
-            shader.setVec2('u_resolution', width, height);
-            shader.setFloat('u_time', time);
-            shader.dispatch();
+            sharedShader.use();
+            sharedShader.setTexture('u_state', buffer.getReadTexture(), 0);
+            sharedShader.setVec2('u_resolution', width, height);
+            sharedShader.setFloat('u_time', time);
+            sharedShader.dispatch();
             buffer.getWriteFramebuffer().unbind();
             buffer.swap();
             time += timeIncrement;
@@ -383,8 +389,8 @@ function createMiningSimulation(width, height) {
         },
         
         destroy() {
+            // Only destroy the buffer, not the shared shader
             buffer.destroy();
-            if (shader) shader.destroy();
         }
     };
 }
@@ -394,6 +400,9 @@ function createMiningSimulation(width, height) {
 // ============================================================================
 
 export async function runMiningTests() {
+    // Initialize shared shader once for all mining tests
+    await initSharedShader();
+    
     logSection('Mining Game - Cell Encoding');
     
     await runTest('Cell encoding: coordinate packing works for various positions', async () => {
@@ -1793,6 +1802,9 @@ export async function runMiningTests() {
 // ============================================================================
 
 export async function runUnitMovementNearFactoryTests() {
+    // Ensure shared shader is initialized (may already be done by runMiningTests)
+    await initSharedShader();
+    
     logSection('Mining Game - Unit Movement Near Factory');
     
     // Test: Units near factory should not get stuck - they should move away to find resources
