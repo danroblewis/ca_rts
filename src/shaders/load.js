@@ -53,7 +53,9 @@ async function fetchShader(path) {
         return shaderCache.get(path);
     }
     
-    const response = await fetch(path);
+    // Add cache-busting query parameter to avoid browser caching
+    const cacheBuster = `?_=${Date.now()}`;
+    const response = await fetch(path + cacheBuster);
     if (!response.ok) {
         throw new Error(`Failed to load shader: ${path} (${response.status})`);
     }
