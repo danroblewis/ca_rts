@@ -33,10 +33,10 @@ bool isFactory(int cellType) {
     return cellType == TYPE_FACTORY || cellType == TYPE_FACTORY_P2;
 }
 
-// Get player ID from a unit or factory type (returns 0 for non-owned types)
+// Get player ID from a unit, factory, or missile type (returns 0 for non-owned types)
 int getPlayer(int cellType) {
-    if (cellType == TYPE_UNIT || cellType == TYPE_FACTORY) return PLAYER_1;
-    if (cellType == TYPE_UNIT_P2 || cellType == TYPE_FACTORY_P2) return PLAYER_2;
+    if (cellType == TYPE_UNIT || cellType == TYPE_FACTORY || cellType == TYPE_MISSILE) return PLAYER_1;
+    if (cellType == TYPE_UNIT_P2 || cellType == TYPE_FACTORY_P2 || cellType == TYPE_MISSILE_P2) return PLAYER_2;
     return 0;
 }
 

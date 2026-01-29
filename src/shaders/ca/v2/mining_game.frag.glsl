@@ -250,9 +250,29 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         }
     }
     
+    // --- MISSILE EXPLOSION (destroys everything in radius) ---
+    vec2 explodingMissile = findExplodingMissileAffecting(myPos, u_state, u_resolution);
+    if (explodingMissile.x >= 0.0) {
+        // I'm in the explosion radius - get destroyed (unless I'm the missile itself)
+        if (!isMissile(myType) || distance(getMissileCenter(myRaw), explodingMissile) > 0.5) {
+            return encodeEmpty();
+        }
+    }
+    
+    // --- MISSILE IN PATH (moving missiles destroy everything in front of them) ---
+    if (!isMissile(myType) && isInMissilePath(myPos, u_state, u_resolution)) {
+        // I'm in the path of a moving missile - get destroyed
+        return encodeEmpty();
+    }
+    
     // ========================================================================
     // No trait affected me - handle staying in place
     // ========================================================================
+    
+    // --- MISSILE UPDATE ---
+    if (isMissile(myType)) {
+        return updateMissileCell(myRaw, myPos, u_time, u_state, u_resolution);
+    }
     
     if (isUnit(myType)) {
         // Unit staying in place - might be blocked, update counter
