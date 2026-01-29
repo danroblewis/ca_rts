@@ -335,8 +335,9 @@ export async function runMissileSpawnConditionTests(sim) {
         const factoryX = 16, factoryY = 16;
         sim.createFactory(data, factoryX, factoryY, 100); // Built factory with resources
         
-        // Surround factory with holding units (ring around the 3x3 at distance 2)
-        sim.surroundWithUnits(data, factoryX, factoryY, factoryX, factoryY, true);
+        // Surround factory with units (ring around the 3x3 at distance 2)
+        // Units don't need to be holding to spawn - holding units will find and build it
+        sim.surroundWithUnits(data, factoryX, factoryY, factoryX, factoryY, false);
         
         // Add an "outsider" unit further away (required for missile spawn)
         // Must belong to this factory, and be within 10 cells of factory center
