@@ -101,6 +101,17 @@ bool isMissileCell(vec4 cell) {
     return t == CELL_MISSILE || t == CELL_MISSILE_P2;
 }
 
+// Missile states (must be before getMissileState)
+const float MISSILE_BUILDING = 0.0;    // Being built by units
+const float MISSILE_ARMED = 1.0;       // Fully built, waiting for destination
+const float MISSILE_MOVING = 2.0;      // Has destination, moving toward it
+const float MISSILE_EXPLODING = 3.0;   // At destination, exploding
+
+// Get missile state (BUILDING, ARMED, MOVING, EXPLODING)
+float getMissileState(vec4 cell) {
+    return mod(floor(cell.g / 16.0), 4.0);  // bits 4-5
+}
+
 bool isWall(vec4 cell) {
     return getCellType(cell) == CELL_WALL;
 }
@@ -332,27 +343,16 @@ vec4 createWall() {
 }
 
 // ============================================================================
-// MISSILE
+// MISSILE (additional helper functions)
 // R = CELL_MISSILE or CELL_MISSILE_P2
 // G = buildProgress (bits 0-3) + state*16 (bits 4-5) + explosionTimer*64 (bits 6+)
 // B = packed destination coords (or -1 if no destination)
 // A = packed center coords
 // ============================================================================
 
-// Missile states
-const float MISSILE_BUILDING = 0.0;    // Being built by units
-const float MISSILE_ARMED = 1.0;       // Fully built, waiting for destination
-const float MISSILE_MOVING = 2.0;      // Has destination, moving toward it
-const float MISSILE_EXPLODING = 3.0;   // At destination, exploding
-
 // Get missile build progress (0-8)
 float getMissileBuildProgress(vec4 cell) {
     return mod(floor(cell.g), 16.0);  // bits 0-3
-}
-
-// Get missile state (BUILDING, ARMED, MOVING, EXPLODING)
-float getMissileState(vec4 cell) {
-    return mod(floor(cell.g / 16.0), 4.0);  // bits 4-5
 }
 
 // Get missile explosion timer (0-10)
