@@ -178,6 +178,13 @@ export class GPU {
 
         if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
             const info = gl.getShaderInfoLog(shader);
+            // Debug: dump the source around the error line
+            const lines = source.split('\n');
+            console.error('=== SHADER SOURCE (lines 570-600) ===');
+            for (let i = 569; i < 600 && i < lines.length; i++) {
+                console.error(`${i+1}: ${lines[i]}`);
+            }
+            console.error('=== END SHADER SOURCE ===');
             gl.deleteShader(shader);
             throw new Error(`Shader compilation error:\n${info}`);
         }
