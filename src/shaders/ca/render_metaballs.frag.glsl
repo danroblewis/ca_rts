@@ -1075,6 +1075,82 @@ void main() {
         color = mix(color, unbuiltColor, blobStrength);
     }
     
+    // ========================================================================
+    // MISSILES - Dramatic weapon rendering
+    // ========================================================================
+    
+    float missileThreshold = 0.5;
+    
+    // Player 1 Missile - Purple/magenta with ominous pulsing
+    if (p1MissileDensity > missileThreshold) {
+        float blobStrength = smoothstep(missileThreshold, missileThreshold + 2.0, p1MissileDensity);
+        
+        // Base missile color - dark metallic purple
+        vec3 missileBase = vec3(0.3, 0.1, 0.4);
+        vec3 missileGlow = vec3(0.8, 0.3, 1.0);
+        
+        // Throbbing effect - slower, more menacing than factories
+        float throb = sin(u_time * 2.0) * 0.3 + 0.7;
+        float warningPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+        
+        vec3 missileColor = mix(missileBase, missileGlow, 0.3 + throb * 0.3);
+        
+        // Red warning lights when armed or moving
+        if (d.p1MissileArmed > 0.0 || d.p1MissileMoving > 0.0) {
+            vec3 warningRed = vec3(1.0, 0.2, 0.1);
+            missileColor += warningRed * warningPulse * 0.4;
+        }
+        
+        // Explosion effect - bright flash expanding outward
+        if (p1MissileExplosion > 0.0) {
+            float explosionIntensity = smoothstep(0.0, 2.0, p1MissileExplosion);
+            vec3 explosionColor = vec3(1.0, 0.8, 0.3);  // Bright orange-yellow
+            vec3 fireColor = vec3(1.0, 0.3, 0.1);       // Red fire
+            
+            float explosionPhase = fract(u_time * 3.0);
+            missileColor = mix(explosionColor, fireColor, explosionPhase);
+            missileColor *= 1.5 + explosionIntensity;  // HDR overbright
+            blobStrength = 1.0;  // Full opacity during explosion
+        }
+        
+        color = mix(color, missileColor, blobStrength);
+    }
+    
+    // Player 2 Missile - Green/teal with ominous pulsing
+    if (p2MissileDensity > missileThreshold) {
+        float blobStrength = smoothstep(missileThreshold, missileThreshold + 2.0, p2MissileDensity);
+        
+        // Base missile color - dark metallic green
+        vec3 missileBase = vec3(0.1, 0.3, 0.25);
+        vec3 missileGlow = vec3(0.3, 1.0, 0.6);
+        
+        // Throbbing effect
+        float throb = sin(u_time * 2.0) * 0.3 + 0.7;
+        float warningPulse = sin(u_time * 8.0) * 0.5 + 0.5;
+        
+        vec3 missileColor = mix(missileBase, missileGlow, 0.3 + throb * 0.3);
+        
+        // Red warning lights when armed or moving
+        if (d.p2MissileArmed > 0.0 || d.p2MissileMoving > 0.0) {
+            vec3 warningRed = vec3(1.0, 0.2, 0.1);
+            missileColor += warningRed * warningPulse * 0.4;
+        }
+        
+        // Explosion effect
+        if (p2MissileExplosion > 0.0) {
+            float explosionIntensity = smoothstep(0.0, 2.0, p2MissileExplosion);
+            vec3 explosionColor = vec3(1.0, 0.8, 0.3);
+            vec3 fireColor = vec3(1.0, 0.3, 0.1);
+            
+            float explosionPhase = fract(u_time * 3.0);
+            missileColor = mix(explosionColor, fireColor, explosionPhase);
+            missileColor *= 1.5 + explosionIntensity;
+            blobStrength = 1.0;
+        }
+        
+        color = mix(color, missileColor, blobStrength);
+    }
+    
     // Demolish cells - red/orange warning color with flashing (using unified density)
     float demolishDensity = d.demolishDens;
     if (demolishDensity > factoryThreshold) {
