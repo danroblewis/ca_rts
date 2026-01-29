@@ -214,13 +214,13 @@ class MissileSimulation {
     }
     
     // Create a 3x3 missile centered at (x, y)
-    createMissileStructure(data, centerX, centerY, buildProgress = 0, player = 1, state = MISSILE_BUILDING, destX = -1, destY = -1) {
+    createMissileStructure(data, centerX, centerY, buildProgress = 0, player = 1, state = MISSILE_BUILDING, destX = -1, destY = -1, explosionTimer = 0) {
         const perCell = buildProgress / 8.0;
         for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
                 if (dx === 0 && dy === 0) continue;
                 this.setCell(data, centerX + dx, centerY + dy, 
-                    createMissile(perCell, centerX, centerY, player, state, destX, destY));
+                    createMissile(perCell, centerX, centerY, player, state, destX, destY, explosionTimer));
             }
         }
     }
