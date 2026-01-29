@@ -31,8 +31,14 @@ int getTraits(int cellType) {
 // Check if a cell type blocks movement (cannot be entered)
 bool blocksMovement(int cellType) {
     // Can move into: empty, resources (to mine), units (collision handled separately)
-    // Cannot move into: walls, factories (both players, built or unbuilt), demolish markers
-    return cellType == TYPE_WALL || isFactory(cellType) || cellType == TYPE_DEMOLISH;
+    // Cannot move into: walls, factories, missiles, demolish markers
+    return cellType == TYPE_WALL || isFactory(cellType) || isMissile(cellType) || cellType == TYPE_DEMOLISH;
+}
+
+// Check if a cell type can be destroyed by a missile
+bool isDestructible(int cellType) {
+    // Missiles destroy everything except empty cells
+    return cellType != TYPE_EMPTY;
 }
 
 bool hasTrait(int cellType, int trait) {
