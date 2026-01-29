@@ -151,6 +151,18 @@ struct AllDensities {
     float p2FactoryUnbuilt;
     float p2BuildProgress;
     float p2UnbuiltWeight;
+    
+    // Player 1 missiles
+    float p1MissileBuilding;
+    float p1MissileArmed;
+    float p1MissileMoving;
+    float p1MissileExploding;
+    
+    // Player 2 missiles
+    float p2MissileBuilding;
+    float p2MissileArmed;
+    float p2MissileMoving;
+    float p2MissileExploding;
 };
 
 // Calculate all static densities in a single pass (one texture sample per cell)
@@ -167,6 +179,14 @@ AllDensities calcAllStaticDensities(vec2 uv) {
     d.p2FactoryUnbuilt = 0.0;
     d.p2BuildProgress = 0.0;
     d.p2UnbuiltWeight = 0.0;
+    d.p1MissileBuilding = 0.0;
+    d.p1MissileArmed = 0.0;
+    d.p1MissileMoving = 0.0;
+    d.p1MissileExploding = 0.0;
+    d.p2MissileBuilding = 0.0;
+    d.p2MissileArmed = 0.0;
+    d.p2MissileMoving = 0.0;
+    d.p2MissileExploding = 0.0;
     
     vec2 texelSize = 1.0 / u_resolution;
     vec2 gridPos = uv * u_resolution;
