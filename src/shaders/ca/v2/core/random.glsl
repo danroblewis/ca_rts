@@ -1,76 +1,94 @@
 /**
- * Random/Hash Functions - INTEGER-ONLY for cross-platform determinism
+ * Random/Hash Functions - xorshift128++ based
  * 
- * These functions use only integer operations with EXPLICIT MODULAR ARITHMETIC
- * to ensure identical results across different GPU architectures (PC, Mac M4, etc.)
+ * Uses xorshift128++ algorithm adapted for stateless shader use.
+ * Position and time seed the state, then xorshift mixing produces output.
  * 
- * Key insight: Signed integer overflow is UNDEFINED in GLSL. We must keep
- * all values within safe ranges to avoid hardware-specific behavior.
+ * xorshift128++ is a high-quality PRNG with good statistical properties
+ * and fast execution on GPUs.
  */
 
 #ifndef RANDOM_GLSL
 #define RANDOM_GLSL
 
-// Large prime modulus - keeps all values in safe range
-const int HASH_MOD = 100003;  // Prime number, fits well in 32-bit
+// xorshift128++ state - we use uvec4 for 128 bits of state
+// WebGL2 supports unsigned integers
 
-// Safe modulo using native modulo operator for cross-platform determinism
-int safeMod(int x, int m) {
-    int result = x % m;
-    if (result < 0) result += m;
-    return result;
+// Initialize state from position and time
+uvec4 xorshiftSeed(vec2 pos, float time) {
+    // Convert inputs to uints
+    uint px = uint(int(floor(pos.x + 0.5)));
+    uint py = uint(int(floor(pos.y + 0.5)));
+    uint t = uint(int(floor(time)));
+    
+    // Create 4 different seed values using prime multipliers
+    // This spreads the entropy across all 128 bits
+    uvec4 s;
+    s.x = px * 73856093u ^ py * 19349663u ^ t * 83492791u;
+    s.y = px * 41729371u ^ py * 73856093u ^ t * 19349663u;
+    s.z = px * 83492791u ^ py * 41729371u ^ t * 73856093u;
+    s.w = px * 19349663u ^ py * 83492791u ^ t * 41729371u;
+    
+    // Ensure no zero state (xorshift fails with all zeros)
+    if (s.x == 0u && s.y == 0u && s.z == 0u && s.w == 0u) {
+        s.x = 1u;
+    }
+    
+    return s;
 }
 
-// Integer hash using safe modular arithmetic
-// All intermediate values stay within safe bounds
-int ihash(int x) {
-    // First, bring x into safe range
-    x = safeMod(x, HASH_MOD);
+// Single xorshift128++ iteration
+// Returns the random value and updates state in-place
+uint xorshift128pp(inout uvec4 s) {
+    uint t = s.x;
+    uint const_s = s.w;
     
-    // Mix using small multipliers that won't overflow
-    // 31 * 100003 = 3.1M, safe
-    // 37 * 100003 = 3.7M, safe
-    x = safeMod(x * 31 + 17, HASH_MOD);
-    x = safeMod(x * 37 + 23, HASH_MOD);
-    x = safeMod(x * 41 + 29, HASH_MOD);
+    // Shift state
+    s.x = s.y;
+    s.y = s.z;
+    s.z = s.w;
     
-    return x;
+    // xorshift
+    t ^= t << 11u;
+    t ^= t >> 8u;
+    s.w = t ^ const_s ^ (const_s >> 19u);
+    
+    // ++ scrambler: add s[0] for better low bits
+    return s.w + s.y;
 }
 
-// Hash position and time to get a deterministic integer
-// Uses safe modular arithmetic at each step to prevent overflow
-int hashPosTime(vec2 pos, float time) {
-    // Convert floats to integers using floor() for cross-platform determinism
-    // Position should always be integer-valued (cell coordinates)
-    int px = int(floor(pos.x + 0.5));  // Round to nearest integer
-    int py = int(floor(pos.y + 0.5));
-    int t = int(floor(time));
+// Get a random uint from position and time
+uint hashUint(vec2 pos, float time) {
+    uvec4 state = xorshiftSeed(pos, time);
     
-    // Bring each component into safe range BEFORE combining
-    // This prevents overflow during multiplication
-    px = safeMod(px, 1009);  // Prime < 1024
-    py = safeMod(py, 1013);  // Different prime
-    t = safeMod(t, 10007);   // Prime for time
-    
-    // Combine with balanced coefficients for X and Y to avoid directional bias
-    // Using similar-magnitude primes for px and py ensures neither axis dominates
-    // max value is roughly 1009*73 + 1013*71 + 10007*83 = ~904K, safe
-    int h = px * 73 + py * 71 + t * 83;
-    
-    return ihash(h);
+    // Run a few iterations to mix the state well
+    xorshift128pp(state);
+    xorshift128pp(state);
+    return xorshift128pp(state);
 }
 
-// Get a float 0.0-1.0 from integer hash (for compatibility with existing code)
-float hash(vec2 p, float time) {
-    int h = hashPosTime(p, time);
-    // h is already positive and < HASH_MOD, so just normalize
-    return float(h) / float(HASH_MOD);
+// Get a float 0.0-1.0 from position and time
+float hash(vec2 pos, float time) {
+    uint h = hashUint(pos, time);
+    // Convert to float in [0, 1)
+    return float(h) / 4294967296.0;  // 2^32
 }
 
-// Random direction 1-8 (including diagonals) - pure integer
+// Get a second independent random value (using time offset)
+float hash2(vec2 pos, float time) {
+    return hash(pos, time + 10000.0);
+}
+
+// Random direction 1-8 (including diagonals)
 int randomDir(vec2 pos, float time) {
-    int h = hashPosTime(pos, time);
-    return safeMod(h, 8) + 1;  // Returns 1-8
+    uint h = hashUint(pos, time);
+    return int(h % 8u) + 1;  // Returns 1-8
+}
+
+// Random direction 1-4 (cardinal only: RIGHT, UP, LEFT, DOWN)
+int randomDir4(vec2 pos, float time) {
+    uint h = hashUint(pos, time);
+    return int(h % 4u) + 1;  // Returns 1-4
 }
 
 // Direction toward target - prefers diagonal when both axes differ
