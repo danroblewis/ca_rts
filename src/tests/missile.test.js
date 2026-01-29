@@ -339,7 +339,9 @@ export async function runMissileSpawnConditionTests(sim) {
         sim.surroundWithUnits(data, factoryX, factoryY, factoryX, factoryY, true);
         
         // Add an "outsider" unit further away (required for missile spawn)
-        sim.setCell(data, 5, 5, createMiningUnit(false, 0, factoryX, factoryY));
+        // Must belong to this factory, and be within 10 cells of factory center
+        // Position (10, 16) is outside the ring (>2 from center) but within search range (<=10)
+        sim.setCell(data, 10, 16, createMiningUnit(false, 0, factoryX, factoryY));
         
         // Initial state: should have factory cells
         const initialFactoryCount = sim.countCellType(data, CELL_MINING_FACTORY);
@@ -521,6 +523,55 @@ export async function runMissileBuildingTests(sim) {
         }
         assert(missileCount === 8, 
             `Should have 8 missile cells around center, got ${missileCount}`);
+    });
+    
+    await runTest('Missile: [GPU] BUILDING missile gains progress from adjacent holding units', async () => {
+        const data = sim.createData();
+        
+        // Create a missile in BUILDING state with 0 build progress
+        const missileX = 16, missileY = 16;
+        sim.createMissileStructure(data, missileX, missileY, 0, 1, MISSILE_BUILDING);
+        
+        // Place holding units ADJACENT to missile cells (at distance 1 from missile cells)
+        // Missile cells are at offsets (-1,-1) to (1,1) from center, excluding center
+        // Units need to be adjacent to these cells
+        // Place them at distance 2 from center (just outside the 3x3 missile structure)
+        const unitPositions = [
+            [missileX - 2, missileY],     // Adjacent to (-1, 0)
+            [missileX + 2, missileY],     // Adjacent to (1, 0)
+            [missileX, missileY - 2],     // Adjacent to (0, -1)
+            [missileX, missileY + 2],     // Adjacent to (0, 1)
+        ];
+        
+        for (const [ux, uy] of unitPositions) {
+            // Create holding unit with resources
+            sim.setCell(data, ux, uy, createMiningUnit(true, 0, 10, 10));
+        }
+        
+        // Verify initial state
+        const initialCell = sim.getCell(data, missileX + 1, missileY);
+        const initialProgress = getMissileBuildProgress(initialCell);
+        const initialState = getMissileState(initialCell);
+        assert(initialState === MISSILE_BUILDING, 
+            `Should start in BUILDING state, got ${initialState}`);
+        
+        // Run simulation for several steps
+        let result = data;
+        for (let i = 0; i < 5; i++) {
+            result = sim.step(result, i);
+        }
+        
+        // Check build progress increased OR missile became ARMED
+        const afterCell = sim.getCell(result, missileX + 1, missileY);
+        const afterProgress = getMissileBuildProgress(afterCell);
+        const afterState = getMissileState(afterCell);
+        
+        // Either progress increased or it's now armed
+        const progressIncreased = afterProgress > initialProgress;
+        const becameArmed = afterState === MISSILE_ARMED;
+        
+        assert(progressIncreased || becameArmed, 
+            `Missile should build with adjacent holding units. Initial progress: ${initialProgress}, After: ${afterProgress}, State: ${afterState}`);
     });
 }
 

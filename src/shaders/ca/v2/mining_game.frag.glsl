@@ -92,6 +92,15 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
         }
     }
     
+    // --- FACTORY → MISSILE TRANSFORMATION ---
+    // Check BEFORE spawning/deposits so the factory can transform even when units want to deposit
+    if (isFactory(myType)) {
+        FactoryToMissileResult transformation = checkFactoryToMissile(myPos, myRaw, u_state, u_resolution);
+        if (transformation.shouldTransform) {
+            return transformation.missileCell;
+        }
+    }
+    
     // --- SPAWNING ---
     if (spawning.happened) {
         // Am I the spawn location? (I become the spawned cell)
@@ -269,14 +278,6 @@ vec4 compute(vec2 myPos, vec4 myRaw, int myType) {
     MissileMovementResult missileArrival = checkMissileArrival(myPos, u_state, u_resolution);
     if (missileArrival.happened) {
         return missileArrival.arrivingCell;
-    }
-    
-    // --- FACTORY → MISSILE TRANSFORMATION ---
-    if (isFactory(myType)) {
-        FactoryToMissileResult transformation = checkFactoryToMissile(myPos, myRaw, u_state, u_resolution);
-        if (transformation.shouldTransform) {
-            return transformation.missileCell;
-        }
     }
     
     // ========================================================================

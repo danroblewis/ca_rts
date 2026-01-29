@@ -38,7 +38,8 @@ int countUnitsInRing(vec2 factoryCenter, int player, sampler2D state, vec2 resol
             vec4 cellRaw = texture(state, (checkPos + 0.5) / resolution);
             int cellType = getType(cellRaw);
             
-            if (isUnit(cellType) && getPlayer(cellType) == player) {
+            // Only count HOLDING units - they need resources to build the missile!
+            if (isUnit(cellType) && getPlayer(cellType) == player && getUnitHolding(cellRaw)) {
                 count++;
             }
         }
