@@ -7,10 +7,10 @@
  * 
  * Paths are relative to the including file's directory.
  * Circular includes are detected and prevented.
+ * Duplicate includes are tracked and skipped to reduce shader size.
  * 
- * Note: Duplicate includes are NOT removed by this loader - we rely on GLSL
- * #ifndef guards to handle deduplication at GPU compile time. This ensures
- * correct ordering when the same file is included by multiple siblings.
+ * Processing is done depth-first, in order, so that nested dependencies
+ * are resolved before sibling includes can claim them.
  */
 
 const shaderCache = new Map();
@@ -69,13 +69,16 @@ async function fetchShader(path) {
 
 /**
  * Process #include directives in shader source.
+ * Uses depth-first, in-order processing so nested includes are resolved
+ * before sibling includes can claim them as duplicates.
  * 
  * @param {string} source - Shader source code
  * @param {string} filePath - Path of the current file (for resolving relative includes)
+ * @param {Set<string>} includedFiles - Set of already-included file paths (shared across all recursion)
  * @param {Set<string>} ancestorChain - Set of files in current include chain (for circular detection)
  * @returns {Promise<string>} - Processed shader source with includes expanded
  */
-async function processIncludes(source, filePath, ancestorChain = new Set()) {
+async function processIncludes(source, filePath, includedFiles, ancestorChain = new Set()) {
     // Detect circular includes (same file in the current chain = infinite loop)
     if (ancestorChain.has(filePath)) {
         throw new Error(`Circular include detected: ${filePath}`);
@@ -104,34 +107,48 @@ async function processIncludes(source, filePath, ancestorChain = new Set()) {
         return source;
     }
     
-    // Resolve all paths
-    const resolvedPaths = matches.map(m => resolvePath(filePath, m.path));
+    // Process includes IN ORDER (not parallel) to ensure correct deduplication
+    // This is critical: nested includes must be resolved before siblings claim them
+    const processedSources = [];
+    const shouldInclude = [];
     
-    // Fetch ALL includes in parallel (cache handles network efficiency)
-    const fetchPromises = resolvedPaths.map(path => fetchShader(path));
-    const includeSources = await Promise.all(fetchPromises);
-    
-    // Process nested includes in parallel
-    // Each branch gets a COPY of the ancestor chain (not shared) to allow
-    // the same file to be included by multiple siblings - GLSL #ifndef guards
-    // will handle deduplication at compile time
-    const processedPromises = includeSources.map((src, i) => 
-        processIncludes(src, resolvedPaths[i], new Set(newAncestorChain))
-    );
-    const processedSources = await Promise.all(processedPromises);
+    for (const m of matches) {
+        const resolvedPath = resolvePath(filePath, m.path);
+        
+        // Check if already included
+        if (includedFiles.has(resolvedPath)) {
+            shouldInclude.push(false);
+            processedSources.push('');
+        } else {
+            // Mark as included BEFORE processing (prevents circular refs in siblings)
+            includedFiles.add(resolvedPath);
+            shouldInclude.push(true);
+            
+            // Fetch and process this include (depth-first)
+            const includeSource = await fetchShader(resolvedPath);
+            const processed = await processIncludes(includeSource, resolvedPath, includedFiles, new Set(newAncestorChain));
+            processedSources.push(processed);
+        }
+    }
     
     // Replace includes in reverse order (so indices stay valid)
     for (let i = matches.length - 1; i >= 0; i--) {
         const m = matches[i];
         const includeSource = processedSources[i];
         
-        // Add markers for debugging
-        const header = `\n// >>> BEGIN ${m.path}\n`;
-        const footer = `\n// <<< END ${m.path}\n`;
+        let replacement;
+        if (!shouldInclude[i]) {
+            // Already included elsewhere, just add a comment
+            replacement = `\n// [DEDUPED] ${m.path}\n`;
+        } else {
+            // Add markers for debugging
+            const header = `\n// >>> BEGIN ${m.path}\n`;
+            const footer = `\n// <<< END ${m.path}\n`;
+            replacement = header + includeSource.trim() + footer;
+        }
         
-        // Replace the #include directive with the file contents
-        source = source.substring(0, m.index) + 
-                 header + includeSource.trim() + footer +
+        // Replace the #include directive
+        source = source.substring(0, m.index) + replacement +
                  source.substring(m.index + m.fullMatch.length);
     }
     
@@ -146,8 +163,18 @@ async function processIncludes(source, filePath, ancestorChain = new Set()) {
 export async function loadShader(path) {
     const label = `  📄 ${path.split('/').pop()}`;
     console.time(label);
+    
+    // Create fresh deduplication set for this shader load
+    const includedFiles = new Set();
+    
     const source = await fetchShader(path);
-    const result = await processIncludes(source, path);
+    const result = await processIncludes(source, path, includedFiles);
+    
+    // Log shader size
+    const lines = result.split('\n').length;
+    const sizeKB = (result.length / 1024).toFixed(1);
+    console.warn(`  📊 ${path.split('/').pop()}: ${lines} lines, ${sizeKB} KB (${includedFiles.size} unique includes)`);
+    
     console.timeEnd(label);
     return result;
 }
