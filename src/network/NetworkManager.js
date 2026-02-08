@@ -256,7 +256,7 @@ export class NetworkManager {
         this.game.waitingForSync = true;
         this.game.waitingForSyncStartTime = performance.now();
         await this.networkSync.connect(
-            `ws://${window.location.host}/ws`,
+            `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`,
             roomIdToJoin,
             null,
             false
@@ -270,7 +270,7 @@ export class NetworkManager {
         this.roomId = roomIdToWatch;
         this.game.isSpectator = true;
         await this.networkSync.connect(
-            `ws://${window.location.host}/ws`,
+            `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`,
             roomIdToWatch,
             null,
             true
@@ -309,7 +309,7 @@ export class NetworkManager {
             this.game.waitingForSync = true;
             this.game.waitingForSyncStartTime = performance.now();
             await this.networkSync.connect(
-                `ws://${window.location.host}/ws`,
+                `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`,
                 this.roomId,
                 requestedPlayerId,
                 false
