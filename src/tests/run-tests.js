@@ -18,6 +18,7 @@ import { runMiningTests, runUnitMovementNearFactoryTests } from './mining.test.j
 import { runRandomTests } from './random.test.js';
 import { runResourceMovementTests } from './resourcemovement.test.js';
 import { runMissileTests } from './missile.test.js';
+import { runPerformanceTests } from './performance.test.js';
 
 // Import refactored module test suites (pure JS, no GPU needed)
 import { runGameUtilsTests } from './gameutils.test.js';
@@ -40,7 +41,7 @@ const skipGPU = shouldSkipGPU();
 // Unit tests: GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 + 
 //             RollbackManager:15 + AudioManager:15 + WinCondition:15 + NetworkIndicator:12 + 
 //             SpeedToggle:14 + NetworkManager:18 = 171
-const gpuTestCount = 121;  // Added 2 more GPU missile tests (units stay to build)
+const gpuTestCount = 128;  // 121 + 7 performance benchmarks
 const unitTestCount = 171;
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
@@ -57,6 +58,7 @@ if (!skipGPU) {
     await runRandomTests();
     await runResourceMovementTests();
     await runMissileTests();
+    await runPerformanceTests();
 } else {
     logSection('GPU Tests (SKIPPED - ?fast=1)');
     console.log('Skipping GPU tests. Remove ?fast=1 to run all tests.');
