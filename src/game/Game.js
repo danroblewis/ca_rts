@@ -410,7 +410,7 @@ export class Game {
         this.grid.uploadCurrent(currentData);
     }
 
-    simulationStep() {
+    async simulationStep() {
         // Wait for sync in multiplayer
         if (this.waitingForSync) {
             if (performance.now() - this.waitingForSyncStartTime > this.config.syncWaitTimeout) {
@@ -448,7 +448,7 @@ export class Game {
 
         // Save checkpoint periodically
         if (this.isMultiplayer && this.rollbackManager.shouldSaveCheckpoint()) {
-            this.rollbackManager.saveCheckpoint();
+            await this.rollbackManager.saveCheckpoint();
         }
     }
     

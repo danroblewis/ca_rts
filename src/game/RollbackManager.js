@@ -197,7 +197,7 @@ export class RollbackManager {
             }
             
             // Run simulation step (this increments simTime via callback)
-            this.simulationStep();
+            await this.simulationStep();
             simStepsRun++;
         }
         

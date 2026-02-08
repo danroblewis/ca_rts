@@ -33,7 +33,8 @@ export class NetworkManager {
         
         this.roomId = options.initialRoomId || `game-${this.game.mapSeed}`;
         this.matchmakingDialog = null;
-        
+        this._actionChain = Promise.resolve();
+
         // Bind event handlers
         this._bindNetworkEvents();
     }
@@ -79,23 +80,27 @@ export class NetworkManager {
         
         ns.onSpeedSync = (serverTargetTps, slowestPlayer, tickCounts, targetTick, leaderPlayer) => {
             game.targetTicksPerSecond = Math.max(1, serverTargetTps);
-            
+
             if (targetTick > 0 && ns.playerId) {
                 game.gameUI.setTargetTick(targetTick, leaderPlayer);
-                
+
                 const ourTick = Math.floor(game.simTime);
                 const tickDiff = targetTick - ourTick;
-                
+
                 if (tickDiff > config.tickSyncHardThreshold) {
                     const catchupTicks = Math.min(tickDiff, config.tickCatchupBatch * 5);
-                    for (let i = 0; i < catchupTicks; i++) {
-                        game.simulationStep();
-                    }
+                    (async () => {
+                        for (let i = 0; i < catchupTicks; i++) {
+                            await game.simulationStep();
+                        }
+                    })();
                 } else if (tickDiff > config.tickSyncThreshold) {
                     const catchupTicks = Math.min(tickDiff - config.tickSyncThreshold, config.tickCatchupBatch);
-                    for (let i = 0; i < catchupTicks; i++) {
-                        game.simulationStep();
-                    }
+                    (async () => {
+                        for (let i = 0; i < catchupTicks; i++) {
+                            await game.simulationStep();
+                        }
+                    })();
                 }
             }
         };
@@ -130,15 +135,16 @@ export class NetworkManager {
             } else {
                 // We're host, sync state to new player
                 if (ns.playerId === 1) {
-                    const gridData = game.grid.download();
-                    ns.syncState(gridData, {
-                        type: 'player_sync',
-                        reason: 'new_player_joined',
-                        newPlayerId: playerId,
-                        factoryCounts: { ...game.playerFactoryCounts },
-                        totalPlaced: { ...game.playerTotalFactoriesPlaced },
-                        factoriesPlaced: game.factoriesPlaced
-                    }, game.simTime);
+                    game.grid.download().then(gridData => {
+                        ns.syncState(gridData, {
+                            type: 'player_sync',
+                            reason: 'new_player_joined',
+                            newPlayerId: playerId,
+                            factoryCounts: { ...game.playerFactoryCounts },
+                            totalPlaced: { ...game.playerTotalFactoriesPlaced },
+                            factoriesPlaced: game.factoriesPlaced
+                        }, game.simTime);
+                    });
                 }
             }
             this._updateIndicator();
@@ -155,7 +161,9 @@ export class NetworkManager {
         
         ns.onActionReceived = (message) => {
             const { playerId, simTime: actionTick, action } = message;
-            game.rollbackManager.processRemoteAction(action, playerId, actionTick);
+            this._actionChain = this._actionChain.then(() =>
+                game.rollbackManager.processRemoteAction(action, playerId, actionTick)
+            );
         };
     }
     
@@ -183,9 +191,11 @@ export class NetworkManager {
             const ticksToFastForward = Math.floor(game.simTime - syncData.simTime);
             if (ticksToFastForward > 0 && ticksToFastForward < 120) {
                 game.simTime = syncData.simTime;
-                for (let i = 0; i < ticksToFastForward; i++) {
-                    game.simulationStep();
-                }
+                (async () => {
+                    for (let i = 0; i < ticksToFastForward; i++) {
+                        await game.simulationStep();
+                    }
+                })();
             } else {
                 game.simTime = syncData.simTime;
             }
@@ -244,6 +254,13 @@ export class NetworkManager {
         window.history.replaceState({}, '', url);
     }
     
+    /**
+     * Wait for any in-flight remote action processing to complete.
+     */
+    waitForPendingActions() {
+        return this._actionChain;
+    }
+
     // ========================================================================
     // Public API - Matchmaking
     // ========================================================================

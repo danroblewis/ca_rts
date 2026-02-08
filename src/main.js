@@ -253,6 +253,7 @@ const networkManager = new NetworkManager({
     isOnLocalhost,
     initialRoomId: roomParam || `game-${mapSeed}`
 });
+gameLoop.networkManager = networkManager;
 
 // ============================================================================
 // Audio setup

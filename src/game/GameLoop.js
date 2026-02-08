@@ -26,6 +26,7 @@ export class GameLoop {
         this.game = options.game;
         this.renderer = options.renderer;
         this.config = options.config;
+        this.networkManager = options.networkManager || null;
         
         // Timing
         this.lastRenderTime = 0;
@@ -113,7 +114,7 @@ export class GameLoop {
         this._updateStats();
 
         // Update network (heartbeat, periodic sync)
-        this._updateNetwork();
+        await this._updateNetwork();
 
         // Track missile state changes for sounds
         this._updateMissileSounds();
@@ -153,7 +154,7 @@ export class GameLoop {
         if (!game.isMultiplayer) {
             // Single player: run every frame
             for (let i = 0; i < batchSize; i++) {
-                game.simulationStep();
+                await game.simulationStep();
                 this.simStepCount++;
                 this.tpsCalcStepCount++;
             }
@@ -163,8 +164,11 @@ export class GameLoop {
             let stepsTaken = 0;
             while ((now - this.lastSimStepTime) >= targetFrameTime && stepsTaken < maxStepsPerFrame) {
                 for (let i = 0; i < batchSize; i++) {
+                    if (this.networkManager) {
+                        await this.networkManager.waitForPendingActions();
+                    }
                     await game.applyPendingActions();
-                    game.simulationStep();
+                    await game.simulationStep();
                     this.simStepCount++;
                     this.tpsCalcStepCount++;
                 }
@@ -183,8 +187,11 @@ export class GameLoop {
         const batchSize = this.config.simBatchSize || 10;
 
         for (let i = 0; i < batchSize; i++) {
+            if (this.networkManager) {
+                await this.networkManager.waitForPendingActions();
+            }
             await this.game.applyPendingActions();
-            this.game.simulationStep();
+            await this.game.simulationStep();
             this.simStepCount++;
             this.tpsCalcStepCount++;
         }
@@ -253,17 +260,17 @@ export class GameLoop {
     /**
      * Update network (heartbeat and periodic sync)
      */
-    _updateNetwork() {
+    async _updateNetwork() {
         const game = this.game;
-        
+
         if (!game.isMultiplayer || !game.networkSync?.isConnected || game.isSpectator) {
             return;
         }
-        
+
         const now = performance.now();
         const heartbeatInterval = this.config.heartbeatInterval || 1000;
         const fullSyncInterval = this.config.fullSyncInterval || 5000;
-        
+
         // Send heartbeat
         if (now - this.lastHeartbeatTime >= heartbeatInterval) {
             if (this.potentialTps > 1) {
@@ -271,10 +278,10 @@ export class GameLoop {
             }
             this.lastHeartbeatTime = now;
         }
-        
+
         // Host sends periodic full sync
         if (game.networkSync.playerId === 1 && now - this.lastFullSyncTime >= fullSyncInterval) {
-            const gridData = game.grid.download();
+            const gridData = await game.grid.download();
             game.networkSync.syncState(gridData, {
                 type: 'periodic_sync',
                 factoryCounts: { ...game.playerFactoryCounts },
