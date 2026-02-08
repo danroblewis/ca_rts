@@ -843,20 +843,31 @@ async def get_room_minimap(room_id: str):
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="CA RTS Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind to")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
-    
+    parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with self-signed cert")
+    parser.add_argument("--certfile", default="cert.pem", help="SSL certificate file")
+    parser.add_argument("--keyfile", default="key.pem", help="SSL key file")
+
     args = parser.parse_args()
-    
-    print(f"Starting CA RTS Server at http://{args.host}:{args.port}")
-    print(f"WebSocket endpoint: ws://{args.host}:{args.port}/ws")
-    
+
+    protocol = "https" if args.ssl else "http"
+    ws_protocol = "wss" if args.ssl else "ws"
+    print(f"Starting CA RTS Server at {protocol}://{args.host}:{args.port}")
+    print(f"WebSocket endpoint: {ws_protocol}://{args.host}:{args.port}/ws")
+
+    ssl_kwargs = {}
+    if args.ssl:
+        ssl_kwargs["ssl_certfile"] = args.certfile
+        ssl_kwargs["ssl_keyfile"] = args.keyfile
+
     uvicorn.run(
         "server:app",
         host=args.host,
         port=args.port,
-        reload=args.reload
+        reload=args.reload,
+        **ssl_kwargs
     )
