@@ -19,6 +19,7 @@ import { runRandomTests } from './random.test.js';
 import { runResourceMovementTests } from './resourcemovement.test.js';
 import { runMissileTests } from './missile.test.js';
 import { runPerformanceTests } from './performance.test.js';
+import { runSyncTests } from './sync.test.js';
 
 // Import refactored module test suites (pure JS, no GPU needed)
 import { runGameUtilsTests } from './gameutils.test.js';
@@ -32,17 +33,18 @@ import { runWinConditionManagerTests } from './winconditionmanager.test.js';
 import { runNetworkIndicatorTests } from './networkindicator.test.js';
 import { runSpeedToggleTests } from './speedtoggle.test.js';
 import { runNetworkManagerTests } from './networkmanager.test.js';
+import { runActionQueueTests } from './actionqueue.test.js';
 
 // Check if we should skip GPU tests
 const skipGPU = shouldSkipGPU();
 
 // Total test count:
-// GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) + resourceMovement(5) + missile(24) = 113
+// GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) + resourceMovement(5) + missile(24) + perf(9) + sync(20) = 142+20=150
 // Unit tests: GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 +
 //             RollbackManager:15 + AudioManager:15 + WinCondition:16 + NetworkIndicator:12 +
-//             SpeedToggle:14 + NetworkManager:18 = 172
-const gpuTestCount = 130;  // 121 + 9 performance benchmarks
-const unitTestCount = 172;
+//             SpeedToggle:14 + NetworkManager:18 + ActionQueue:23 = 195
+const gpuTestCount = 150;  // 130 + 20 sync tests
+const unitTestCount = 195; // 172 + 23 ActionQueue tests
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
 // Initialize GPU (needed even for some unit tests that mock canvas)
@@ -59,6 +61,7 @@ if (!skipGPU) {
     await runResourceMovementTests();
     await runMissileTests();
     await runPerformanceTests();
+    await runSyncTests();
 } else {
     logSection('GPU Tests (SKIPPED - ?fast=1)');
     console.log('Skipping GPU tests. Remove ?fast=1 to run all tests.');
@@ -76,6 +79,7 @@ await runWinConditionManagerTests();
 await runNetworkIndicatorTests();
 await runSpeedToggleTests();
 await runNetworkManagerTests();
+await runActionQueueTests();
 
 // Output final results
 outputResults();
