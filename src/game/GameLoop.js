@@ -44,6 +44,10 @@ export class GameLoop {
         // Network heartbeat timing
         this.lastHeartbeatTime = 0;
         this.lastFullSyncTime = 0;
+
+        // Auto perf mode: switch to performance mode if FPS < 55 for 5+ seconds
+        this.lowFpsStart = 0;          // timestamp when FPS first dropped below threshold
+        this.autoPerfTriggered = false; // only trigger once per session
         
         // Bind the loop method
         this._loop = this._loop.bind(this);
@@ -214,6 +218,30 @@ export class GameLoop {
                 this.potentialTps
             );
             this.game.gameUI.updateTickDisplay();
+
+            // Auto perf mode: if FPS < 55 for 5+ seconds, switch to performance mode
+            if (!this.autoPerfTriggered && !this.game.performanceMode) {
+                if (this.potentialTps < 55) {
+                    if (this.lowFpsStart === 0) {
+                        this.lowFpsStart = now;
+                    } else if (now - this.lowFpsStart > 5000) {
+                        this.autoPerfTriggered = true;
+                        // Toggle via the DOM checkbox so SettingsUI handles everything
+                        const perfToggle = document.getElementById('perf-toggle');
+                        if (perfToggle) {
+                            perfToggle.checked = true;
+                            perfToggle.dispatchEvent(new Event('change'));
+                        } else {
+                            // Fallback: set directly
+                            this.game.performanceMode = true;
+                            this.game.showMinimap = false;
+                        }
+                        console.log(`Auto-switched to performance mode (FPS was ${Math.round(this.potentialTps)} for 5+ seconds)`);
+                    }
+                } else {
+                    this.lowFpsStart = 0; // reset if FPS recovers
+                }
+            }
         }
     }
     
