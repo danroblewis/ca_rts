@@ -59,23 +59,21 @@ export class WinConditionManager {
     
     /**
      * Check for win/lose condition
-     * @returns {boolean} True if game ended
+     * @returns {Promise<boolean>} True if game ended
      */
-    check() {
+    async check() {
         if (this.gameOver) return false;
-        
-        // Count actual factories on map
-        const actualCounts = this.countFactories();
+
+        // Count actual factories on map (async GPU readback)
+        const actualCounts = await this.countFactories();
         const totalPlaced = this.getPlayerTotalFactoriesPlaced();
-        
+
         // Notify that counts have been updated
         this.onFactoryCountsUpdated(actualCounts);
-        
+
         // Check lose condition: placed at least one base AND now have none left
-        // (Must have placed at least one base to lose - can't lose before placing anything)
         for (const player of [PLAYER_1, PLAYER_2]) {
             if (totalPlaced[player] >= 1 && actualCounts[player] === 0) {
-                // This player loses - all their bases were destroyed
                 this.gameOver = true;
                 this.winner = player === PLAYER_1 ? PLAYER_2 : PLAYER_1;
                 console.log(`Player ${player} lost - all bases destroyed!`);
@@ -83,7 +81,7 @@ export class WinConditionManager {
                 return true;
             }
         }
-        
+
         return false;
     }
     

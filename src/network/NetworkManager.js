@@ -184,15 +184,7 @@ export class NetworkManager {
             if (ticksToFastForward > 0 && ticksToFastForward < 120) {
                 game.simTime = syncData.simTime;
                 for (let i = 0; i < ticksToFastForward; i++) {
-                    game.simShader.use();
-                    game.simShader.setTexture('u_state', game.grid.getReadTexture(), 0);
-                    game.simShader.setVec2('u_resolution', config.gridSize, config.gridSize);
-                    game.simShader.setFloat('u_time', game.simTime);
-                    game.grid.getWriteFramebuffer().bind();
-                    game.simShader.dispatch();
-                    game.grid.getWriteFramebuffer().unbind();
-                    game.grid.swap();
-                    game.simTime += 1.0;
+                    game.simulationStep();
                 }
             } else {
                 game.simTime = syncData.simTime;

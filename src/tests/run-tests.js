@@ -46,7 +46,7 @@ setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
 // Initialize GPU (needed even for some unit tests that mock canvas)
 const canvas = document.getElementById('canvas');
-GPU.init(canvas);
+await GPU.init(canvas);
 
 // Run GPU/shader test suites (unless skipped)
 if (!skipGPU) {

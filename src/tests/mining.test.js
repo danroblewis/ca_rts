@@ -11,8 +11,9 @@
  * - Memory and knowledge sharing
  */
 
+import { GPU } from '../gpu/GPU.js';
 import { PingPongBuffer } from '../gpu/PingPongBuffer.js';
-import { ComputeShader } from '../gpu/ComputeShader.js';
+import { ComputePipeline } from '../gpu/ComputePipeline.js';
 import { loadShader } from '../shaders/load.js';
 import { runTest, assert, assertApprox, logSection } from './framework.js';
 
@@ -278,24 +279,20 @@ function sumBlueprintBuildCount(sim, data, centerX, centerY) {
 // Mining Simulation Helper
 // ============================================================================
 
-// Toggle this to switch between v1 and v2 shaders for testing
-const SHADER_VERSION = 'v2'; // 'v1' or 'v2'
-
 // Shared shader instance (compiled once, reused across all tests)
-let sharedShader = null;
+let sharedPipeline = null;
+let sharedUniformBuffer = null;
 
 /**
  * Initialize the shared shader. Call once before running tests.
  */
 async function initSharedShader() {
-    if (!sharedShader) {
-        const shaderPath = SHADER_VERSION === 'v2' 
-            ? './src/shaders/ca/v2/mining_game.frag.glsl'
-            : './src/shaders/ca/v1/mining_game.frag.glsl';
-        const source = await loadShader(shaderPath);
-        sharedShader = new ComputeShader(source);
+    if (!sharedPipeline) {
+        const source = await loadShader('./src/shaders/ca/v2/mining_game.wgsl');
+        sharedPipeline = new ComputePipeline(source, { label: 'Mining test' });
+        sharedUniformBuffer = GPU.get().createUniformBuffer(16);
     }
-    return sharedShader;
+    return sharedPipeline;
 }
 
 /**
@@ -303,19 +300,20 @@ async function initSharedShader() {
  * MUST call initSharedShader() before using this.
  */
 function createMiningSimulation(width, height) {
+    const gpu = GPU.get();
     const buffer = new PingPongBuffer(width, height, { format: 'float' });
     let time = 0;
-    
+
     return {
         buffer,
         width,
         height,
-        
+
         // No-op for backwards compatibility - shader is already initialized
         async init() {
             // Shader is shared, no initialization needed per-test
         },
-        
+
         setCell(data, x, y, cellData) {
             const idx = (y * width + x) * 4;
             data[idx + 0] = cellData[0];
@@ -323,46 +321,48 @@ function createMiningSimulation(width, height) {
             data[idx + 2] = cellData[2];
             data[idx + 3] = cellData[3];
         },
-        
+
         getCell(data, x, y) {
             const idx = (y * width + x) * 4;
             return [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
         },
-        
+
         step(timeIncrement = 1) {
-            buffer.getWriteFramebuffer().bind();
-            sharedShader.use();
-            sharedShader.setTexture('u_state', buffer.getReadTexture(), 0);
-            sharedShader.setVec2('u_resolution', width, height);
-            sharedShader.setFloat('u_time', time);
-            sharedShader.dispatch();
-            buffer.getWriteFramebuffer().unbind();
+            gpu.writeBuffer(sharedUniformBuffer, new Float32Array([width, height, time, 0]));
+            const bindGroup = sharedPipeline.createBindGroup([
+                { binding: 0, resource: buffer.getReadTexture().view },
+                { binding: 1, resource: buffer.getWriteTexture().view },
+                { binding: 2, resource: { buffer: sharedUniformBuffer } }
+            ]);
+            const workgroupsX = Math.ceil(width / 8);
+            const workgroupsY = Math.ceil(height / 8);
+            sharedPipeline.dispatch(bindGroup, workgroupsX, workgroupsY);
             buffer.swap();
             time += timeIncrement;
         },
-        
+
         stepN(n, timeIncrement = 1) {
             for (let i = 0; i < n; i++) {
                 this.step(timeIncrement);
             }
         },
-        
+
         setTime(t) {
             time = t;
         },
-        
+
         upload(data) {
             buffer.upload(data);
         },
-        
-        download() {
+
+        async download() {
             return buffer.download();
         },
-        
+
         createEmptyGrid() {
             return new Float32Array(width * height * 4);
         },
-        
+
         // Count cells of a given type
         countCellType(data, type) {
             let count = 0;
@@ -375,7 +375,7 @@ function createMiningSimulation(width, height) {
             }
             return count;
         },
-        
+
         // Find first cell of a given type
         findCell(data, type) {
             for (let y = 0; y < height; y++) {
@@ -387,9 +387,9 @@ function createMiningSimulation(width, height) {
             }
             return null;
         },
-        
+
         destroy() {
-            // Only destroy the buffer, not the shared shader
+            // Only destroy the buffer, not the shared pipeline
             buffer.destroy();
         }
     };
@@ -432,7 +432,7 @@ export async function runMiningTests() {
         sim.upload(data);
         
         // Download immediately without stepping
-        const result = sim.download();
+        const result = await sim.download();
         const cell = sim.getCell(result, 5, 5);
         const age = getUnitAge(cell);
         assert(age === 100, `Age should be 100 after round-trip, got ${age}`);
@@ -493,7 +493,7 @@ export async function runMiningTests() {
         
         // Run for many steps
         sim.stepN(50);
-        const result = sim.download();
+        const result = await sim.download();
         
         const finalUnitCount = sim.countCellType(result, CELL_MINING_UNIT);
         assert(finalUnitCount === 1, `Unit should be conserved: expected 1, got ${finalUnitCount}`);
@@ -513,7 +513,7 @@ export async function runMiningTests() {
         
         // Run one step
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // Unit should have moved (not be at 8,8 anymore, or if blocked, still there)
         const unitCount = sim.countCellType(result, CELL_MINING_UNIT);
@@ -540,7 +540,7 @@ export async function runMiningTests() {
         
         // Run until resource is extracted (unit moves onto resource)
         sim.stepN(30);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Either resource is gone (extracted) or still there (unit didn't reach it)
         // The key test is that if resource is gone, the unit must be holding
@@ -571,7 +571,7 @@ export async function runMiningTests() {
         
         // Run enough steps for unit to reach resource
         sim.stepN(20);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find the unit
         const unit = sim.findCell(result, CELL_MINING_UNIT);
@@ -611,7 +611,7 @@ export async function runMiningTests() {
         assert(initialFactoryResources === 0, 'Factory should start with 0 resources');
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // Unit should still exist and be empty-handed
         const unitCount = sim.countCellType(result, CELL_MINING_UNIT);
@@ -645,7 +645,7 @@ export async function runMiningTests() {
         const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // All units should still exist
         const unitCount = sim.countCellType(result, CELL_MINING_UNIT);
@@ -675,7 +675,7 @@ export async function runMiningTests() {
         assert(initialUnits === 0, 'Should start with 0 units');
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // Unit should appear above top-middle of factory at (8,8)
         const unitAbove = sim.getCell(result, 8, 8);
@@ -694,7 +694,7 @@ export async function runMiningTests() {
         sim.upload(data);
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         const unit = sim.getCell(result, 8, 8); // Above top-middle of factory
         assert(getCellType(unit) === CELL_MINING_UNIT, 'Unit should exist');
@@ -721,7 +721,7 @@ export async function runMiningTests() {
         const initialUnits = sim.countCellType(data, CELL_MINING_UNIT);
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // No unit should have spawned
         const finalUnits = sim.countCellType(result, CELL_MINING_UNIT);
@@ -750,7 +750,7 @@ export async function runMiningTests() {
         
         // Run enough steps for unit to reach and extract
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Unit should have extracted the resource (the one at 8,9)
         const unit = sim.findCell(result, CELL_MINING_UNIT);
@@ -787,7 +787,7 @@ export async function runMiningTests() {
         
         // Run several steps
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // All units should still exist (collision detection prevents loss)
         const finalUnits = sim.countCellType(result, CELL_MINING_UNIT);
@@ -821,7 +821,7 @@ export async function runMiningTests() {
         // Run some steps - unit should get stuck and counter should increase
         // Note: unit might move onto a resource, so this test checks the mechanism
         sim.stepN(5);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find the unit wherever it is
         const unit = sim.findCell(result, CELL_MINING_UNIT);
@@ -846,7 +846,7 @@ export async function runMiningTests() {
         
         // Run until resource is extracted
         sim.stepN(5);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find unit and check memory
         const unit = sim.findCell(result, CELL_MINING_UNIT);
@@ -886,7 +886,7 @@ export async function runMiningTests() {
         
         // Run 1 step - unit will try to mine adjacent resource
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find any unit and check state
         const unit = sim.findCell(result, CELL_MINING_UNIT);
@@ -925,7 +925,7 @@ export async function runMiningTests() {
         
         // Run a step - knowledge sharing should occur
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // Both units should exist (they might have moved)
         const units = [];
@@ -959,7 +959,7 @@ export async function runMiningTests() {
         
         // Run for enough steps to complete a cycle
         sim.stepN(50);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Should have: factory exists (check outer cell, center is empty), unit exists (spawned)
         const factoryOuterCell = sim.getCell(result, 7, 3);  // Bottom-left outer cell
@@ -993,7 +993,7 @@ export async function runMiningTests() {
         
         // Run simulation
         sim.stepN(30);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Both factories should exist
         const factory1 = sim.getCell(result, 3, 3);
@@ -1024,7 +1024,7 @@ export async function runMiningTests() {
         
         // Run simulation
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Wall should still be there
         const wallCell = sim.getCell(result, 5, 5);
@@ -1051,7 +1051,7 @@ export async function runMiningTests() {
         
         // Run a few steps
         sim.stepN(5);
-        const result = sim.download();
+        const result = await sim.download();
         
         // All walls should still exist
         assert(getCellType(sim.getCell(result, 4, 6)) === CELL_WALL, 'Left wall should persist');
@@ -1080,7 +1080,7 @@ export async function runMiningTests() {
         
         // Run simulation
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Wall should still be wall (not mined)
         assert(getCellType(sim.getCell(result, 5, 7)) === CELL_WALL, 'Wall should not be mined');
@@ -1123,7 +1123,7 @@ export async function runMiningTests() {
         
         // Run many steps
         sim.stepN(50);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Unit should still exist (not lost due to wall interactions)
         const finalUnits = sim.countCellType(result, CELL_MINING_UNIT);
@@ -1151,7 +1151,7 @@ export async function runMiningTests() {
         
         // Run a few steps - unit is 17+ cells from factory (well beyond FACTORY_SAFE_ZONE of 10)
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find the unit and check its age
         let foundUnit = false;
@@ -1188,7 +1188,7 @@ export async function runMiningTests() {
         
         // Run several steps
         sim.stepN(20);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find the holding unit and check age hasn't increased
         let foundHolding = false;
@@ -1220,7 +1220,7 @@ export async function runMiningTests() {
         
         // Run a few steps
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find the unit and check its age hasn't increased significantly
         for (let y = 0; y < TEST_GRID_SIZE; y++) {
@@ -1249,7 +1249,7 @@ export async function runMiningTests() {
         
         // Run several steps
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find the unit and verify its age has increased
         let foundUnit = false;
@@ -1284,7 +1284,7 @@ export async function runMiningTests() {
         
         // Run enough for unit to find and mine resource
         sim.stepN(20);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find holding unit and check age reset
         for (let y = 0; y < TEST_GRID_SIZE; y++) {
@@ -1326,7 +1326,7 @@ export async function runMiningTests() {
         
         // Run simulation
         sim.stepN(20);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Resources should still exist (holding unit can't mine them)
         const finalResources = sim.countCellType(result, CELL_RESOURCE);
@@ -1356,7 +1356,7 @@ export async function runMiningTests() {
         
         // Run simulation
         sim.stepN(5);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find unit and check it now has a factory
         for (let y = 0; y < TEST_GRID_SIZE; y++) {
@@ -1390,7 +1390,7 @@ export async function runMiningTests() {
         
         // Run simulation
         sim.stepN(10);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Unbuilt factory outer cell should still be there (center is empty)
         const outerCell = sim.getCell(result, 7, 7);
@@ -1420,19 +1420,19 @@ export async function runMiningTests() {
         sim.upload(data);
         
         // Download and re-upload to ensure built factory is recognized
-        let initialData = sim.download();
+        let initialData = await sim.download();
         
         // Holding unit adjacent to unbuilt factory edge
         sim.setCell(initialData, 7, 6, createMiningUnit(true, 0, 2, 2));  // Adjacent to (7,7) of unbuilt factory
         sim.upload(initialData);
-        initialData = sim.download();
+        initialData = await sim.download();
         
         // Check initial build count
         const initialCell = sim.getCell(initialData, 7, 7);
         assert(getFactoryBuildProgress(initialCell) === 0, 'Unbuilt factory should start with 0 build progress');
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // Unbuilt factory cell (7,7) should have increased build progress
         const builtCell = sim.getCell(result, 7, 7);
@@ -1480,7 +1480,7 @@ export async function runMiningTests() {
         assert(isFactoryBuilt(sim, data, 8, 8), 'Factory should be built (threshold reached)');
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // 8 outer cells should still be factory, center stays empty
         let factoryCount = 0;
@@ -1536,7 +1536,7 @@ export async function runMiningTests() {
         assert(!isFactoryBuilt(sim, data, 8, 8), 'Factory should NOT be built with only 7 progress');
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // Outer cells should still be factory type (but unbuilt)
         const outerCell = sim.getCell(result, 7, 7);
@@ -1580,7 +1580,7 @@ export async function runMiningTests() {
         assert(isFactoryBuilt(sim, data, 8, 8), 'Factory should be built');
         
         sim.step();
-        const result = sim.download();
+        const result = await sim.download();
         
         // CENTER cell should remain empty
         const centerCell = sim.getCell(result, 8, 8);
@@ -1627,7 +1627,7 @@ export async function runMiningTests() {
         
         // Run for a while - should spawn unit, mine resources, build unbuilt factory
         sim.stepN(500);
-        const result = sim.download();
+        const result = await sim.download();
         
         // Check factory cells at (12, 8)
         let factoryCellsAt12_8 = 0;
@@ -1699,7 +1699,7 @@ export async function runMiningTests() {
         // Run simulation for 50 steps, checking unit position each step
         for (let step = 0; step < 50; step++) {
             sim.step();
-            const result = sim.download();
+            const result = await sim.download();
             
             // After first step, verify factory is still built
             if (step === 0) {
@@ -1768,14 +1768,14 @@ export async function runMiningTests() {
         // Track unit position over several steps
         // If the unit goes toward the unbuilt factory, it should move right (toward x=12)
         // If it goes toward the home factory, it should move left (toward x=2)
-        let result = sim.download();
+        let result = await sim.download();
         let unitX = 8;
         let unitY = 8;
         
         // Run a few steps and check direction of movement
         for (let step = 0; step < 10; step++) {
             sim.step();
-            result = sim.download();
+            result = await sim.download();
             
             // Find the unit
             for (let y = 0; y < TEST_GRID_SIZE; y++) {
@@ -1844,7 +1844,7 @@ export async function runUnitMovementNearFactoryTests() {
             sim.step();
         }
         
-        let result = sim.download();
+        let result = await sim.download();
         
         // Find all unit positions after simulation
         const finalPositions = [];
@@ -1900,7 +1900,7 @@ export async function runUnitMovementNearFactoryTests() {
         // Run simulation - unit should eventually do a random walk
         for (let step = 0; step < 30; step++) {
             sim.step();
-            const result = sim.download();
+            const result = await sim.download();
             
             // Find the unit
             for (let y = 0; y < TEST_GRID_SIZE; y++) {
@@ -1945,7 +1945,7 @@ export async function runUnitMovementNearFactoryTests() {
         // Run one step - the unit should deposit
         sim.step();
         
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find the unit
         let foundUnit = false;
@@ -1992,7 +1992,7 @@ export async function runUnitMovementNearFactoryTests() {
         
         for (let step = 0; step < 50; step++) {
             sim.step();
-            const result = sim.download();
+            const result = await sim.download();
             
             // Find the unit
             for (let y = 0; y < TEST_GRID_SIZE; y++) {
@@ -2070,7 +2070,7 @@ export async function runUnitMovementNearFactoryTests() {
             sim.step();
         }
         
-        let result = sim.download();
+        let result = await sim.download();
         
         // Find all unit positions
         const finalPositions = [];
@@ -2136,7 +2136,7 @@ export async function runUnitMovementNearFactoryTests() {
             sim.step();
         }
         
-        const result = sim.download();
+        const result = await sim.download();
         
         // Find all unit positions
         const finalPositions = [];
@@ -2190,7 +2190,7 @@ export async function runUnitMovementNearFactoryTests() {
         
         for (let step = 0; step < 50; step++) {
             sim.step();
-            const result = sim.download();
+            const result = await sim.download();
             
             // Find the unit
             let foundUnit = false;
@@ -2243,7 +2243,7 @@ export async function runUnitMovementNearFactoryTests() {
         
         for (let step = 0; step < 50; step++) {
             sim.step();
-            const result = sim.download();
+            const result = await sim.download();
             
             // Find unit position
             for (let y = 0; y < TEST_GRID_SIZE; y++) {
@@ -2296,7 +2296,7 @@ export async function runUnitMovementNearFactoryTests() {
         
         for (let step = 0; step < 100; step++) {
             sim.step();
-            const result = sim.download();
+            const result = await sim.download();
             
             // Check if resource was mined
             const resourceCell = sim.getCell(result, 8, 5);
@@ -2352,7 +2352,7 @@ export async function runUnitMovementNearFactoryTests() {
             sim.step();
         }
         
-        const result = sim.download();
+        const result = await sim.download();
         
         // Count units and check their distribution
         let totalUnits = 0;
@@ -2439,7 +2439,7 @@ export async function runUnitMovementNearFactoryTests() {
         // Run simulation
         sim.stepN(STEPS);
         
-        const result = sim.download();
+        const result = await sim.download();
         
         // Calculate final center of mass
         let finalSumX = 0, finalSumY = 0, finalCount = 0;
@@ -2507,7 +2507,7 @@ export async function runUnitMovementNearFactoryTests() {
         sim.upload(data);
         sim.stepN(STEPS);
         
-        const result = sim.download();
+        const result = await sim.download();
         
         // Count units in each quadrant and at edges
         let topLeft = 0, topRight = 0, bottomLeft = 0, bottomRight = 0;
@@ -2587,7 +2587,7 @@ export async function runUnitMovementNearFactoryTests() {
             
             sim.stepN(STEPS_PER_TRIAL);
             
-            const result = sim.download();
+            const result = await sim.download();
             
             // Find where unit ended up
             for (let y = 0; y < GRID_SIZE; y++) {

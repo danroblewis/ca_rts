@@ -1,14 +1,14 @@
 /**
- * GLSL Shader Loader with #include Preprocessor
- * 
- * Supports:
- *   #include "path/to/file.glsl"
- *   #include "./relative/path.glsl"
- * 
+ * Shader Loader with #include Preprocessor
+ *
+ * Supports both GLSL (.glsl) and WGSL (.wgsl) files:
+ *   #include "path/to/file.wgsl"
+ *   #include "./relative/path.wgsl"
+ *
  * Paths are relative to the including file's directory.
  * Circular includes are detected and prevented.
  * Duplicate includes are tracked and skipped to reduce shader size.
- * 
+ *
  * Processing is done depth-first, in order, so that nested dependencies
  * are resolved before sibling includes can claim them.
  */

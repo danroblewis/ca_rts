@@ -43,7 +43,7 @@ class MockAudioReductionPipeline {
         this.initialized = true;
     }
     
-    run(texture) {
+    async run(texture) {
         return this.soundParams;
     }
     
@@ -132,9 +132,9 @@ class TestableAudioManager {
         }
     }
     
-    update(stateTexture) {
+    async update(stateTexture) {
         if (!this.initialized) return;
-        this.reductionPipeline.run(stateTexture);
+        await this.reductionPipeline.run(stateTexture);
         this.engine.update(this.reductionPipeline.getSoundParams());
     }
     
@@ -243,15 +243,15 @@ export async function runAudioManagerTests() {
     await runTest('update does nothing when not initialized', async () => {
         const audioManager = new TestableAudioManager({ gridSize: 512 });
         // Should not throw
-        audioManager.update({});
+        await audioManager.update({});
         assert(audioManager.isInitialized() === false, 'Should still be uninitialized');
     });
-    
+
     await runTest('update runs pipeline when initialized', async () => {
         const audioManager = new TestableAudioManager({ gridSize: 512 });
         await audioManager.init();
         // Should not throw
-        audioManager.update({});
+        await audioManager.update({});
         assert(true, 'Update should complete without error');
     });
     

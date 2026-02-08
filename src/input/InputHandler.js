@@ -346,19 +346,19 @@ export class InputHandler {
             if (this.selectedRegion.x2 - this.selectedRegion.x1 >= 1 && 
                 this.selectedRegion.y2 - this.selectedRegion.y1 >= 1) {
                 
-                // Mark units in the selection region
-                const unitsMarked = this.markUnitsInRegion(this.selectedRegion);
-                
-                if (unitsMarked > 0) {
-                    this._hasActiveSelection = true;
-                    Logger.log('input', `[Selection] Selected region: ${JSON.stringify(this.selectedRegion)} with ${unitsMarked} units`);
-                    
-                    // Notify via callback
-                    this.onUnitSelection(this.selectedRegion);
-                } else {
-                    Logger.log('input', '[Selection] No units in region');
-                    this.clearSelection();
-                }
+                // Mark units in the selection region (async GPU readback)
+                Promise.resolve(this.markUnitsInRegion(this.selectedRegion)).then(unitsMarked => {
+                    if (unitsMarked > 0) {
+                        this._hasActiveSelection = true;
+                        Logger.log('input', `[Selection] Selected region: ${JSON.stringify(this.selectedRegion)} with ${unitsMarked} units`);
+
+                        // Notify via callback
+                        this.onUnitSelection(this.selectedRegion);
+                    } else {
+                        Logger.log('input', '[Selection] No units in region');
+                        this.clearSelection();
+                    }
+                });
             } else {
                 this.clearSelection();
             }

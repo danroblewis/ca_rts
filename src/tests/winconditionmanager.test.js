@@ -19,13 +19,13 @@ export async function runWinConditionManagerTests() {
     await runTest('WinConditionManager uses provided callbacks', async () => {
         let countCalled = false;
         let totalCalled = false;
-        
+
         const manager = new WinConditionManager({
-            countFactories: () => { countCalled = true; return { [PLAYER_1]: 1, [PLAYER_2]: 1 }; },
+            countFactories: async () => { countCalled = true; return { [PLAYER_1]: 1, [PLAYER_2]: 1 }; },
             getPlayerTotalFactoriesPlaced: () => { totalCalled = true; return { [PLAYER_1]: 1, [PLAYER_2]: 1 }; }
         });
-        
-        manager.check();
+
+        await manager.check();
         assert(countCalled === true, 'countFactories should be called');
         assert(totalCalled === true, 'getPlayerTotalFactoriesPlaced should be called');
     });
@@ -34,36 +34,36 @@ export async function runWinConditionManagerTests() {
 
     await runTest('check returns false when no factories placed', async () => {
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 0 }),
+            countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 0 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 0 })
         });
-        
-        const result = manager.check();
+
+        const result = await manager.check();
         assert(result === false, 'check should return false');
         assert(manager.gameOver === false, 'gameOver should remain false');
     });
 
     await runTest('check returns false when factories still exist', async () => {
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 2, [PLAYER_2]: 1 }),
+            countFactories: async () => ({ [PLAYER_1]: 2, [PLAYER_2]: 1 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 3, [PLAYER_2]: 2 })
         });
-        
-        const result = manager.check();
+
+        const result = await manager.check();
         assert(result === false, 'check should return false when factories exist');
         assert(manager.gameOver === false, 'gameOver should remain false');
     });
 
     await runTest('check detects Player 1 loss (all bases destroyed)', async () => {
         let gameOverWinner = null;
-        
+
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
+            countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 2, [PLAYER_2]: 1 }),
             onGameOver: (winner) => { gameOverWinner = winner; }
         });
-        
-        const result = manager.check();
+
+        const result = await manager.check();
         assert(result === true, 'check should return true when game ends');
         assert(manager.gameOver === true, 'gameOver should be true');
         assert(manager.winner === PLAYER_2, 'winner should be PLAYER_2');
@@ -72,14 +72,14 @@ export async function runWinConditionManagerTests() {
 
     await runTest('check detects Player 2 loss (all bases destroyed)', async () => {
         let gameOverWinner = null;
-        
+
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 3, [PLAYER_2]: 0 }),
+            countFactories: async () => ({ [PLAYER_1]: 3, [PLAYER_2]: 0 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 3, [PLAYER_2]: 1 }),
             onGameOver: (winner) => { gameOverWinner = winner; }
         });
-        
-        const result = manager.check();
+
+        const result = await manager.check();
         assert(result === true, 'check should return true when game ends');
         assert(manager.gameOver === true, 'gameOver should be true');
         assert(manager.winner === PLAYER_1, 'winner should be PLAYER_1');
@@ -88,25 +88,25 @@ export async function runWinConditionManagerTests() {
 
     await runTest('check does not trigger for player who never placed factories', async () => {
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
+            countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 })
         });
-        
-        const result = manager.check();
+
+        const result = await manager.check();
         assert(result === false, 'check should return false (P1 never placed anything)');
         assert(manager.gameOver === false, 'gameOver should remain false');
     });
 
     await runTest('check calls onFactoryCountsUpdated', async () => {
         let updatedCounts = null;
-        
+
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 5, [PLAYER_2]: 3 }),
+            countFactories: async () => ({ [PLAYER_1]: 5, [PLAYER_2]: 3 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 5, [PLAYER_2]: 3 }),
             onFactoryCountsUpdated: (counts) => { updatedCounts = counts; }
         });
-        
-        manager.check();
+
+        await manager.check();
         assert(updatedCounts !== null, 'onFactoryCountsUpdated should be called');
         assert(updatedCounts[PLAYER_1] === 5, 'P1 count should be 5');
         assert(updatedCounts[PLAYER_2] === 3, 'P2 count should be 3');
@@ -114,16 +114,16 @@ export async function runWinConditionManagerTests() {
 
     await runTest('check does nothing after game is over', async () => {
         let callCount = 0;
-        
+
         const manager = new WinConditionManager({
-            countFactories: () => { callCount++; return { [PLAYER_1]: 0, [PLAYER_2]: 1 }; },
+            countFactories: async () => { callCount++; return { [PLAYER_1]: 0, [PLAYER_2]: 1 }; },
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 1, [PLAYER_2]: 1 })
         });
-        
-        manager.check(); // First check triggers game over
+
+        await manager.check(); // First check triggers game over
         const beforeCount = callCount;
-        
-        manager.check(); // Second check should do nothing
+
+        await manager.check(); // Second check should do nothing
         assert(callCount === beforeCount, 'countFactories should not be called after game over');
     });
 
@@ -131,35 +131,35 @@ export async function runWinConditionManagerTests() {
 
     await runTest('isGameOver returns correct state', async () => {
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
+            countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 1, [PLAYER_2]: 1 })
         });
-        
+
         assert(manager.isGameOver() === false, 'isGameOver should be false initially');
-        manager.check();
+        await manager.check();
         assert(manager.isGameOver() === true, 'isGameOver should be true after loss');
     });
 
     await runTest('getWinner returns correct winner', async () => {
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
+            countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 1, [PLAYER_2]: 1 })
         });
-        
+
         assert(manager.getWinner() === null, 'getWinner should be null initially');
-        manager.check();
+        await manager.check();
         assert(manager.getWinner() === PLAYER_2, 'getWinner should return PLAYER_2');
     });
 
     await runTest('reset clears game state', async () => {
         const manager = new WinConditionManager({
-            countFactories: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
+            countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 1, [PLAYER_2]: 1 })
         });
-        
-        manager.check();
+
+        await manager.check();
         assert(manager.gameOver === true, 'gameOver should be true');
-        
+
         manager.reset();
         assert(manager.gameOver === false, 'gameOver should be false after reset');
         assert(manager.winner === null, 'winner should be null after reset');

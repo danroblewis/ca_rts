@@ -2,12 +2,12 @@ import { RingBuffer } from '../gpu/RingBuffer.js';
 
 /**
  * CAGrid - The cellular automata world state.
- * 
+ *
  * Uses a RingBuffer (8 frames of history) instead of simple ping-pong.
  * This enables temporal anti-aliasing by blending multiple frames
  * in the render shader.
- * 
- * All the actual cell logic happens in GLSL shaders.
+ *
+ * All the actual cell logic happens in WGSL compute shaders.
  */
 export class CAGrid {
     /**
@@ -26,12 +26,12 @@ export class CAGrid {
         return this.buffer.getReadTexture();
     }
 
-    /** Get the write framebuffer for shader output */
-    getWriteFramebuffer() {
-        return this.buffer.getWriteFramebuffer();
+    /** Get the write texture for compute shader output */
+    getWriteTexture() {
+        return this.buffer.getWriteTexture();
     }
 
-    /** 
+    /**
      * Get a texture by age (0 = current, 1 = one frame ago, etc.)
      * @param {number} age - How many frames ago
      * @returns {DataTexture}
@@ -62,12 +62,13 @@ export class CAGrid {
         this.buffer.swap();
     }
 
-    /** 
+    /**
      * Upload initial data from CPU.
-     * Fills all frames with the same data (for initialization/network sync).
+     * @param {Float32Array} data
+     * @param {boolean} [allFrames=false] - If true, fills all frames
      */
-    upload(data) {
-        this.buffer.upload(data);
+    upload(data, allFrames = false) {
+        this.buffer.upload(data, allFrames);
     }
 
     /**
@@ -78,8 +79,8 @@ export class CAGrid {
         this.buffer.uploadCurrent(data);
     }
 
-    /** Download current state to CPU (slow, avoid in hot path) */
-    download() {
+    /** Download current state to CPU (async, avoid in hot path) */
+    async download() {
         return this.buffer.download();
     }
 

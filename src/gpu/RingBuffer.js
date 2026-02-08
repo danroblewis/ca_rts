@@ -1,13 +1,15 @@
 import { DataTexture } from './DataTexture.js';
-import { Framebuffer } from './Framebuffer.js';
 
 /**
  * RingBuffer - Circular buffer of textures for iterative GPU computation
  * with temporal anti-aliasing support.
- * 
+ *
  * Instead of 2 ping-pong textures, we keep 8 frames of history.
  * This allows the render shader to blend across multiple frames
  * for smoother motion.
+ *
+ * WebGPU version: no framebuffers needed. Compute shaders write directly
+ * to storage textures.
  */
 export class RingBuffer {
     /**
@@ -23,17 +25,11 @@ export class RingBuffer {
 
         // Create textures for each frame
         this.textures = [];
-        this.framebuffers = [];
-        
         for (let i = 0; i < frameCount; i++) {
-            const texture = new DataTexture(width, height, options);
-            this.textures.push(texture);
-            this.framebuffers.push(new Framebuffer(texture));
+            this.textures.push(new DataTexture(width, height, options));
         }
 
         // writeIndex points to the next frame to write to
-        // After a simulation step: write to writeIndex, then increment
-        // Current state (most recent) is at (writeIndex - 1 + frameCount) % frameCount
         this.writeIndex = 0;
     }
 
@@ -47,7 +43,6 @@ export class RingBuffer {
 
     /**
      * Get the current read texture (contains current state).
-     * This is the most recently written frame.
      * @returns {DataTexture}
      */
     getReadTexture() {
@@ -63,22 +58,6 @@ export class RingBuffer {
     }
 
     /**
-     * Get the framebuffer for the write texture.
-     * @returns {Framebuffer}
-     */
-    getWriteFramebuffer() {
-        return this.framebuffers[this.writeIndex];
-    }
-
-    /**
-     * Get the framebuffer for the read texture (current state).
-     * @returns {Framebuffer}
-     */
-    getReadFramebuffer() {
-        return this.framebuffers[this.getCurrentIndex()];
-    }
-
-    /**
      * Get a texture by age (0 = current/newest, 1 = one frame ago, etc.)
      * @param {number} age - How many frames ago (0 to frameCount-1)
      * @returns {DataTexture}
@@ -90,7 +69,6 @@ export class RingBuffer {
 
     /**
      * Get all textures ordered by age (index 0 = newest, index 7 = oldest).
-     * Useful for passing to render shader for temporal AA.
      * @returns {DataTexture[]}
      */
     getAllTexturesByAge() {
@@ -103,34 +81,29 @@ export class RingBuffer {
 
     /**
      * Advance to the next frame after a simulation step.
-     * Call this after rendering to the write framebuffer.
      */
     swap() {
         this.writeIndex = (this.writeIndex + 1) % this.frameCount;
     }
 
     /**
-     * Upload initial data to ALL frames (fills history with same state).
-     * Use this for initialization only - slow (8x upload)!
-     * @param {Float32Array|Uint8Array} data 
-     * @param {boolean} allFrames - If true, upload to all frames (default: false, only current)
+     * Upload initial data to frames.
+     * @param {Float32Array|Uint8Array} data
+     * @param {boolean} allFrames - If true, upload to all frames (default: false)
      */
     upload(data, allFrames = false) {
         if (allFrames) {
-            // Upload to all frames - only for initial map generation
             for (let i = 0; i < this.frameCount; i++) {
                 this.textures[i].upload(data);
             }
         } else {
-            // Upload to just the current read frame - for network sync
             this.textures[this.getCurrentIndex()].upload(data);
         }
     }
 
     /**
      * Upload data to only the current read frame.
-     * Use this for incremental updates that don't need full history reset.
-     * @param {Float32Array|Uint8Array} data 
+     * @param {Float32Array|Uint8Array} data
      */
     uploadCurrent(data) {
         this.textures[this.getCurrentIndex()].upload(data);
@@ -138,13 +111,10 @@ export class RingBuffer {
 
     /**
      * Download data from the read buffer (current state).
-     * @returns {Float32Array|Uint8Array}
+     * @returns {Promise<Float32Array|Uint8Array>}
      */
-    download() {
-        const currentIndex = this.getCurrentIndex();
-        return this.textures[currentIndex].download(
-            this.framebuffers[currentIndex].framebuffer
-        );
+    async download() {
+        return this.textures[this.getCurrentIndex()].download();
     }
 
     /**
@@ -161,9 +131,7 @@ export class RingBuffer {
     destroy() {
         for (let i = 0; i < this.frameCount; i++) {
             this.textures[i].destroy();
-            this.framebuffers[i].destroy();
         }
         this.textures = [];
-        this.framebuffers = [];
     }
 }

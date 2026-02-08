@@ -9,8 +9,9 @@
  * - Explosion (5 cell radius, 10 frame duration)
  */
 
+import { GPU } from '../gpu/GPU.js';
 import { PingPongBuffer } from '../gpu/PingPongBuffer.js';
-import { ComputeShader } from '../gpu/ComputeShader.js';
+import { ComputePipeline } from '../gpu/ComputePipeline.js';
 import { loadShader } from '../shaders/load.js';
 import { runTest, assert, assertApprox, logSection } from './framework.js';
 
@@ -189,25 +190,24 @@ class MissileSimulation {
     constructor(gridSize) {
         this.gridSize = gridSize;
         this.pingpong = null;
-        this.shader = null;
+        this.pipeline = null;
+        this.uniformBuffer = null;
     }
-    
+
     async init() {
-        // Create PingPongBuffer with width, height, and format options (like other tests)
+        const gpu = GPU.get();
         this.pingpong = new PingPongBuffer(this.gridSize, this.gridSize, { format: 'float' });
-        
+
         // Load and compile shader
-        const fragSource = await loadShader('./src/shaders/ca/v2/mining_game.frag.glsl');
-        this.shader = new ComputeShader(fragSource);
-        
-        // Wait for shader to be ready (important for parallel compile)
-        await this.shader.waitReady();
+        const source = await loadShader('./src/shaders/ca/v2/mining_game.wgsl');
+        this.pipeline = new ComputePipeline(source, { label: 'Missile test' });
+        this.uniformBuffer = gpu.createUniformBuffer(16);
     }
-    
+
     createData() {
         return new Float32Array(this.gridSize * this.gridSize * 4);
     }
-    
+
     setCell(data, x, y, cellData) {
         const idx = (y * this.gridSize + x) * 4;
         data[idx] = cellData[0];
@@ -215,39 +215,39 @@ class MissileSimulation {
         data[idx + 2] = cellData[2];
         data[idx + 3] = cellData[3];
     }
-    
+
     getCell(data, x, y) {
         const idx = (y * this.gridSize + x) * 4;
         return [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
     }
-    
+
     getCellType(data, x, y) {
         return Math.round(this.getCell(data, x, y)[0]);
     }
-    
-    step(data, time = 0) {
+
+    async step(data, time = 0) {
+        const gpu = GPU.get();
+
         // Upload data to read buffer
         this.pingpong.upload(data);
-        
-        // Bind write framebuffer, run shader, swap buffers
-        this.pingpong.getWriteFramebuffer().bind();
-        this.shader.use();
-        this.shader.setTexture('u_state', this.pingpong.getReadTexture(), 0);
-        this.shader.setVec2('u_resolution', this.gridSize, this.gridSize);
-        this.shader.setFloat('u_time', time);
-        this.shader.setVec4('u_command', -1, -1, -1, -1);
-        this.shader.setFloat('u_commandPlayer', 0);
-        this.shader.setVec4('u_sourceRegion', -1, -1, -1, -1);
-        this.shader.dispatch();
-        this.pingpong.getWriteFramebuffer().unbind();
+
+        // Run compute shader
+        gpu.writeBuffer(this.uniformBuffer, new Float32Array([this.gridSize, this.gridSize, time, 0]));
+        const bindGroup = this.pipeline.createBindGroup([
+            { binding: 0, resource: this.pingpong.getReadTexture().view },
+            { binding: 1, resource: this.pingpong.getWriteTexture().view },
+            { binding: 2, resource: { buffer: this.uniformBuffer } }
+        ]);
+        const workgroups = Math.ceil(this.gridSize / 8);
+        this.pipeline.dispatch(bindGroup, workgroups, workgroups);
         this.pingpong.swap();
-        
+
         return this.pingpong.download();
     }
-    
+
     cleanup() {
         if (this.pingpong) this.pingpong.destroy();
-        if (this.shader) this.shader.destroy();
+        if (this.pipeline) this.pipeline.destroy();
     }
     
     // Create a 3x3 factory centered at (x, y)
@@ -384,7 +384,7 @@ export async function runMissileSpawnConditionTests(sim) {
         // Run simulation for several steps to allow missile spawn
         let result = data;
         for (let i = 0; i < 10; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // After simulation: check if missile cells appeared
@@ -438,7 +438,7 @@ export async function runMissileSpawnConditionTests(sim) {
         // Run simulation
         let result = data;
         for (let i = 0; i < 10; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Should NOT become missile with incomplete surrounding
@@ -591,7 +591,7 @@ export async function runMissileBuildingTests(sim) {
         // Run simulation for several steps
         let result = data;
         for (let i = 0; i < 5; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Check build progress increased OR missile became ARMED
@@ -643,7 +643,7 @@ export async function runMissileBuildingTests(sim) {
         // Run simulation for 3 steps
         let result = data;
         for (let i = 0; i < 3; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Count units that stayed near missile (check a larger area)
@@ -700,7 +700,7 @@ export async function runMissileBuildingTests(sim) {
         // With 12 units at ring distance, building should complete quickly
         let result = data;
         for (let i = 0; i < 5; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Check if missile became ARMED
@@ -793,7 +793,7 @@ export async function runMissileMovementTests(sim) {
         // Run several simulation steps
         let result = data;
         for (let i = 0; i < 5; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Check if missile has moved - find any missile cell and get its center
@@ -841,7 +841,7 @@ export async function runMissileMovementTests(sim) {
         // Run simulation until missile passes through
         let result = data;
         for (let i = 0; i < 20; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Walls in the path should be destroyed
@@ -953,7 +953,7 @@ export async function runMissileExplosionTests(sim) {
         // Run simulation through explosion duration
         let result = data;
         for (let i = 0; i < MISSILE_EXPLOSION_DURATION + 5; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Walls in the explosion radius should be destroyed
@@ -1075,7 +1075,7 @@ export async function runExplosionParticleTests(sim) {
         sim.setCell(data, 16, 16, createExplosionParticle(startLifetime));
         
         // Run 1 simulation step
-        let result = sim.step(data, 0);
+        let result = await sim.step(data, 0);
         
         // Find the explosion particle (may have moved)
         let found = false;
@@ -1104,8 +1104,8 @@ export async function runExplosionParticleTests(sim) {
         sim.setCell(data, 16, 16, createExplosionParticle(1));
         
         // Run 2 simulation steps
-        let result = sim.step(data, 0);
-        result = sim.step(result, 1);
+        let result = await sim.step(data, 0);
+        result = await sim.step(result, 1);
         
         // Count explosion particles
         const explosionCount = sim.countCellType(result, CELL_EXPLOSION);
@@ -1129,7 +1129,7 @@ export async function runExplosionParticleTests(sim) {
         assert(initialWallCount === 4, `Should start with 4 walls`);
         
         // Run simulation
-        let result = sim.step(data, 0);
+        let result = await sim.step(data, 0);
         
         // Some walls should be destroyed
         const remainingWallCount = sim.countCellType(result, CELL_WALL);
@@ -1156,7 +1156,7 @@ export async function runExplosionParticleTests(sim) {
         // Run simulation for several steps
         let result = data;
         for (let i = 0; i < 5; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Check for explosion particles
@@ -1184,7 +1184,7 @@ export async function runExplosionParticleTests(sim) {
         // Run several simulation steps
         let result = data;
         for (let i = 0; i < 10; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Find the particle's new position
@@ -1222,7 +1222,7 @@ export async function runMissileSpeedTests(sim) {
         sim.createMissileStructure(data, startX, startY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_MOVING, destX, destY);
         
         // Run exactly 1 frame (should NOT move on frame 1)
-        let result = sim.step(data, 1);  // Time=1, not a move frame
+        let result = await sim.step(data, 1);  // Time=1, not a move frame
         
         // Find missile center
         let centerX = -1;
@@ -1252,7 +1252,7 @@ export async function runMissileSpeedTests(sim) {
         sim.createMissileStructure(data, startX, startY, MISSILE_BUILD_THRESHOLD, 1, MISSILE_MOVING, destX, destY);
         
         // Run exactly 6 frames (frame 0 is a move frame, so run time=0)
-        let result = sim.step(data, 0);  // Time=0, IS a move frame
+        let result = await sim.step(data, 0);  // Time=0, IS a move frame
         
         // Find missile center
         let centerX = -1;
@@ -1284,7 +1284,7 @@ export async function runMissileSpeedTests(sim) {
         // Run 36 frames (should move 6 cells with MOVE_DELAY of 6)
         let result = data;
         for (let i = 0; i < 36; i++) {
-            result = sim.step(result, i);
+            result = await sim.step(result, i);
         }
         
         // Missile should have reached destination and be exploding

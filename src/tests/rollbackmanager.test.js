@@ -133,12 +133,12 @@ function createTestRollbackManager() {
     const manager = new RollbackManager({
         checkpointBuffer,
         actionQueue,
-        getGridData: () => gridData,
+        getGridData: async () => gridData,
         uploadGridData: (data) => { gridData = new Float32Array(data); },
         getCurrentTick: () => currentTick,
         setTick: (tick) => { currentTick = tick; },
         simulationStep: () => { currentTick += 1; simStepsRun++; },
-        applyAction: (action, playerId) => { appliedActions.push({ action, playerId }); }
+        applyAction: async (action, playerId) => { appliedActions.push({ action, playerId }); }
     });
     
     return {
@@ -182,7 +182,7 @@ export async function runRollbackManagerTests() {
         assert(manager.shouldSaveCheckpoint() === true, 'Should save first checkpoint');
         
         // After saving, should wait for interval
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         assert(manager.shouldSaveCheckpoint() === false, 'Should not save immediately after');
         
         // Advance to interval
@@ -200,7 +200,7 @@ export async function runRollbackManagerTests() {
         setGridData(testData);
         setTick(50);
         
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         
         assert(checkpointBuffer.checkpoints.length === 1, 'Should have one checkpoint');
         assert(checkpointBuffer.checkpoints[0].tick === 50, 'Checkpoint should be at tick 50');
@@ -212,7 +212,7 @@ export async function runRollbackManagerTests() {
         const { manager, checkpointBuffer, setTick } = createTestRollbackManager();
         
         setTick(100);
-        manager.saveInitialCheckpoint(100);
+        await manager.saveInitialCheckpoint(100);
         
         assert(checkpointBuffer.checkpoints.length === 1, 'Should have one checkpoint');
         assert(checkpointBuffer.checkpoints[0].tick === 100, 'Checkpoint should be at tick 100');
@@ -252,7 +252,7 @@ export async function runRollbackManagerTests() {
         
         setTick(10);
         const action = { type: 'place_factory', x: 5, y: 5 };
-        manager.processRemoteAction(action, 2, 15); // Action at tick 15, we're at 10
+        await manager.processRemoteAction(action, 2, 15); // Action at tick 15, we're at 10
         
         assert(actionQueue.actions.length === 1, 'Should have one action');
         assert(actionQueue.actions[0].tick === 15, 'Action should be at tick 15');
@@ -264,15 +264,15 @@ export async function runRollbackManagerTests() {
         
         // Save a checkpoint at tick 10
         setTick(10);
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         
         // Advance to tick 20
         setTick(20);
         
         // Receive action from tick 15 (in the past)
         const action = { type: 'place_factory', x: 5, y: 5 };
-        manager.processRemoteAction(action, 2, 15);
-        
+        await manager.processRemoteAction(action, 2, 15);
+
         // Should have applied the action during rollback
         const applied = getAppliedActions();
         assert(applied.length >= 1, 'Should have applied at least one action');
@@ -292,7 +292,7 @@ export async function runRollbackManagerTests() {
         const checkpointData = new Float32Array(100);
         checkpointData[0] = 555;
         setGridData(checkpointData);
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         
         // Advance to tick 15
         setTick(15);
@@ -300,8 +300,8 @@ export async function runRollbackManagerTests() {
         
         // Trigger rollback to tick 10
         const action = { type: 'demolish', x: 10, y: 10 };
-        manager.rollbackAndReplay(10, action, 2);
-        
+        await manager.rollbackAndReplay(10, action, 2);
+
         // Should have replayed simulation steps
         const simSteps = getSimStepsRun();
         assert(simSteps === 10, `Should have run 10 sim steps, got ${simSteps}`);
@@ -316,7 +316,7 @@ export async function runRollbackManagerTests() {
         
         // Save checkpoint at tick 0
         setTick(0);
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         
         // Add a local action at tick 5
         setTick(5);
@@ -329,8 +329,8 @@ export async function runRollbackManagerTests() {
         
         // Receive remote action at tick 3
         const remoteAction = { type: 'place_factory', x: 50, y: 50 };
-        manager.rollbackAndReplay(3, remoteAction, 2);
-        
+        await manager.rollbackAndReplay(3, remoteAction, 2);
+
         // Both actions should have been applied
         const applied = getAppliedActions();
         assert(applied.length === 2, `Should have applied 2 actions, got ${applied.length}`);
@@ -345,8 +345,8 @@ export async function runRollbackManagerTests() {
         
         // Receive action from tick 5
         const action = { type: 'place_factory', x: 5, y: 5 };
-        manager.rollbackAndReplay(5, action, 2);
-        
+        await manager.rollbackAndReplay(5, action, 2);
+
         // Should still apply the action (fallback behavior)
         const applied = getAppliedActions();
         assert(applied.length === 1, 'Should have applied the action as fallback');
@@ -357,12 +357,12 @@ export async function runRollbackManagerTests() {
         const { manager, setTick } = createTestRollbackManager();
         
         setTick(0);
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         setTick(10);
         
         const action = { type: 'demolish', x: 1, y: 1 };
-        manager.rollbackAndReplay(5, action, 2);
-        
+        await manager.rollbackAndReplay(5, action, 2);
+
         const stats = manager.getStats();
         assert(stats.rollbackCount === 1, 'Should have 1 rollback');
         assert(stats.totalSimStepsReplayed === 10, `Should have 10 sim steps replayed, got ${stats.totalSimStepsReplayed}`);
@@ -375,7 +375,7 @@ export async function runRollbackManagerTests() {
         
         // Add some data
         setTick(10);
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         manager.storeLocalAction({ type: 'test' }, 1);
         
         assert(checkpointBuffer.checkpoints.length === 1, 'Should have checkpoint before clear');
@@ -392,7 +392,7 @@ export async function runRollbackManagerTests() {
         const { manager, setTick } = createTestRollbackManager();
         
         setTick(10);
-        manager.saveCheckpoint();
+        await manager.saveCheckpoint();
         manager.storeLocalAction({ type: 'test' }, 1);
         
         const stats = manager.getStats();

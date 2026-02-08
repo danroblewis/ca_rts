@@ -37,27 +37,19 @@ function createMockGame() {
         playerTotalFactoriesPlaced: { 1: 0, 2: 0 },
         factoriesPlaced: 0,
         grid: {
-            download: () => new Uint8Array(100),
+            download: async () => new Uint8Array(100),
             upload: () => {},
             getReadTexture: () => ({}),
-            getWriteFramebuffer: () => ({ bind: () => {}, unbind: () => {} }),
             swap: () => {}
-        },
-        simShader: {
-            use: () => {},
-            setTexture: () => {},
-            setVec2: () => {},
-            setFloat: () => {},
-            dispatch: () => {}
         },
         gameUI: {
             updatePlayerIndicator: () => {},
             setTargetTick: () => {}
         },
         rollbackManager: {
-            processRemoteAction: () => {},
+            processRemoteAction: async () => {},
             clear: () => {},
-            saveInitialCheckpoint: () => {}
+            saveInitialCheckpoint: async () => {}
         },
         generateMap: () => {},
         simulationStep: () => {}
@@ -278,7 +270,7 @@ export async function runNetworkManagerTests() {
         let processedAction = null;
         let processedPlayer = null;
         let processedTick = null;
-        game.rollbackManager.processRemoteAction = (action, player, tick) => {
+        game.rollbackManager.processRemoteAction = async (action, player, tick) => {
             processedAction = action;
             processedPlayer = player;
             processedTick = tick;

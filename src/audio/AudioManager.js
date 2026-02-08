@@ -162,16 +162,22 @@ export class AudioManager {
     
     /**
      * Run audio update with current game state
-     * @param {WebGLTexture} stateTexture - Current grid state texture
+     * @param {DataTexture} stateTexture - Current grid state texture
      */
     update(stateTexture) {
         if (!this.initialized) return;
-        
-        // Run reduction pipeline on current game state
-        this.reductionPipeline.run(stateTexture);
-        
-        // Update audio engine with sound parameters
-        this.engine.update(this.reductionPipeline.getSoundParams());
+
+        // Avoid overlapping async updates
+        if (this._updateInProgress) return;
+        this._updateInProgress = true;
+
+        // Run async reduction pipeline, then update audio engine
+        this.reductionPipeline.run(stateTexture).then(() => {
+            this.engine.update(this.reductionPipeline.getSoundParams());
+            this._updateInProgress = false;
+        }).catch(() => {
+            this._updateInProgress = false;
+        });
     }
     
     /**

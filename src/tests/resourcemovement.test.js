@@ -7,8 +7,9 @@
  * - Movement rate (resources move slowly)
  */
 
+import { GPU } from '../gpu/GPU.js';
 import { PingPongBuffer } from '../gpu/PingPongBuffer.js';
-import { ComputeShader } from '../gpu/ComputeShader.js';
+import { ComputePipeline } from '../gpu/ComputePipeline.js';
 import { loadShader } from '../shaders/load.js';
 import { runTest, assert, logSection } from './framework.js';
 
@@ -57,34 +58,35 @@ function getCellType(cell) {
 // Resource Movement Simulation Helper
 // ============================================================================
 
-// Shared shader instance (compiled once, reused across all tests)
-let sharedShader = null;
+// Shared pipeline instance (compiled once, reused across all tests)
+let sharedPipeline = null;
+let sharedUniformBuffer = null;
 
 /**
- * Initialize the shared shader. Call once before running tests.
+ * Initialize the shared pipeline. Call once before running tests.
  */
 async function initSharedShader() {
-    if (!sharedShader) {
-        const source = await loadShader('./src/shaders/ca/v2/mining_game.frag.glsl');
-        sharedShader = new ComputeShader(source);
+    if (!sharedPipeline) {
+        const source = await loadShader('./src/shaders/ca/v2/mining_game.wgsl');
+        sharedPipeline = new ComputePipeline(source, { label: 'Resource movement test' });
+        sharedUniformBuffer = GPU.get().createUniformBuffer(16);
     }
-    return sharedShader;
+    return sharedPipeline;
 }
 
 function createResourceSimulation(width, height) {
+    const gpu = GPU.get();
     const buffer = new PingPongBuffer(width, height, { format: 'float' });
     let time = 0;
-    
+
     return {
         buffer,
         width,
         height,
-        
-        // No-op for backwards compatibility - shader is already initialized
-        async init() {
-            // Shader is shared, no initialization needed per-test
-        },
-        
+
+        // No-op for backwards compatibility - pipeline is already initialized
+        async init() {},
+
         setCell(data, x, y, cellData) {
             const idx = (y * width + x) * 4;
             data[idx + 0] = cellData[0];
@@ -92,48 +94,49 @@ function createResourceSimulation(width, height) {
             data[idx + 2] = cellData[2];
             data[idx + 3] = cellData[3];
         },
-        
+
         getCell(data, x, y) {
             const idx = (y * width + x) * 4;
             return [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
         },
-        
+
         step(timeIncrement = 1) {
-            buffer.getWriteFramebuffer().bind();
-            sharedShader.use();
-            sharedShader.setTexture('u_state', buffer.getReadTexture(), 0);
-            sharedShader.setVec2('u_resolution', width, height);
-            sharedShader.setFloat('u_time', time);
-            sharedShader.dispatch();
-            buffer.getWriteFramebuffer().unbind();
+            gpu.writeBuffer(sharedUniformBuffer, new Float32Array([width, height, time, 0]));
+            const bindGroup = sharedPipeline.createBindGroup([
+                { binding: 0, resource: buffer.getReadTexture().view },
+                { binding: 1, resource: buffer.getWriteTexture().view },
+                { binding: 2, resource: { buffer: sharedUniformBuffer } }
+            ]);
+            const workgroupsX = Math.ceil(width / 8);
+            const workgroupsY = Math.ceil(height / 8);
+            sharedPipeline.dispatch(bindGroup, workgroupsX, workgroupsY);
             buffer.swap();
             time += timeIncrement;
         },
-        
+
         stepN(n, timeIncrement = 1) {
             for (let i = 0; i < n; i++) {
                 this.step(timeIncrement);
             }
         },
-        
+
         setTime(t) {
             time = t;
         },
-        
+
         upload(data) {
             buffer.upload(data);
         },
-        
-        download() {
+
+        async download() {
             return buffer.download();
         },
-        
+
         createEmptyGrid() {
             return new Float32Array(width * height * 4);
         },
-        
+
         destroy() {
-            // Only destroy the buffer, not the shared shader
             buffer.destroy();
         }
     };
@@ -344,7 +347,7 @@ export async function runResourceMovementTests() {
         sim.stepN(BIAS_TEST_STEPS);
         
         // Analyze final state
-        const finalData = sim.download();
+        const finalData = await sim.download();
         const finalStretch = getStretchRatio(sim, finalData);
         
         console.log(`  Final: ${finalStretch.count} resources, stretch ratio: ${finalStretch.ratio.toFixed(2)} (λ1=${finalStretch.lambda1.toFixed(2)}, λ2=${finalStretch.lambda2.toFixed(2)})`);
@@ -380,7 +383,7 @@ export async function runResourceMovementTests() {
         sim.stepN(BIAS_TEST_STEPS);
         
         // Analyze final state
-        const finalData = sim.download();
+        const finalData = await sim.download();
         const finalCOM = getResourceCenterOfMass(sim, finalData);
         
         // Calculate drift
@@ -425,7 +428,7 @@ export async function runResourceMovementTests() {
             const stepsToRun = checkpoint - (sim.buffer.time || 0);
             sim.stepN(stepsToRun);
             
-            const checkData = sim.download();
+            const checkData = await sim.download();
             const stretch = getStretchRatio(sim, checkData);
             
             console.log(`  Step ${checkpoint}: stretch ratio ${stretch.ratio.toFixed(2)} (λ1=${stretch.lambda1.toFixed(2)}, λ2=${stretch.lambda2.toFixed(2)})`);
@@ -462,7 +465,7 @@ export async function runResourceMovementTests() {
         // Run simulation
         sim.stepN(BIAS_TEST_STEPS);
         
-        const finalData = sim.download();
+        const finalData = await sim.download();
         const finalCount = countResources(sim, finalData);
         
         console.log(`  Final resources: ${finalCount}`);
@@ -502,7 +505,7 @@ export async function runResourceMovementTests() {
             const stepsToRun = checkpoint - (checkpoint === 250 ? 0 : checkpoints[checkpoints.indexOf(checkpoint) - 1]);
             sim.stepN(stepsToRun);
             
-            const checkData = sim.download();
+            const checkData = await sim.download();
             const analysis = getStretchRatio(sim, checkData);
             const currentSpread = analysis.lambda1 + analysis.lambda2;
             const spreadRatio = currentSpread / initialSpread;

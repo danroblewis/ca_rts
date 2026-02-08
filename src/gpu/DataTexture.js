@@ -1,12 +1,12 @@
 import { GPU } from './GPU.js';
 
 /**
- * DataTexture - A texture used for storing data (not just images).
- * 
+ * DataTexture - A WebGPU texture used for storing data (not just images).
+ *
  * Supports:
  * - RGBA32F (float) for high-precision data
  * - RGBA8 (byte) for compact data
- * 
+ *
  * Uses NEAREST filtering for exact cell values (no interpolation).
  */
 export class DataTexture {
@@ -19,52 +19,42 @@ export class DataTexture {
      */
     constructor(width, height, options = {}) {
         const gpu = GPU.get();
-        const gl = gpu.gl;
 
         this.width = width;
         this.height = height;
         this.format = options.format || 'float';
 
-        // Determine WebGL format based on data type
+        // Determine WebGPU format based on data type
         if (this.format === 'float') {
-            this.internalFormat = gl.RGBA32F;
-            this.glFormat = gl.RGBA;
-            this.glType = gl.FLOAT;
+            this.gpuFormat = 'rgba32float';
             this.bytesPerPixel = 16; // 4 floats * 4 bytes
             this.ArrayType = Float32Array;
         } else {
-            this.internalFormat = gl.RGBA8;
-            this.glFormat = gl.RGBA;
-            this.glType = gl.UNSIGNED_BYTE;
+            this.gpuFormat = 'rgba8unorm';
             this.bytesPerPixel = 4; // 4 bytes
             this.ArrayType = Uint8Array;
         }
 
         // Create the texture
-        this.texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        this.texture = gpu.device.createTexture({
+            size: { width, height },
+            format: this.gpuFormat,
+            usage:
+                GPUTextureUsage.TEXTURE_BINDING |
+                GPUTextureUsage.STORAGE_BINDING |
+                GPUTextureUsage.COPY_SRC |
+                GPUTextureUsage.COPY_DST |
+                GPUTextureUsage.RENDER_ATTACHMENT,
+            label: `DataTexture ${width}x${height} ${this.format}`
+        });
 
-        // Set texture parameters - NEAREST for exact values
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        // Create a default view
+        this.view = this.texture.createView();
 
-        // Allocate texture storage
-        const data = options.data || null;
-        gl.texImage2D(
-            gl.TEXTURE_2D,
-            0,
-            this.internalFormat,
-            width,
-            height,
-            0,
-            this.glFormat,
-            this.glType,
-            data
-        );
-
-        gl.bindTexture(gl.TEXTURE_2D, null);
+        // Upload initial data if provided
+        if (options.data) {
+            this.upload(options.data);
+        }
     }
 
     /**
@@ -77,65 +67,90 @@ export class DataTexture {
      */
     upload(data, x = 0, y = 0, width = this.width, height = this.height) {
         const gpu = GPU.get();
-        const gl = gpu.gl;
 
-        gl.bindTexture(gl.TEXTURE_2D, this.texture);
-        gl.texSubImage2D(
-            gl.TEXTURE_2D,
-            0,
-            x,
-            y,
-            width,
-            height,
-            this.glFormat,
-            this.glType,
-            data
+        gpu.device.queue.writeTexture(
+            { texture: this.texture, origin: { x, y } },
+            data,
+            { bytesPerRow: width * this.bytesPerPixel, rowsPerImage: height },
+            { width, height }
         );
-        gl.bindTexture(gl.TEXTURE_2D, null);
     }
 
     /**
      * Read data from the texture back to CPU.
-     * NOTE: This is slow! Avoid in hot paths.
-     * @param {WebGLFramebuffer} framebuffer - Framebuffer with this texture attached
-     * @returns {Float32Array|Uint8Array}
+     * NOTE: This is async and slow! Avoid in hot paths.
+     * @returns {Promise<Float32Array|Uint8Array>}
      */
-    download(framebuffer) {
+    async download() {
         const gpu = GPU.get();
-        const gl = gpu.gl;
 
-        // Force GPU to complete all pending work before reading
-        // This prevents unpredictable stalls during readPixels
-        gl.finish();
+        const bytesPerRow = Math.ceil((this.width * this.bytesPerPixel) / 256) * 256;
+        const bufferSize = bytesPerRow * this.height;
 
-        const data = new this.ArrayType(this.width * this.height * 4);
+        // Create a staging buffer for readback
+        const stagingBuffer = gpu.device.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+            label: 'DataTexture download staging'
+        });
 
-        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-        gl.readPixels(0, 0, this.width, this.height, this.glFormat, this.glType, data);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        // Copy texture to staging buffer
+        const encoder = gpu.createCommandEncoder('DataTexture download');
+        encoder.copyTextureToBuffer(
+            { texture: this.texture },
+            { buffer: stagingBuffer, bytesPerRow, rowsPerImage: this.height },
+            { width: this.width, height: this.height }
+        );
+        gpu.submit([encoder.finish()]);
 
-        return data;
+        // Map the staging buffer and read data
+        await stagingBuffer.mapAsync(GPUMapMode.READ);
+        const mappedRange = stagingBuffer.getMappedRange();
+
+        // Copy data out (handling potential row padding)
+        const actualBytesPerRow = this.width * this.bytesPerPixel;
+        const result = new this.ArrayType(this.width * this.height * 4);
+
+        if (bytesPerRow === actualBytesPerRow) {
+            // No padding, direct copy
+            result.set(new this.ArrayType(mappedRange));
+        } else {
+            // Has padding, copy row by row
+            const src = new this.ArrayType(mappedRange);
+            const srcElementsPerRow = bytesPerRow / (this.bytesPerPixel / 4);
+            const dstElementsPerRow = this.width * 4;
+            for (let row = 0; row < this.height; row++) {
+                const srcOffset = row * (bytesPerRow / (this.format === 'float' ? 4 : 1));
+                const dstOffset = row * dstElementsPerRow;
+                result.set(
+                    src.subarray(srcOffset, srcOffset + dstElementsPerRow),
+                    dstOffset
+                );
+            }
+        }
+
+        stagingBuffer.unmap();
+        stagingBuffer.destroy();
+
+        return result;
     }
 
     /**
-     * Bind this texture to a texture unit.
-     * @param {number} unit - Texture unit index (0-15)
+     * Create a texture view (for bind group creation).
+     * @returns {GPUTextureView}
      */
-    bind(unit = 0) {
-        const gpu = GPU.get();
-        const gl = gpu.gl;
-
-        gl.activeTexture(gl.TEXTURE0 + unit);
-        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    createView() {
+        return this.texture.createView();
     }
 
     /**
      * Clean up GPU resources.
      */
     destroy() {
-        const gpu = GPU.get();
-        const gl = gpu.gl;
-        gl.deleteTexture(this.texture);
-        this.texture = null;
+        if (this.texture) {
+            this.texture.destroy();
+            this.texture = null;
+            this.view = null;
+        }
     }
 }

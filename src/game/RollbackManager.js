@@ -59,12 +59,13 @@ export class RollbackManager {
     /**
      * Save a checkpoint at the current tick.
      * Called from the simulation loop after a simulation step.
+     * NOTE: Async because grid download is async in WebGPU.
      */
-    saveCheckpoint() {
+    async saveCheckpoint() {
         const tick = this.getCurrentTick();
-        const gridData = this.getGridData();
+        const gridData = await this.getGridData();
         this.checkpointBuffer.saveCheckpoint(tick, gridData);
-        
+
         // Garbage collect old applied actions
         const oldestCheckpointTick = this.checkpointBuffer.getOldestTick();
         this.actionQueue.garbageCollectBeforeCheckpoint(oldestCheckpointTick);
@@ -91,15 +92,15 @@ export class RollbackManager {
      * @param {number} playerId - The player who performed the action
      * @param {number} actionTick - The tick when the action was performed
      */
-    processRemoteAction(action, playerId, actionTick) {
+    async processRemoteAction(action, playerId, actionTick) {
         const currentTick = this.getCurrentTick();
         const tickDelta = currentTick - actionTick;
-        
+
         Logger.log('network', `Received: ${action.type} from P${playerId} at tick ${actionTick} (we're at ${currentTick}, delta=${tickDelta})`);
-        
+
         if (actionTick <= currentTick) {
             // Action is in the past - need to rollback and replay
-            this.rollbackAndReplay(actionTick, action, playerId);
+            await this.rollbackAndReplay(actionTick, action, playerId);
         } else {
             // Action is in the future - queue it for later
             this.actionQueue.addAction(actionTick, playerId, action.type, action, false);
@@ -115,7 +116,7 @@ export class RollbackManager {
      * @param {Object} incomingAction - The new action that triggered rollback
      * @param {number} incomingPlayerId - The player who performed the incoming action
      */
-    rollbackAndReplay(targetTick, incomingAction, incomingPlayerId) {
+    async rollbackAndReplay(targetTick, incomingAction, incomingPlayerId) {
         const currentTick = this.getCurrentTick();
         const rollbackStart = performance.now();
         
@@ -144,16 +145,16 @@ export class RollbackManager {
         if (!checkpoint) {
             Logger.error('rollback', `No checkpoint found before tick ${rollbackToTick}, oldest: ${this.checkpointBuffer.getOldestTick()}`);
             // Fallback: just apply the action directly without rollback
-            this.applyAction(incomingAction, incomingPlayerId);
+            await this.applyAction(incomingAction, incomingPlayerId);
             return;
         }
-        
+
         Logger.log('checkpoint', `Using checkpoint at tick ${checkpoint.tick} (target: ${rollbackToTick})`);
-        
+
         // Verify checkpoint is strictly BEFORE the rollback target
         if (checkpoint.tick >= rollbackToTick) {
             Logger.error('rollback', `Checkpoint at ${checkpoint.tick} is NOT before target ${rollbackToTick}!`);
-            this.applyAction(incomingAction, incomingPlayerId);
+            await this.applyAction(incomingAction, incomingPlayerId);
             return;
         }
         
@@ -185,7 +186,7 @@ export class RollbackManager {
             for (const action of actionsAtTick) {
                 if (!action.applied) {
                     Logger.log('action', `Replay: ${action.type} at tick ${tickNow} for P${action.playerId}`);
-                    this.applyAction(action.data, action.playerId);
+                    await this.applyAction(action.data, action.playerId);
                     action.applied = true;
                     actionsApplied++;
                 }
@@ -202,7 +203,7 @@ export class RollbackManager {
         for (const action of finalActions) {
             if (!action.applied) {
                 Logger.log('action', `Final: ${action.type} at tick ${finalTick} for P${action.playerId}`);
-                this.applyAction(action.data, action.playerId);
+                await this.applyAction(action.data, action.playerId);
                 action.applied = true;
                 actionsApplied++;
             }
@@ -237,8 +238,8 @@ export class RollbackManager {
      * Save an initial checkpoint after receiving state sync.
      * @param {number} tick - The tick to save at
      */
-    saveInitialCheckpoint(tick) {
-        const gridData = this.getGridData();
+    async saveInitialCheckpoint(tick) {
+        const gridData = await this.getGridData();
         this.checkpointBuffer.saveCheckpoint(tick, gridData);
         Logger.log('checkpoint', `Saved initial checkpoint at tick ${tick}`);
     }

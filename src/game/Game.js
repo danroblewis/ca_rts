@@ -5,6 +5,7 @@
  * and child components receive references to what they need.
  */
 
+import { GPU } from '../gpu/GPU.js';
 import { PLAYER_1, PLAYER_2 } from '../utils/GameUtils.js';
 import { initCamera } from './Camera.js';
 import { GridActions } from './GridActions.js';
@@ -25,10 +26,13 @@ export class Game {
         this.config = config;
         
         // Core references (passed in from bootstrap)
-        this.gl = config.gl;
         this.canvas = config.canvas;
         this.simShader = config.simShader;
         this.renderShader = config.renderShader;
+
+        // Uniform buffer for simulation params: resolution(vec2f) + time(f32) + _pad(f32) = 16 bytes
+        const gpu = GPU.get();
+        this.simUniformBuffer = gpu.createUniformBuffer(16, 'SimParams');
         
         // Game state
         this.simTime = 0;
@@ -119,10 +123,11 @@ export class Game {
         this.actionQueue = new ActionQueue();
         
         // RollbackManager (initialized with callbacks that reference this)
+        // NOTE: getGridData is async (WebGPU texture download)
         this.rollbackManager = new RollbackManager({
             checkpointBuffer: this.checkpointBuffer,
             actionQueue: this.actionQueue,
-            getGridData: () => this.grid.download(),
+            getGridData: async () => await this.grid.download(),
             uploadGridData: (data) => this.grid.uploadCurrent(data),
             getCurrentTick: () => Math.floor(this.simTime),
             setTick: (tick) => { this.simTime = tick; },
@@ -139,8 +144,8 @@ export class Game {
         
         // Win condition manager
         this.winConditionManager = new WinConditionManager({
-            countFactories: () => {
-                const data = this.grid.download();
+            countFactories: async () => {
+                const data = await this.grid.download();
                 return this.gridActions.countFactories(data);
             },
             getPlayerTotalFactoriesPlaced: () => this.playerTotalFactoriesPlaced,
@@ -251,17 +256,17 @@ export class Game {
     // Selection management
     // ========================================================================
     
-    markUnitsInRegion(region) {
-        const currentData = this.grid.download();
+    async markUnitsInRegion(region) {
+        const currentData = await this.grid.download();
         const unitsMarked = this.gridActions.markUnitsInRegion(currentData, region, this.currentPlayer);
         if (unitsMarked > 0) {
             this.grid.upload(currentData);
         }
         return unitsMarked;
     }
-    
-    clearAllSelections() {
-        const currentData = this.grid.download();
+
+    async clearAllSelections() {
+        const currentData = await this.grid.download();
         const unitsCleared = this.gridActions.clearAllSelections(currentData, this.currentPlayer);
         if (unitsCleared > 0) {
             this.grid.upload(currentData);
@@ -273,62 +278,62 @@ export class Game {
     // Input action handlers
     // ========================================================================
     
-    handlePlaceFactory(x, y) {
-        const currentData = this.grid.download();
-        
+    async handlePlaceFactory(x, y) {
+        const currentData = await this.grid.download();
+
         // Validation
         if (this.isMultiplayer && this.connectedPlayers.size < 2) {
             console.log('Waiting for opponent to join');
             this.audioManager.getEngine()?.playReject();
             return;
         }
-        
+
         if (!this.gridActions.canPlaceFactory(currentData, x, y)) {
             console.log('Cannot place factory - location blocked');
             this.audioManager.getEngine()?.playReject();
             return;
         }
-        
+
         if (this.playerFactoryCounts[this.currentPlayer] >= this.config.maxFactoriesPerPlayer) {
             console.log('Max factories reached');
             this.audioManager.getEngine()?.playReject();
             return;
         }
-        
+
         const isUnbuilt = this.playerFactoryCounts[this.currentPlayer] > 0;
         const action = { type: 'place_factory', x, y, isUnbuilt };
-        
+
         this.actionApplier.applyPlaceFactory(currentData, action, this.currentPlayer);
         this.grid.upload(currentData);
-        
+
         this.syncAction({ ...action, player: this.currentPlayer, factoryNumber: this.factoriesPlaced });
     }
-    
-    handleDemolish(x, y) {
-        const currentData = this.grid.download();
+
+    async handleDemolish(x, y) {
+        const currentData = await this.grid.download();
         const action = { type: 'demolish', x, y };
-        
+
         const modified = this.actionApplier.applyDemolish(currentData, action, this.currentPlayer);
         if (modified) {
             this.grid.upload(currentData);
             this.syncAction({ ...action, player: this.currentPlayer });
         }
     }
-    
-    handleUnitCommand(command) {
+
+    async handleUnitCommand(command) {
         const activeCommand = { ...command, player: this.currentPlayer };
-        
-        const currentData = this.grid.download();
+
+        const currentData = await this.grid.download();
         const result = this.gridActions.applyUnitCommand(
             currentData, command.destX, command.destY, this.currentPlayer
         );
-        
+
         if (result.total > 0) {
             this.grid.upload(currentData);
             if (this.isMultiplayer && this.networkSync?.isConnected) {
                 this.syncAction({ type: 'unit_command', ...activeCommand });
             }
-            
+
             // Play missile moving sound if missiles were launched
             if (result.missilesLaunched > 0) {
                 this.audioManager.startMissileMoving();
@@ -352,8 +357,8 @@ export class Game {
     // Action application (for network replay)
     // ========================================================================
     
-    applyAction(action, playerId) {
-        const currentData = this.grid.download();
+    async applyAction(action, playerId) {
+        const currentData = await this.grid.download();
         const modified = this.actionApplier.applyAction(currentData, action, playerId);
         if (modified) {
             this.grid.uploadCurrent(currentData);
@@ -382,16 +387,18 @@ export class Game {
                 return;
             }
         }
-        
+
         // Apply queued network actions
         if (this.isMultiplayer) {
             const actionsAtTick = this.actionQueue.getActionsAtTick(this.simTime);
-            
+
             if (actionsAtTick.length > 0 && actionsAtTick.some(a => !a.applied)) {
-                const checkpointData = this.grid.download();
-                this.checkpointBuffer.saveCheckpoint(this.simTime, checkpointData);
+                // NOTE: checkpoint save is async but we fire-and-forget here for tick timing
+                this.grid.download().then(checkpointData => {
+                    this.checkpointBuffer.saveCheckpoint(this.simTime, checkpointData);
+                });
             }
-            
+
             for (const action of actionsAtTick) {
                 if (!action.applied) {
                     this.applyAction(action.data, action.playerId);
@@ -399,21 +406,32 @@ export class Game {
                 }
             }
         }
-        
-        // Run GPU simulation step
-        this.grid.getWriteFramebuffer().bind();
-        
-        this.simShader.use();
-        this.simShader.setTexture('u_state', this.grid.getReadTexture(), 0);
-        this.simShader.setVec2('u_resolution', this.config.gridSize, this.config.gridSize);
-        this.simShader.setFloat('u_time', this.simTime);
-        this.simShader.dispatch();
-        
-        this.grid.getWriteFramebuffer().unbind();
+
+        // Run GPU compute simulation step
+        const gpu = GPU.get();
+        const readTex = this.grid.getReadTexture();
+        const writeTex = this.grid.getWriteTexture();
+
+        // Update uniform buffer: [resX, resY, time, pad]
+        const params = new Float32Array([
+            this.config.gridSize, this.config.gridSize, this.simTime, 0
+        ]);
+        gpu.writeBuffer(this.simUniformBuffer, params);
+
+        // Create bind group matching mining_game.wgsl bindings
+        const bindGroup = this.simShader.createBindGroup([
+            { binding: 0, resource: readTex.view },
+            { binding: 1, resource: writeTex.view },
+            { binding: 2, resource: { buffer: this.simUniformBuffer } }
+        ]);
+
+        // Dispatch compute shader with 8x8 workgroups
+        const workgroups = Math.ceil(this.config.gridSize / 8);
+        this.simShader.dispatch(bindGroup, workgroups, workgroups);
+
         this.grid.swap();
-        
         this.simTime += 1.0;
-        
+
         // Save checkpoint periodically
         if (this.isMultiplayer && this.rollbackManager.shouldSaveCheckpoint()) {
             this.rollbackManager.saveCheckpoint();

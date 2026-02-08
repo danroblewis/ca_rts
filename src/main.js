@@ -10,7 +10,8 @@
  */
 
 import { GPU } from './gpu/GPU.js';
-import { ComputeShader } from './gpu/ComputeShader.js';
+import { ComputePipeline } from './gpu/ComputePipeline.js';
+import { RenderPipeline } from './gpu/RenderPipeline.js';
 import { loadShader } from './shaders/load.js';
 import { getNetworkSync } from './network/NetworkSync.js';
 import { PLAYER_1 } from './utils/GameUtils.js';
@@ -102,8 +103,7 @@ console.log(`Map seed: ${mapSeed}`);
 // ============================================================================
 
 const canvas = document.getElementById('canvas');
-const gpu = GPU.init(canvas);
-const gl = gpu.gl;
+const gpu = await GPU.init(canvas);
 
 function resize() {
     const dpr = window.devicePixelRatio || 1;
@@ -129,37 +129,24 @@ console.time('⏱️ Total shader initialization');
 // Phase 1: Load shader source files
 console.time('  📥 Load shader sources');
 const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise.all([
-    loadShader('./src/shaders/ca/v2/mining_game.frag.glsl'),
-    loadShader('./src/shaders/ca/render_metaballs.frag.glsl'),
-    loadShader('./src/shaders/ca/v2/render.frag.glsl')
+    loadShader('./src/shaders/ca/v2/mining_game.wgsl'),
+    loadShader('./src/shaders/ca/render_metaballs.wgsl'),
+    loadShader('./src/shaders/ca/v2/render.wgsl')
 ]);
 console.timeEnd('  📥 Load shader sources');
 
-// Phase 2: Create shader programs (triggers sync compilation + async linking)
-console.time('  🔨 Create simShader');
-const simShader = new ComputeShader(simShaderSource);
-console.timeEnd('  🔨 Create simShader');
+// Phase 2: Create GPU pipelines
+console.time('  🔨 Create simShader (ComputePipeline)');
+const simShader = new ComputePipeline(simShaderSource, { label: 'Simulation' });
+console.timeEnd('  🔨 Create simShader (ComputePipeline)');
 
-console.time('  🔨 Create metaballRenderShader');
-const metaballRenderShader = new ComputeShader(metaballShaderSource);
-console.timeEnd('  🔨 Create metaballRenderShader');
+console.time('  🔨 Create metaballRenderShader (RenderPipeline)');
+const metaballRenderShader = new RenderPipeline(metaballShaderSource, { label: 'Metaball Render' });
+console.timeEnd('  🔨 Create metaballRenderShader (RenderPipeline)');
 
-console.time('  🔨 Create debugRenderShader');
-const debugRenderShader = new ComputeShader(debugShaderSource);
-console.timeEnd('  🔨 Create debugRenderShader');
-
-// Phase 3: Wait for GPU compilation to finish
-console.time('  ⏳ GPU compilation (simShader)');
-await simShader.waitReady();
-console.timeEnd('  ⏳ GPU compilation (simShader)');
-
-console.time('  ⏳ GPU compilation (metaballRenderShader)');
-await metaballRenderShader.waitReady();
-console.timeEnd('  ⏳ GPU compilation (metaballRenderShader)');
-
-console.time('  ⏳ GPU compilation (debugRenderShader)');
-await debugRenderShader.waitReady();
-console.timeEnd('  ⏳ GPU compilation (debugRenderShader)');
+console.time('  🔨 Create debugRenderShader (RenderPipeline)');
+const debugRenderShader = new RenderPipeline(debugShaderSource, { label: 'Debug Render' });
+console.timeEnd('  🔨 Create debugRenderShader (RenderPipeline)');
 
 console.timeEnd('⏱️ Total shader initialization');
 
@@ -170,7 +157,6 @@ console.timeEnd('⏱️ Total shader initialization');
 console.time('🎮 Create Game instance');
 const game = new Game({
     ...CONFIG,
-    gl,
     canvas,
     simShader,
     renderShader: metaballRenderShader,
