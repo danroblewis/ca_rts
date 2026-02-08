@@ -303,10 +303,18 @@ export class Game {
         const isUnbuilt = this.playerFactoryCounts[this.currentPlayer] > 0;
         const action = { type: 'place_factory', x, y, isUnbuilt };
 
-        this.actionApplier.applyPlaceFactory(currentData, action, this.currentPlayer);
-        this.grid.upload(currentData);
-
-        this.syncAction({ ...action, player: this.currentPlayer, factoryNumber: this.factoriesPlaced });
+        if (this.isMultiplayer && this.networkSync?.isConnected) {
+            // MULTIPLAYER: Queue action for safe application by applyPendingActions()
+            // Do NOT modify GPU here — avoids race with rollback
+            const fullAction = { ...action, player: this.currentPlayer, factoryNumber: this.factoriesPlaced };
+            const tick = Math.floor(this.simTime);
+            this.actionQueue.addAction(tick, this.currentPlayer, action.type, fullAction, false);
+            this.networkSync.sendAction(fullAction, tick);
+        } else {
+            // SINGLE-PLAYER: Apply directly (no rollback race possible)
+            this.actionApplier.applyPlaceFactory(currentData, action, this.currentPlayer);
+            this.grid.upload(currentData);
+        }
     }
 
     async handleDemolish(x, y) {
@@ -315,8 +323,14 @@ export class Game {
 
         const modified = this.actionApplier.applyDemolish(currentData, action, this.currentPlayer);
         if (modified) {
-            this.grid.upload(currentData);
-            this.syncAction({ ...action, player: this.currentPlayer });
+            if (this.isMultiplayer && this.networkSync?.isConnected) {
+                const fullAction = { ...action, player: this.currentPlayer };
+                const tick = Math.floor(this.simTime);
+                this.actionQueue.addAction(tick, this.currentPlayer, action.type, fullAction, false);
+                this.networkSync.sendAction(fullAction, tick);
+            } else {
+                this.grid.upload(currentData);
+            }
         }
     }
 
@@ -329,9 +343,13 @@ export class Game {
         );
 
         if (result.total > 0) {
-            this.grid.upload(currentData);
             if (this.isMultiplayer && this.networkSync?.isConnected) {
-                this.syncAction({ type: 'unit_command', ...activeCommand });
+                const fullAction = { type: 'unit_command', ...activeCommand };
+                const tick = Math.floor(this.simTime);
+                this.actionQueue.addAction(tick, this.currentPlayer, fullAction.type, fullAction, false);
+                this.networkSync.sendAction(fullAction, tick);
+            } else {
+                this.grid.upload(currentData);
             }
 
             // Play missile moving sound if missiles were launched
@@ -386,8 +404,9 @@ export class Game {
         if (!this.isMultiplayer) return;
 
         const tick = Math.floor(this.simTime);
-        const actionsAtTick = this.actionQueue.getActionsAtTick(tick);
-        const unapplied = actionsAtTick.filter(a => !a.applied);
+        // Find ALL unapplied actions at or before current tick
+        // (catches local actions queued slightly late)
+        const unapplied = this.actionQueue.actions.filter(a => a.tick <= tick && !a.applied);
 
         if (unapplied.length === 0) return;
 
@@ -397,8 +416,8 @@ export class Game {
         // Save checkpoint BEFORE actions (using same downloaded data)
         this.checkpointBuffer.saveCheckpoint(tick, new Float32Array(currentData));
 
-        // Sort actions by playerId for deterministic ordering
-        unapplied.sort((a, b) => a.playerId - b.playerId);
+        // Sort by tick then playerId for deterministic ordering
+        unapplied.sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
 
         // Apply all actions to the single downloaded buffer
         for (const action of unapplied) {
