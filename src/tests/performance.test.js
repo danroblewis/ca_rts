@@ -64,11 +64,13 @@ function populateGrid(data, size) {
 }
 
 /** Build RenderParams uniform data (32 floats = 128 bytes) */
-function makeRenderUniforms(frameCount) {
+function makeRenderUniforms(frameCount, renderWidth, renderHeight) {
+    const w = renderWidth || RENDER_SIZE;
+    const h = renderHeight || RENDER_SIZE;
     const d = new Float32Array(32);
     const di = new Int32Array(d.buffer);
     d[0] = GRID_SIZE; d[1] = GRID_SIZE;
-    d[2] = RENDER_SIZE; d[3] = RENDER_SIZE;
+    d[2] = w; d[3] = h;
     d[4] = 100.0;       // time
     d[5] = 1.0;         // metaballScale
     di[6] = frameCount;  // frameCount (i32)
@@ -78,7 +80,7 @@ function makeRenderUniforms(frameCount) {
     d[19] = 5.0;        // deleteRadius
     d[20] = GRID_SIZE / 2; d[21] = GRID_SIZE / 2; // cameraPos
     d[22] = 2.0;        // cameraZoom
-    d[23] = 1.0;        // aspectRatio
+    d[23] = w / h;      // aspectRatio
     d[24] = 1.0;        // showMinimap
     return d;
 }
@@ -391,6 +393,98 @@ export async function runPerformanceTests() {
 
         tex.destroy();
         assert(msPerDownload < 1000, `Download too slow: ${msPerDownload.toFixed(0)}ms (need < 1000ms)`);
+    });
+
+    // ====================================================================
+    // 8. Metaball render at 1920x1080 (laptop resolution)
+    // ====================================================================
+    await runTest('Perf: metaball render 1920x1080', async () => {
+        const W = 1920, H = 1080;
+        const textures = [];
+        for (let i = 0; i < 8; i++) {
+            const tex = new DataTexture(GRID_SIZE, GRID_SIZE, { format: 'float' });
+            tex.upload(gridData);
+            textures.push(tex);
+        }
+
+        const target = createRenderTarget(gpu, W, H);
+        const sampler = gpu.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+        const uniformBuffer = gpu.createUniformBuffer(128, 'Perf metaball 1080p params');
+        gpu.writeBuffer(uniformBuffer, makeRenderUniforms(8, W, H));
+
+        const entries = [];
+        for (let i = 0; i < 8; i++) {
+            entries.push({ binding: i, resource: textures[i].view });
+        }
+        entries.push({ binding: 8, resource: sampler });
+        entries.push({ binding: 9, resource: { buffer: uniformBuffer } });
+        const bindGroup = metaballPipeline.createBindGroup(entries);
+
+        // Warmup
+        for (let i = 0; i < 5; i++) metaballPipeline.draw(bindGroup, target.view);
+        await gpu.device.queue.onSubmittedWorkDone();
+
+        // Benchmark
+        const start = performance.now();
+        for (let i = 0; i < RENDER_FRAMES; i++) {
+            metaballPipeline.draw(bindGroup, target.view);
+        }
+        await gpu.device.queue.onSubmittedWorkDone();
+        const elapsed = performance.now() - start;
+
+        const fps = (RENDER_FRAMES / elapsed) * 1000;
+        console.log(`  Metaball render ${W}x${H}: ${fps.toFixed(1)} FPS, ${(elapsed / RENDER_FRAMES).toFixed(2)}ms/frame (${RENDER_FRAMES} frames in ${elapsed.toFixed(0)}ms)`);
+
+        for (const tex of textures) tex.destroy();
+        target.texture.destroy();
+        uniformBuffer.destroy();
+        assert(fps > 30, `Metaball 1080p FPS too low: ${fps.toFixed(1)} (need > 30)`);
+    });
+
+    // ====================================================================
+    // 9. Metaball render at 2560x1600 (retina resolution)
+    // ====================================================================
+    await runTest('Perf: metaball render 2560x1600', async () => {
+        const W = 2560, H = 1600;
+        const textures = [];
+        for (let i = 0; i < 8; i++) {
+            const tex = new DataTexture(GRID_SIZE, GRID_SIZE, { format: 'float' });
+            tex.upload(gridData);
+            textures.push(tex);
+        }
+
+        const target = createRenderTarget(gpu, W, H);
+        const sampler = gpu.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+        const uniformBuffer = gpu.createUniformBuffer(128, 'Perf metaball retina params');
+        gpu.writeBuffer(uniformBuffer, makeRenderUniforms(8, W, H));
+
+        const entries = [];
+        for (let i = 0; i < 8; i++) {
+            entries.push({ binding: i, resource: textures[i].view });
+        }
+        entries.push({ binding: 8, resource: sampler });
+        entries.push({ binding: 9, resource: { buffer: uniformBuffer } });
+        const bindGroup = metaballPipeline.createBindGroup(entries);
+
+        // Warmup
+        for (let i = 0; i < 5; i++) metaballPipeline.draw(bindGroup, target.view);
+        await gpu.device.queue.onSubmittedWorkDone();
+
+        // Benchmark
+        const start = performance.now();
+        for (let i = 0; i < RENDER_FRAMES; i++) {
+            metaballPipeline.draw(bindGroup, target.view);
+        }
+        await gpu.device.queue.onSubmittedWorkDone();
+        const elapsed = performance.now() - start;
+
+        const fps = (RENDER_FRAMES / elapsed) * 1000;
+        console.log(`  Metaball render ${W}x${H}: ${fps.toFixed(1)} FPS, ${(elapsed / RENDER_FRAMES).toFixed(2)}ms/frame (${RENDER_FRAMES} frames in ${elapsed.toFixed(0)}ms)`);
+
+        for (const tex of textures) tex.destroy();
+        target.texture.destroy();
+        uniformBuffer.destroy();
+        assert(fps > 20, `Metaball retina FPS too low: ${fps.toFixed(1)} (need > 20)`);
     });
 
     // Cleanup shared pipelines

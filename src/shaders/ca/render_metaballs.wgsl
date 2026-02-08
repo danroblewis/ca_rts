@@ -9,8 +9,9 @@
 // CONFIGURATION
 // ============================================================================
 
-const TEMPORAL_FRAME_COUNT: i32 = 4;
-const TEMPORAL_FRAME_COUNT_PERF: i32 = 1;
+const TEMPORAL_FRAME_COUNT: i32 = 2;      // current frame + trail frame
+const TEMPORAL_FRAME_COUNT_PERF: i32 = 2;  // perf mode also gets trail
+const TRAIL_FRAME_OFFSET: i32 = 3;         // trail frame is 3 steps behind current
 
 const STATIC_KERNEL_RADIUS: i32 = 2;
 const UNIT_KERNEL_RADIUS: i32 = 2;
@@ -268,20 +269,30 @@ fn calcAllStaticDensities(uv: vec2f) -> AllDensities {
 }
 
 // ============================================================================
-// UNIT DENSITY WITH TEMPORAL AA
+// UNIFIED UNIT DENSITY WITH TRAIL LINE + SELECTION
 // ============================================================================
+//
+// Instead of sampling 4 consecutive frames (expensive), we sample only:
+//   1. Frame 0 (current) - where units are now
+//   2. Frame N-3 (trail) - where units were 3 steps ago
+// Then draw a density trail line between the two positions.
+// This gives smooth motion trails with half the texture reads.
 
-fn calcUnitDensityForPlayer(uv: vec2f, targetPlayer: f32) -> vec3f {
+struct AllUnitDensities {
+    p1Empty: f32, p1Holding: f32, p1Age: f32, p1Weight: f32,
+    p2Empty: f32, p2Holding: f32, p2Age: f32, p2Weight: f32,
+    p1Selection: f32, p2Selection: f32,
+}
+
+fn calcAllUnitDensities(uv: vec2f) -> AllUnitDensities {
+    var d: AllUnitDensities;
+    d.p1Empty = 0.0; d.p1Holding = 0.0; d.p1Age = 0.0; d.p1Weight = 0.0;
+    d.p2Empty = 0.0; d.p2Holding = 0.0; d.p2Age = 0.0; d.p2Weight = 0.0;
+    d.p1Selection = 0.0; d.p2Selection = 0.0;
+
     let texelSize: vec2f = 1.0 / params.resolution;
-    var emptyDensity: f32 = 0.0;
-    var holdingDensity: f32 = 0.0;
-    var totalWeight: f32 = 0.0;
-    var weightedAge: f32 = 0.0;
-    var totalTemporalWeight: f32 = 0.0;
-
     let gridPos: vec2f = uv * params.resolution;
     let cellFrac: vec2f = fract(gridPos);
-
     let scale: f32 = max(0.1, params.metaballScale);
     let minDist: f32 = 0.3 / scale;
 
@@ -289,87 +300,156 @@ fn calcUnitDensityForPlayer(uv: vec2f, targetPlayer: f32) -> vec3f {
     let numFrames: i32 = min(clamp(params.frameCount, 1, 8), maxFrames);
     let blendStrength: f32 = clamp(params.temporalBlend, 0.0, 1.0);
     let unitKernelRadius: i32 = select(UNIT_KERNEL_RADIUS, UNIT_KERNEL_RADIUS_PERF, params.performanceMode > 0.5);
+    let checkSelection: bool = params.hasActiveSelection > 0.5;
 
-    for (var frame: i32 = 0; frame < TEMPORAL_FRAME_COUNT; frame++) {
-        if (frame >= numFrames) { break; }
+    // Trail config
+    let trailFrame: i32 = min(TRAIL_FRAME_OFFSET, clamp(params.frameCount, 1, 8) - 1);
+    let hasTrail: bool = numFrames >= 2 && trailFrame > 0;
+    let trailFW: f32 = temporalWeight(trailFrame) * blendStrength;
+    let totalTemporalWeight: f32 = select(1.0, 1.0 + trailFW, hasTrail);
 
-        let frameWeight: f32 = select(temporalWeight(frame) * blendStrength, 1.0, frame == 0);
-        totalTemporalWeight += frameWeight;
+    // Center-of-mass tracking for trail line (per player)
+    var p1Center0: vec2f = vec2f(0.0); var p1CW0: f32 = 0.0;
+    var p1CenterT: vec2f = vec2f(0.0); var p1CWT: f32 = 0.0;
+    var p1Hold0: f32 = 0.0; var p1Count0: f32 = 0.0;
+    var p2Center0: vec2f = vec2f(0.0); var p2CW0: f32 = 0.0;
+    var p2CenterT: vec2f = vec2f(0.0); var p2CWT: f32 = 0.0;
+    var p2Hold0: f32 = 0.0; var p2Count0: f32 = 0.0;
 
-        let kernelSize: i32 = select(UNIT_TEMPORAL_KERNEL_RADIUS, unitKernelRadius, frame == 0);
+    // ---- Pass 1: Current frame ----
+    for (var dy: i32 = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
+        if (abs(dy) > unitKernelRadius) { continue; }
+        for (var dx: i32 = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
+            if (abs(dx) > unitKernelRadius) { continue; }
 
-        for (var dy: i32 = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
-            if (abs(dy) > kernelSize) { continue; }
-            for (var dx: i32 = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
-                if (abs(dx) > kernelSize) { continue; }
+            let offset: vec2f = vec2f(f32(dx), f32(dy));
+            let cellSample: vec4f = sampleFrame(0, uv + offset * texelSize);
 
-                let offset: vec2f = vec2f(f32(dx), f32(dy));
-                let cellSample: vec4f = sampleFrame(frame, uv + offset * texelSize);
+            if (isMiningUnit(cellSample)) {
+                let cellCenter: vec2f = offset + vec2f(0.5) - cellFrac;
+                var dist: f32 = length(cellCenter) / scale;
+                if (dist < minDist) { dist = minDist; }
+                let spatialW: f32 = 1.0 / (dist * dist);
+                let weight: f32 = spatialW; // frame 0 temporal weight = 1.0
 
-                if (isMiningUnit(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
-                    let cellCenter: vec2f = offset + vec2f(0.5) - cellFrac;
-                    var dist: f32 = length(cellCenter) / scale;
-                    if (dist < minDist) { dist = minDist; }
-                    let weight: f32 = (1.0 / (dist * dist)) * frameWeight;
+                let age: f32 = getUnitAgeF(cellSample);
+                let holding: bool = isHoldingResource(cellSample);
+                let player: f32 = getPlayerFromCell(cellSample);
 
-                    let age: f32 = getUnitAgeF(cellSample);
-                    weightedAge += age * weight;
-                    totalWeight += weight;
-
-                    if (isHoldingResource(cellSample)) {
-                        holdingDensity += weight;
-                    } else {
-                        emptyDensity += weight;
+                if (player == PLAYER_1) {
+                    d.p1Age += age * weight;
+                    d.p1Weight += weight;
+                    if (holding) { d.p1Holding += weight; } else { d.p1Empty += weight; }
+                    p1Center0 += cellCenter * spatialW;
+                    p1CW0 += spatialW;
+                    p1Count0 += 1.0;
+                    if (holding) { p1Hold0 += 1.0; }
+                    if (checkSelection && getUnitSelectedF(cellSample)) {
+                        d.p1Selection += spatialW;
+                    }
+                } else {
+                    d.p2Age += age * weight;
+                    d.p2Weight += weight;
+                    if (holding) { d.p2Holding += weight; } else { d.p2Empty += weight; }
+                    p2Center0 += cellCenter * spatialW;
+                    p2CW0 += spatialW;
+                    p2Count0 += 1.0;
+                    if (holding) { p2Hold0 += 1.0; }
+                    if (checkSelection && getUnitSelectedF(cellSample)) {
+                        d.p2Selection += spatialW;
                     }
                 }
             }
         }
     }
 
-    let norm: f32 = max(totalTemporalWeight, 1.0);
-    let avgAge: f32 = select(weightedAge / totalWeight, 0.0, totalWeight <= 0.0);
-    return vec3f(emptyDensity / norm, holdingDensity / norm, avgAge);
-}
+    // ---- Pass 2: Trail frame (n-3) ----
+    if (hasTrail) {
+        let trailKernel: i32 = UNIT_TEMPORAL_KERNEL_RADIUS;
+        for (var dy: i32 = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
+            if (abs(dy) > trailKernel) { continue; }
+            for (var dx: i32 = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
+                if (abs(dx) > trailKernel) { continue; }
 
-// ============================================================================
-// SELECTION DENSITY
-// ============================================================================
+                let offset: vec2f = vec2f(f32(dx), f32(dy));
+                let cellSample: vec4f = sampleFrame(trailFrame, uv + offset * texelSize);
 
-fn calcSelectionDensity(uv: vec2f, targetPlayer: f32) -> f32 {
-    if (targetPlayer != params.currentPlayer) { return 0.0; }
-
-    let texelSize: vec2f = 1.0 / params.resolution;
-    var selectionDensity: f32 = 0.0;
-
-    let gridPos: vec2f = uv * params.resolution;
-    let cellFrac: vec2f = fract(gridPos);
-
-    let scale: f32 = max(0.1, params.metaballScale);
-    let minDist: f32 = 0.3 / scale;
-
-    let selKernelRadius: i32 = select(UNIT_KERNEL_RADIUS, UNIT_KERNEL_RADIUS_PERF, params.performanceMode > 0.5);
-
-    for (var dy: i32 = -UNIT_KERNEL_RADIUS; dy <= UNIT_KERNEL_RADIUS; dy++) {
-        if (abs(dy) > selKernelRadius) { continue; }
-        for (var dx: i32 = -UNIT_KERNEL_RADIUS; dx <= UNIT_KERNEL_RADIUS; dx++) {
-            if (abs(dx) > selKernelRadius) { continue; }
-            let offset: vec2f = vec2f(f32(dx), f32(dy));
-            let sampleUV: vec2f = uv + offset * texelSize;
-            let cellSample: vec4f = textureSampleLevel(u_state0, u_sampler, sampleUV, 0.0);
-
-            if (isMiningUnit(cellSample) && getPlayerFromCell(cellSample) == targetPlayer) {
-                if (getUnitSelectedF(cellSample)) {
+                if (isMiningUnit(cellSample)) {
                     let cellCenter: vec2f = offset + vec2f(0.5) - cellFrac;
                     var dist: f32 = length(cellCenter) / scale;
                     if (dist < minDist) { dist = minDist; }
-                    let weight: f32 = 1.0 / (dist * dist);
-                    selectionDensity += weight;
+                    let spatialW: f32 = 1.0 / (dist * dist);
+                    let weight: f32 = spatialW * trailFW;
+
+                    let age: f32 = getUnitAgeF(cellSample);
+                    let holding: bool = isHoldingResource(cellSample);
+                    let player: f32 = getPlayerFromCell(cellSample);
+
+                    if (player == PLAYER_1) {
+                        d.p1Age += age * weight;
+                        d.p1Weight += weight;
+                        if (holding) { d.p1Holding += weight; } else { d.p1Empty += weight; }
+                        p1CenterT += cellCenter * spatialW;
+                        p1CWT += spatialW;
+                    } else {
+                        d.p2Age += age * weight;
+                        d.p2Weight += weight;
+                        if (holding) { d.p2Holding += weight; } else { d.p2Empty += weight; }
+                        p2CenterT += cellCenter * spatialW;
+                        p2CWT += spatialW;
+                    }
                 }
             }
         }
     }
 
-    return selectionDensity;
+    // ---- Trail line density ----
+    // For each player, if units found in both current and trail frames,
+    // compute a density trail along the line segment between the two centers.
+    if (p1CW0 > 0.0 && p1CWT > 0.0) {
+        let c0: vec2f = p1Center0 / p1CW0;
+        let cT: vec2f = p1CenterT / p1CWT;
+        let seg: vec2f = cT - c0;
+        let segLenSq: f32 = dot(seg, seg);
+        if (segLenSq > 0.09) { // only draw trail if unit moved > 0.3 cells
+            // Distance from pixel (origin) to closest point on line segment c0→cT
+            let t: f32 = clamp(dot(-c0, seg) / segLenSq, 0.0, 1.0);
+            let closest: vec2f = c0 + seg * t;
+            var dist: f32 = length(closest) / scale;
+            if (dist < minDist) { dist = minDist; }
+            let trailDensity: f32 = (1.0 / (dist * dist)) * 0.5 * trailFW;
+            let holdR: f32 = select(p1Hold0 / p1Count0, 0.0, p1Count0 <= 0.0);
+            d.p1Holding += trailDensity * holdR;
+            d.p1Empty += trailDensity * (1.0 - holdR);
+        }
+    }
+    if (p2CW0 > 0.0 && p2CWT > 0.0) {
+        let c0: vec2f = p2Center0 / p2CW0;
+        let cT: vec2f = p2CenterT / p2CWT;
+        let seg: vec2f = cT - c0;
+        let segLenSq: f32 = dot(seg, seg);
+        if (segLenSq > 0.09) {
+            let t: f32 = clamp(dot(-c0, seg) / segLenSq, 0.0, 1.0);
+            let closest: vec2f = c0 + seg * t;
+            var dist: f32 = length(closest) / scale;
+            if (dist < minDist) { dist = minDist; }
+            let trailDensity: f32 = (1.0 / (dist * dist)) * 0.5 * trailFW;
+            let holdR: f32 = select(p2Hold0 / p2Count0, 0.0, p2Count0 <= 0.0);
+            d.p2Holding += trailDensity * holdR;
+            d.p2Empty += trailDensity * (1.0 - holdR);
+        }
+    }
+
+    // Normalize
+    let norm: f32 = max(totalTemporalWeight, 1.0);
+    d.p1Empty /= norm;
+    d.p1Holding /= norm;
+    d.p1Age = select(d.p1Age / d.p1Weight, 0.0, d.p1Weight <= 0.0);
+    d.p2Empty /= norm;
+    d.p2Holding /= norm;
+    d.p2Age = select(d.p2Age / d.p2Weight, 0.0, d.p2Weight <= 0.0);
+
+    return d;
 }
 
 // ============================================
@@ -527,21 +607,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let p1MissileExplosion: f32 = d.p1MissileExploding;
     let p2MissileExplosion: f32 = d.p2MissileExploding;
 
-    // Player 1 units
-    let p1UnitInfo: vec3f = calcUnitDensityForPlayer(worldUV, PLAYER_1);
-    let p1EmptyUnitDensity: f32 = p1UnitInfo.x;
-    let p1HoldingUnitDensity: f32 = p1UnitInfo.y;
-    let p1AvgAge: f32 = p1UnitInfo.z;
-
-    // Player 2 units
-    let p2UnitInfo: vec3f = calcUnitDensityForPlayer(worldUV, PLAYER_2);
-    let p2EmptyUnitDensity: f32 = p2UnitInfo.x;
-    let p2HoldingUnitDensity: f32 = p2UnitInfo.y;
-    let p2AvgAge: f32 = p2UnitInfo.z;
-
-    // Selection densities
-    let p1SelectionDensity: f32 = calcSelectionDensity(worldUV, PLAYER_1);
-    let p2SelectionDensity: f32 = calcSelectionDensity(worldUV, PLAYER_2);
+    // All unit densities (P1 + P2 + selection) in a single pass
+    let unitDens: AllUnitDensities = calcAllUnitDensities(worldUV);
+    let p1EmptyUnitDensity: f32 = unitDens.p1Empty;
+    let p1HoldingUnitDensity: f32 = unitDens.p1Holding;
+    let p1AvgAge: f32 = unitDens.p1Age;
+    let p2EmptyUnitDensity: f32 = unitDens.p2Empty;
+    let p2HoldingUnitDensity: f32 = unitDens.p2Holding;
+    let p2AvgAge: f32 = unitDens.p2Age;
+    let p1SelectionDensity: f32 = select(unitDens.p1Selection, 0.0, params.currentPlayer != PLAYER_1);
+    let p2SelectionDensity: f32 = select(unitDens.p2Selection, 0.0, params.currentPlayer != PLAYER_2);
 
     // Thresholds
     let resourceThreshold: f32 = 0.8;
