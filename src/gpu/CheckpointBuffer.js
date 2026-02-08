@@ -87,6 +87,24 @@ export class CheckpointBuffer {
         return this.checkpoints;
     }
 
+    /**
+     * Clear all checkpoints after a given tick.
+     * Used after rollback to invalidate stale checkpoints from wrong timeline.
+     * @param {number} tick
+     */
+    clearAfter(tick) {
+        const toRemove = this.checkpoints.filter(cp => cp.tick > tick);
+        for (const cp of toRemove) {
+            cp.texture.destroy();
+        }
+        this.checkpoints = this.checkpoints.filter(cp => cp.tick <= tick);
+        if (this.checkpoints.length > 0) {
+            this.lastCheckpointTick = this.checkpoints[this.checkpoints.length - 1].tick;
+        } else {
+            this.lastCheckpointTick = -Infinity;
+        }
+    }
+
     clearOlderThan(tick) {
         while (this.checkpoints.length > 0 && this.checkpoints[0].tick < tick) {
             const oldest = this.checkpoints.shift();

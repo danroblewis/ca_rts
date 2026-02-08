@@ -52,6 +52,15 @@ class MockCheckpointBuffer {
         return this.checkpoints;
     }
     
+    clearAfter(tick) {
+        this.checkpoints = this.checkpoints.filter(cp => cp.tick <= tick);
+        if (this.checkpoints.length > 0) {
+            this.lastCheckpointTick = this.checkpoints[this.checkpoints.length - 1].tick;
+        } else {
+            this.lastCheckpointTick = -Infinity;
+        }
+    }
+
     clear() {
         this.checkpoints = [];
         this.lastCheckpointTick = -Infinity;

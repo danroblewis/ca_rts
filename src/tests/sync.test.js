@@ -71,7 +71,7 @@ class HeadlessGameClient {
             uploadGridData: (data) => this.grid.uploadCurrent(data),
             getCurrentTick: () => Math.floor(this.simTime),
             setTick: (tick) => { this.simTime = tick; },
-            simulationStep: () => this.simulationStep(),
+            simulationStep: () => this._replaySimulationStep(),
             applyAction: async (action, playerId) => {
                 const currentData = await this.grid.download();
                 const modified = this.actionApplier.applyAction(currentData, action, playerId);
@@ -104,9 +104,38 @@ class HeadlessGameClient {
     }
 
     /**
-     * Run one simulation step — identical to Game.simulationStep()
+     * Synchronous simulation step used during rollback replay.
+     * No checkpoint saves — matches Game.simulationStep() behavior
+     * where the RollbackManager calls it without await.
      */
-    simulationStep() {
+    _replaySimulationStep() {
+        const gpu = GPU.get();
+        const readTex = this.grid.getReadTexture();
+        const writeTex = this.grid.getWriteTexture();
+
+        const params = new Float32Array([
+            this.gridSize, this.gridSize, this.simTime, 0
+        ]);
+        gpu.writeBuffer(this.simUniformBuffer, params);
+
+        const bindGroup = this.simPipeline.createBindGroup([
+            { binding: 0, resource: readTex.view },
+            { binding: 1, resource: writeTex.view },
+            { binding: 2, resource: { buffer: this.simUniformBuffer } }
+        ]);
+
+        const workgroups = Math.ceil(this.gridSize / 8);
+        this.simPipeline.dispatch(bindGroup, workgroups, workgroups);
+
+        this.grid.swap();
+        this.simTime += 1.0;
+    }
+
+    /**
+     * Run one simulation step — identical to Game.simulationStep()
+     * Made async to properly await checkpoint saves.
+     */
+    async simulationStep() {
         const gpu = GPU.get();
         const readTex = this.grid.getReadTexture();
         const writeTex = this.grid.getWriteTexture();
@@ -128,9 +157,9 @@ class HeadlessGameClient {
         this.grid.swap();
         this.simTime += 1.0;
 
-        // Save periodic checkpoints
+        // Save periodic checkpoints (must await to avoid racing with next step)
         if (this.rollbackManager.shouldSaveCheckpoint()) {
-            this.rollbackManager.saveCheckpoint();
+            await this.rollbackManager.saveCheckpoint();
         }
     }
 
@@ -377,8 +406,8 @@ export async function runSyncTests() {
         const { c1, c2 } = await createClientPair();
         try {
             for (let i = 0; i < 100; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
             const d1 = await c1.getGridData();
             const d2 = await c2.getGridData();
@@ -394,8 +423,8 @@ export async function runSyncTests() {
         const { c1, c2 } = await createClientPair();
         try {
             for (let i = 0; i < 1000; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
             const d1 = await c1.getGridData();
             const d2 = await c2.getGridData();
@@ -415,8 +444,8 @@ export async function runSyncTests() {
         c2.loadMap(99999);
         try {
             for (let i = 0; i < 10; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
             const d1 = await c1.getGridData();
             const d2 = await c2.getGridData();
@@ -438,8 +467,8 @@ export async function runSyncTests() {
         try {
             // Advance 10 ticks
             for (let i = 0; i < 10; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             // P1 places factory at tick 10 on both clients
@@ -452,8 +481,8 @@ export async function runSyncTests() {
             await c2.applyPendingActions();
 
             for (let i = 0; i < 50; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -470,8 +499,8 @@ export async function runSyncTests() {
         const { c1, c2 } = await createClientPair();
         try {
             for (let i = 0; i < 10; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             // Both players act at tick 10
@@ -486,8 +515,8 @@ export async function runSyncTests() {
             await c2.applyPendingActions();
 
             for (let i = 0; i < 50; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -526,8 +555,8 @@ export async function runSyncTests() {
 
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -551,9 +580,9 @@ export async function runSyncTests() {
             // Advance both to tick 10
             for (let i = 0; i < 10; i++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             // P2 places factory at tick 10
@@ -566,8 +595,8 @@ export async function runSyncTests() {
 
             // Advance both to tick 15, c1 doesn't know about the action yet
             for (let i = 0; i < 5; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             // At tick 15, c1 receives P2's action from tick 10 (late delivery)
@@ -576,9 +605,9 @@ export async function runSyncTests() {
             // Continue to tick 100
             for (let i = 0; i < 85; i++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -596,9 +625,9 @@ export async function runSyncTests() {
         try {
             for (let i = 0; i < 10; i++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             const action = factoryAction(15, 15);
@@ -606,8 +635,8 @@ export async function runSyncTests() {
             await c1.applyPendingActions();
 
             for (let i = 0; i < 10; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             // At tick 20, c2 receives P1's action from tick 10
@@ -615,9 +644,9 @@ export async function runSyncTests() {
 
             for (let i = 0; i < 80; i++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -635,9 +664,9 @@ export async function runSyncTests() {
         try {
             for (let i = 0; i < 10; i++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             // Both place at tick 10
@@ -652,8 +681,8 @@ export async function runSyncTests() {
 
             // Advance 5 ticks
             for (let i = 0; i < 5; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             // Cross-deliver at tick 15
@@ -663,9 +692,9 @@ export async function runSyncTests() {
             // Continue to tick 100
             for (let i = 0; i < 85; i++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -708,8 +737,8 @@ export async function runSyncTests() {
 
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -746,8 +775,8 @@ export async function runSyncTests() {
 
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -793,8 +822,8 @@ export async function runSyncTests() {
 
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -842,8 +871,8 @@ export async function runSyncTests() {
 
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -862,9 +891,9 @@ export async function runSyncTests() {
             // Checkpoint interval is 10. Action at tick 10 should hit boundary.
             for (let tick = 0; tick < 10; tick++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             const action = factoryAction(25, 25);
@@ -873,8 +902,8 @@ export async function runSyncTests() {
 
             // Advance both to tick 20
             for (let i = 0; i < 10; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             // Deliver at tick 20 (exactly at another checkpoint boundary)
@@ -882,9 +911,9 @@ export async function runSyncTests() {
 
             for (let i = 0; i < 80; i++) {
                 await c1.applyPendingActions();
-                c1.simulationStep();
+                await c1.simulationStep();
                 await c2.applyPendingActions();
-                c2.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -933,8 +962,8 @@ export async function runSyncTests() {
                 await net.deliverPendingMessages(tick);
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -971,8 +1000,8 @@ export async function runSyncTests() {
 
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -1016,8 +1045,8 @@ export async function runSyncTests() {
 
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -1058,8 +1087,8 @@ export async function runSyncTests() {
                 await net.deliverPendingMessages(tick);
                 await c1.applyPendingActions();
                 await c2.applyPendingActions();
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
@@ -1085,38 +1114,40 @@ export async function runSyncTests() {
         c2.loadMap(MAP_SEED);
         try {
             for (let i = 0; i < 10; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
-            // Both players act at same tick, same position (overlapping factories)
+            // Adjacent factories with overlapping 3x3 patterns.
+            // P1 at (30,30), P2 at (32,30) — their right/left columns overlap.
+            // The overlapping cells at x=31 will have the type of whoever wrote last.
             const a1 = factoryAction(30, 30);
-            const a2 = factoryAction(30, 30);  // Same position — order matters!
+            const a2 = factoryAction(32, 30);
 
-            // c1: P1 first, then P2 (sorted = P1 first)
-            c1.actionQueue.addAction(10, 1, a1.type, a1, false);
+            // c1: insert P2 first, P1 second. Unsorted applies P2 then P1.
+            // Overlapping cells at x=31 end up as P1's factory type.
             c1.actionQueue.addAction(10, 2, a2.type, a2, false);
+            c1.actionQueue.addAction(10, 1, a1.type, a1, false);
 
-            // c2: P2 first, then P1 (reverse order — unsorted would differ)
+            // c2: sorted by playerId, so P1 first then P2.
+            // Overlapping cells at x=31 end up as P2's factory type.
             c2.actionQueue.addAction(10, 2, a2.type, a2, false);
             c2.actionQueue.addAction(10, 1, a1.type, a1, false);
 
-            // Apply WITHOUT sorting on c1, WITH sorting on c2
+            // c1 applies WITHOUT sorting (insertion order: P2 then P1)
             await c1.applyPendingActionsUnsorted();
-            await c2.applyPendingActions(); // sorted
+            // c2 applies WITH sorting (sorted order: P1 then P2)
+            await c2.applyPendingActions();
 
             for (let i = 0; i < 50; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();
             const d2 = await c2.getGridData();
             const result = gridsMatch(d1, d2);
-            // They SHOULD differ since one is sorted and one isn't (with overlapping positions)
-            // Note: If the actions write to the same cells, order matters.
-            // If this passes (grids match), it means the sort doesn't matter for non-overlapping,
-            // which is also useful info. We assert it doesn't match for overlapping case.
+            // Overlapping cells have different factory owner types depending on application order.
             assert(!result.match, 'Grids should differ when applying overlapping actions without sorting — the playerId sort is load-bearing');
         } finally {
             c1.destroy();
@@ -1131,8 +1162,8 @@ export async function runSyncTests() {
         const { c1, c2 } = await createClientPair();
         try {
             for (let i = 0; i < 10; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const action = factoryAction(30, 30);
@@ -1147,13 +1178,13 @@ export async function runSyncTests() {
             // since without await the GPU step would race ahead
             // In practice, the action simply never gets applied to the grid
 
-            c1.simulationStep();
-            c2.simulationStep();
+            await c1.simulationStep();
+            await c2.simulationStep();
 
             // Continue a few more ticks
             for (let i = 0; i < 20; i++) {
-                c1.simulationStep();
-                c2.simulationStep();
+                await c1.simulationStep();
+                await c2.simulationStep();
             }
 
             const d1 = await c1.getGridData();

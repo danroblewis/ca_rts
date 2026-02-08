@@ -165,7 +165,10 @@ export class RollbackManager {
         this.setTick(checkpoint.tick);
         const restoreTime = performance.now() - restoreStart;
         Logger.log('checkpoint', `Restored to tick ${checkpoint.tick} in ${restoreTime.toFixed(1)}ms`);
-        
+
+        // Invalidate stale checkpoints from wrong timeline
+        this.checkpointBuffer.clearAfter(checkpoint.tick);
+
         // Reset applied status for ALL actions at or after checkpoint tick
         this.actionQueue.resetAppliedAfter(checkpoint.tick - 1);
         
