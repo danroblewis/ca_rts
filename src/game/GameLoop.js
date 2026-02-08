@@ -92,9 +92,10 @@ export class GameLoop {
     /**
      * Main render loop
      */
-    _loop(now) {
-        if (!this.running) return;
-        
+    async _loop(now) {
+        if (!this.running || this._inLoop) return;
+        this._inLoop = true;
+
         // Track frame time for potential TPS
         if (this.lastRenderTime > 0) {
             const frameTime = now - this.lastRenderTime;
@@ -102,27 +103,29 @@ export class GameLoop {
             this.tpsFrameCount++;
         }
         this.lastRenderTime = now;
-        
+
         // Run simulation if in sync mode
         if (this.game.syncWithRender) {
-            this._runSyncedSimulation(now);
+            await this._runSyncedSimulation(now);
         }
-        
+
         // Update stats
         this._updateStats();
-        
+
         // Update network (heartbeat, periodic sync)
         this._updateNetwork();
-        
+
         // Track missile state changes for sounds
         this._updateMissileSounds();
-        
+
         // Update audio
         this.game.audioManager.update(this.game.grid.getReadTexture());
-        
+
         // Render
         this.renderer.render();
-        
+
+        this._inLoop = false;
+
         // Continue loop
         requestAnimationFrame(this._loop);
     }
@@ -130,23 +133,23 @@ export class GameLoop {
     /**
      * Run simulation steps in sync mode
      */
-    _runSyncedSimulation(now) {
+    async _runSyncedSimulation(now) {
         const game = this.game;
         const batchSize = this.config.syncSimBatchSize || 1;
         const tpsMargin = this.config.tpsMargin || 5;
         const maxStepsPerFrame = 3;
-        
+
         // Calculate target frame time
-        const effectiveTargetTps = game.isMultiplayer 
-            ? Math.max(1, game.targetTicksPerSecond + tpsMargin) 
+        const effectiveTargetTps = game.isMultiplayer
+            ? Math.max(1, game.targetTicksPerSecond + tpsMargin)
             : 999;
         const targetFrameTime = 1000 / effectiveTargetTps;
-        
+
         // Initialize on first frame
         if (this.lastSimStepTime === 0) {
             this.lastSimStepTime = now;
         }
-        
+
         if (!game.isMultiplayer) {
             // Single player: run every frame
             for (let i = 0; i < batchSize; i++) {
@@ -160,6 +163,7 @@ export class GameLoop {
             let stepsTaken = 0;
             while ((now - this.lastSimStepTime) >= targetFrameTime && stepsTaken < maxStepsPerFrame) {
                 for (let i = 0; i < batchSize; i++) {
+                    await game.applyPendingActions();
                     game.simulationStep();
                     this.simStepCount++;
                     this.tpsCalcStepCount++;
@@ -173,19 +177,20 @@ export class GameLoop {
     /**
      * Fast simulation loop (runs via setTimeout)
      */
-    _fastLoop() {
+    async _fastLoop() {
         if (this.game.syncWithRender || !this.running) return;
-        
+
         const batchSize = this.config.simBatchSize || 10;
-        
+
         for (let i = 0; i < batchSize; i++) {
+            await this.game.applyPendingActions();
             this.game.simulationStep();
             this.simStepCount++;
             this.tpsCalcStepCount++;
         }
-        
+
         this._updateStats();
-        
+
         setTimeout(() => this._fastLoop(), 0);
     }
     

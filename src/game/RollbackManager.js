@@ -183,6 +183,7 @@ export class RollbackManager {
             // Apply all actions that should happen at this tick
             const tickNow = Math.floor(this.getCurrentTick());
             const actionsAtTick = actionsToReplay.filter(a => a.tick === tickNow);
+            actionsAtTick.sort((a, b) => a.playerId - b.playerId);
             for (const action of actionsAtTick) {
                 if (!action.applied) {
                     Logger.log('action', `Replay: ${action.type} at tick ${tickNow} for P${action.playerId}`);
@@ -200,6 +201,7 @@ export class RollbackManager {
         // Apply any actions at the final tick
         const finalTick = Math.floor(this.getCurrentTick());
         const finalActions = actionsToReplay.filter(a => a.tick === finalTick);
+        finalActions.sort((a, b) => a.playerId - b.playerId);
         for (const action of finalActions) {
             if (!action.applied) {
                 Logger.log('action', `Final: ${action.type} at tick ${finalTick} for P${action.playerId}`);

@@ -376,7 +376,40 @@ export class Game {
     // ========================================================================
     // Simulation
     // ========================================================================
-    
+
+    /**
+     * Apply pending actions from the action queue before the next simulation step.
+     * Must be called (and awaited) before simulationStep() in multiplayer.
+     * Downloads grid once, applies all actions, uploads once.
+     */
+    async applyPendingActions() {
+        if (!this.isMultiplayer) return;
+
+        const tick = Math.floor(this.simTime);
+        const actionsAtTick = this.actionQueue.getActionsAtTick(tick);
+        const unapplied = actionsAtTick.filter(a => !a.applied);
+
+        if (unapplied.length === 0) return;
+
+        // Download grid data once
+        const currentData = await this.grid.download();
+
+        // Save checkpoint BEFORE actions (using same downloaded data)
+        this.checkpointBuffer.saveCheckpoint(tick, new Float32Array(currentData));
+
+        // Sort actions by playerId for deterministic ordering
+        unapplied.sort((a, b) => a.playerId - b.playerId);
+
+        // Apply all actions to the single downloaded buffer
+        for (const action of unapplied) {
+            this.actionApplier.applyAction(currentData, action.data, action.playerId);
+            action.applied = true;
+        }
+
+        // Single upload back to GPU
+        this.grid.uploadCurrent(currentData);
+    }
+
     simulationStep() {
         // Wait for sync in multiplayer
         if (this.waitingForSync) {
@@ -385,25 +418,6 @@ export class Game {
                 this.waitingForSync = false;
             } else {
                 return;
-            }
-        }
-
-        // Apply queued network actions
-        if (this.isMultiplayer) {
-            const actionsAtTick = this.actionQueue.getActionsAtTick(this.simTime);
-
-            if (actionsAtTick.length > 0 && actionsAtTick.some(a => !a.applied)) {
-                // NOTE: checkpoint save is async but we fire-and-forget here for tick timing
-                this.grid.download().then(checkpointData => {
-                    this.checkpointBuffer.saveCheckpoint(this.simTime, checkpointData);
-                });
-            }
-
-            for (const action of actionsAtTick) {
-                if (!action.applied) {
-                    this.applyAction(action.data, action.playerId);
-                    action.applied = true;
-                }
             }
         }
 
