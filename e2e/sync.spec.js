@@ -463,3 +463,255 @@ test('demolish + place cycle stays in sync', async ({ browser }) => {
     await ctx1.close();
     await ctx2.close();
 });
+
+// ---------------------------------------------------------------------------
+// Latency injection helper
+// ---------------------------------------------------------------------------
+
+async function injectLatency(page, latencyMs, { jitter = 0.1 } = {}) {
+    await page.evaluate(({ latency, jitterFrac }) => {
+        const ns = window.game.networkSync;
+        const ws = ns.ws;
+
+        // Helper: jittered delay
+        const delay = () => latency + (Math.random() * 2 - 1) * latency * jitterFrac;
+
+        // Patch outgoing: send() and sendBinary()
+        const origSend = ns.send.bind(ns);
+        const origSendBinary = ns.sendBinary.bind(ns);
+        ns.send = (msg) => setTimeout(() => origSend(msg), delay());
+        ns.sendBinary = (buf) => setTimeout(() => origSendBinary(buf), delay());
+
+        // Patch incoming: ws.onmessage
+        const origOnMessage = ws.onmessage;
+        ws.onmessage = (event) => setTimeout(() => origOnMessage(event), delay());
+    }, { latency: latencyMs, jitterFrac: jitter });
+}
+
+// ---------------------------------------------------------------------------
+// Latency stress tests
+// ---------------------------------------------------------------------------
+
+test.describe('latency stress tests', () => {
+    test('factories replicate under 200ms latency', async ({ browser }) => {
+        const { p1, p2, ctx1, ctx2 } = await setupRoom(browser);
+
+        await injectLatency(p1, 200);
+        await injectLatency(p2, 200);
+
+        await p1.evaluate(async () => { await window.game.handlePlaceFactory(100, 100); });
+        await p2.evaluate(async () => { await window.game.handlePlaceFactory(400, 400); });
+
+        await p1.waitForTimeout(5000);
+
+        const targetTick = await p1.evaluate(() => Math.floor(window.game.simTime)) + 120;
+        await freezeBothAndWait(p1, p2, targetTick);
+
+        const { diffs, firstDiff } = await compareGrids(p1, p2);
+        expect(diffs, `Grids diverged: ${diffs} differences, first at index ${firstDiff?.index}`).toBe(0);
+
+        const countsOnP1 = await getFactoryCounts(p1);
+        const countsOnP2 = await getFactoryCounts(p2);
+
+        expect(countsOnP1.p1, 'P1 page: P1 factory = 1').toBe(1);
+        expect(countsOnP1.p2, 'P1 page: P2 factory = 1').toBe(1);
+        expect(countsOnP2.p1, 'P2 page: P1 factory = 1').toBe(1);
+        expect(countsOnP2.p2, 'P2 page: P2 factory = 1').toBe(1);
+
+        const stateP1 = await getGameState(p1);
+        const stateP2 = await getGameState(p2);
+        expect(stateP1.gameOver, 'P1 no game over').toBe(false);
+        expect(stateP2.gameOver, 'P2 no game over').toBe(false);
+
+        await ctx1.close();
+        await ctx2.close();
+    });
+
+    test('factories replicate under 500ms latency', async ({ browser }) => {
+        const { p1, p2, ctx1, ctx2 } = await setupRoom(browser);
+
+        await injectLatency(p1, 500);
+        await injectLatency(p2, 500);
+
+        await p1.evaluate(async () => { await window.game.handlePlaceFactory(100, 100); });
+        await p2.evaluate(async () => { await window.game.handlePlaceFactory(400, 400); });
+
+        await p1.waitForTimeout(8000);
+
+        const targetTick = await p1.evaluate(() => Math.floor(window.game.simTime)) + 120;
+        await freezeBothAndWait(p1, p2, targetTick);
+
+        const { diffs, firstDiff } = await compareGrids(p1, p2);
+        expect(diffs, `Grids diverged: ${diffs} differences, first at index ${firstDiff?.index}`).toBe(0);
+
+        const countsOnP1 = await getFactoryCounts(p1);
+        const countsOnP2 = await getFactoryCounts(p2);
+
+        expect(countsOnP1.p1, 'P1 page: P1 factory = 1').toBe(1);
+        expect(countsOnP1.p2, 'P1 page: P2 factory = 1').toBe(1);
+        expect(countsOnP2.p1, 'P2 page: P1 factory = 1').toBe(1);
+        expect(countsOnP2.p2, 'P2 page: P2 factory = 1').toBe(1);
+
+        const stateP1 = await getGameState(p1);
+        const stateP2 = await getGameState(p2);
+        expect(stateP1.gameOver, 'P1 no game over').toBe(false);
+        expect(stateP2.gameOver, 'P2 no game over').toBe(false);
+
+        await ctx1.close();
+        await ctx2.close();
+    });
+
+    test('rapid placement under 200ms latency', async ({ browser }) => {
+        const { p1, p2, ctx1, ctx2 } = await setupRoom(browser);
+
+        await injectLatency(p1, 200);
+        await injectLatency(p2, 200);
+
+        // Initial factories
+        await p1.evaluate(async () => { await window.game.handlePlaceFactory(100, 100); });
+        await p2.evaluate(async () => { await window.game.handlePlaceFactory(400, 400); });
+        await p1.waitForTimeout(3000);
+
+        // P1 rapid-fires 3 more factories
+        await p1.evaluate(async () => {
+            const coords = [[100, 200], [100, 300], [200, 100]];
+            for (const [x, y] of coords) {
+                await window.game.handlePlaceFactory(x, y);
+                await new Promise(r => setTimeout(r, 50));
+            }
+        });
+
+        // P2 rapid-fires 3 more factories
+        await p2.evaluate(async () => {
+            const coords = [[400, 300], [400, 200], [300, 400]];
+            for (const [x, y] of coords) {
+                await window.game.handlePlaceFactory(x, y);
+                await new Promise(r => setTimeout(r, 50));
+            }
+        });
+
+        await p1.waitForTimeout(8000);
+
+        const targetTick = await p1.evaluate(() => Math.floor(window.game.simTime)) + 120;
+        await freezeBothAndWait(p1, p2, targetTick);
+
+        const { diffs, firstDiff } = await compareGrids(p1, p2);
+        expect(diffs, `Grids diverged: ${diffs} differences, first at index ${firstDiff?.index}`).toBe(0);
+
+        const countsOnP1 = await getFactoryCounts(p1);
+        const countsOnP2 = await getFactoryCounts(p2);
+
+        expect(countsOnP1.p1, 'Both pages agree on P1 factories').toBe(countsOnP2.p1);
+        expect(countsOnP1.p2, 'Both pages agree on P2 factories').toBe(countsOnP2.p2);
+        expect(countsOnP1.p1, 'P1 has at least 3 factories').toBeGreaterThanOrEqual(3);
+        expect(countsOnP1.p2, 'P2 has at least 3 factories').toBeGreaterThanOrEqual(3);
+
+        await ctx1.close();
+        await ctx2.close();
+    });
+
+    test('asymmetric latency: P1=300ms, P2=50ms', async ({ browser }) => {
+        const { p1, p2, ctx1, ctx2 } = await setupRoom(browser);
+
+        await injectLatency(p1, 300);
+        await injectLatency(p2, 50);
+
+        await p1.evaluate(async () => { await window.game.handlePlaceFactory(100, 100); });
+        await p2.evaluate(async () => { await window.game.handlePlaceFactory(400, 400); });
+
+        await p1.waitForTimeout(6000);
+
+        const targetTick = await p1.evaluate(() => Math.floor(window.game.simTime)) + 120;
+        await freezeBothAndWait(p1, p2, targetTick);
+
+        const { diffs, firstDiff } = await compareGrids(p1, p2);
+        expect(diffs, `Grids diverged: ${diffs} differences, first at index ${firstDiff?.index}`).toBe(0);
+
+        const countsOnP1 = await getFactoryCounts(p1);
+        const countsOnP2 = await getFactoryCounts(p2);
+
+        expect(countsOnP1.p1, 'P1 page: P1 factory = 1').toBe(1);
+        expect(countsOnP1.p2, 'P1 page: P2 factory = 1').toBe(1);
+        expect(countsOnP2.p1, 'P2 page: P1 factory = 1').toBe(1);
+        expect(countsOnP2.p2, 'P2 page: P2 factory = 1').toBe(1);
+
+        const stateP1 = await getGameState(p1);
+        const stateP2 = await getGameState(p2);
+        expect(stateP1.gameOver, 'P1 no game over').toBe(false);
+        expect(stateP2.gameOver, 'P2 no game over').toBe(false);
+
+        await ctx1.close();
+        await ctx2.close();
+    });
+
+    test('no false game-over under 200ms latency for 30 seconds', async ({ browser }) => {
+        const { p1, p2, ctx1, ctx2 } = await setupRoom(browser);
+
+        await injectLatency(p1, 200);
+        await injectLatency(p2, 200);
+
+        await p1.evaluate(async () => { await window.game.handlePlaceFactory(100, 100); });
+        await p2.evaluate(async () => { await window.game.handlePlaceFactory(400, 400); });
+
+        // Let simulation run for 30 seconds under latency
+        await p1.waitForTimeout(30000);
+
+        const targetTick = await p1.evaluate(() => Math.floor(window.game.simTime)) + 120;
+        await freezeBothAndWait(p1, p2, targetTick);
+
+        const stateP1 = await getGameState(p1);
+        const stateP2 = await getGameState(p2);
+
+        expect(stateP1.gameOver, 'P1 should not see game over').toBe(false);
+        expect(stateP2.gameOver, 'P2 should not see game over').toBe(false);
+
+        const countsOnP1 = await getFactoryCounts(p1);
+        const countsOnP2 = await getFactoryCounts(p2);
+
+        expect(countsOnP1.p1, 'P1 page: P1 factories >= 1').toBeGreaterThanOrEqual(1);
+        expect(countsOnP1.p2, 'P1 page: P2 factories >= 1').toBeGreaterThanOrEqual(1);
+        expect(countsOnP2.p1, 'P2 page: P1 factories >= 1').toBeGreaterThanOrEqual(1);
+        expect(countsOnP2.p2, 'P2 page: P2 factories >= 1').toBeGreaterThanOrEqual(1);
+
+        const { diffs, firstDiff } = await compareGrids(p1, p2);
+        expect(diffs, `Grids diverged: ${diffs} differences, first at index ${firstDiff?.index}`).toBe(0);
+
+        await ctx1.close();
+        await ctx2.close();
+    });
+
+    test('factory persists through rollback under 300ms latency', async ({ browser }) => {
+        const { p1, p2, ctx1, ctx2 } = await setupRoom(browser);
+
+        await injectLatency(p1, 300);
+        await injectLatency(p2, 300);
+
+        // P1 places factory
+        await p1.evaluate(async () => { await window.game.handlePlaceFactory(100, 100); });
+
+        // Wait for checkpoints to be saved after P1's factory
+        await p1.waitForTimeout(5000);
+
+        // P2 places factory (triggers rollback on P1)
+        await p2.evaluate(async () => { await window.game.handlePlaceFactory(400, 400); });
+
+        await p1.waitForTimeout(8000);
+
+        const targetTick = await p1.evaluate(() => Math.floor(window.game.simTime)) + 120;
+        await freezeBothAndWait(p1, p2, targetTick);
+
+        const { diffs, firstDiff } = await compareGrids(p1, p2);
+        expect(diffs, `Grids diverged: ${diffs} differences, first at index ${firstDiff?.index}`).toBe(0);
+
+        const countsOnP1 = await getFactoryCounts(p1);
+        const countsOnP2 = await getFactoryCounts(p2);
+
+        expect(countsOnP1.p1, 'P1 page: P1 factory >= 1').toBeGreaterThanOrEqual(1);
+        expect(countsOnP1.p2, 'P1 page: P2 factory >= 1').toBeGreaterThanOrEqual(1);
+        expect(countsOnP2.p1, 'P2 page: P1 factory >= 1').toBeGreaterThanOrEqual(1);
+        expect(countsOnP2.p2, 'P2 page: P2 factory >= 1').toBeGreaterThanOrEqual(1);
+
+        await ctx1.close();
+        await ctx2.close();
+    });
+});
