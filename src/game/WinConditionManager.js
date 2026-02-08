@@ -71,9 +71,15 @@ export class WinConditionManager {
         // Notify that counts have been updated
         this.onFactoryCountsUpdated(actualCounts);
 
+        // Both players must have placed at least one base before anyone can lose.
+        // This prevents instant game-over when the first player places a base
+        // before the opponent has had a chance to play.
+        const bothPlayersStarted = totalPlaced[PLAYER_1] >= 1 && totalPlaced[PLAYER_2] >= 1;
+        if (!bothPlayersStarted) return false;
+
         // Check lose condition: placed at least one base AND now have none left
         for (const player of [PLAYER_1, PLAYER_2]) {
-            if (totalPlaced[player] >= 1 && actualCounts[player] === 0) {
+            if (actualCounts[player] === 0) {
                 this.gameOver = true;
                 this.winner = player === PLAYER_1 ? PLAYER_2 : PLAYER_1;
                 console.log(`Player ${player} lost - all bases destroyed!`);

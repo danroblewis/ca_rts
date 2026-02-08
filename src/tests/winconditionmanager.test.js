@@ -86,7 +86,7 @@ export async function runWinConditionManagerTests() {
         assert(gameOverWinner === PLAYER_1, 'onGameOver should be called with PLAYER_1');
     });
 
-    await runTest('check does not trigger for player who never placed factories', async () => {
+    await runTest('check does not trigger when only one player has placed factories', async () => {
         const manager = new WinConditionManager({
             countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 }),
             getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 0, [PLAYER_2]: 1 })
@@ -94,6 +94,18 @@ export async function runWinConditionManagerTests() {
 
         const result = await manager.check();
         assert(result === false, 'check should return false (P1 never placed anything)');
+        assert(manager.gameOver === false, 'gameOver should remain false');
+    });
+
+    await runTest('check does not trigger until both players have placed', async () => {
+        // P1 placed 1 factory and it got destroyed, but P2 never placed - no game over
+        const manager = new WinConditionManager({
+            countFactories: async () => ({ [PLAYER_1]: 0, [PLAYER_2]: 0 }),
+            getPlayerTotalFactoriesPlaced: () => ({ [PLAYER_1]: 1, [PLAYER_2]: 0 })
+        });
+
+        const result = await manager.check();
+        assert(result === false, 'check should return false (P2 has not placed yet)');
         assert(manager.gameOver === false, 'gameOver should remain false');
     });
 
