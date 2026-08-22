@@ -13,7 +13,7 @@
 
 import { GPU } from '../gpu/GPU.js';
 import { PingPongBuffer } from '../gpu/PingPongBuffer.js';
-import { ComputePipeline } from '../gpu/ComputePipeline.js';
+import { SimulationPipeline } from '../ca/SimulationPipeline.js';
 import { loadShader } from '../shaders/load.js';
 import { runTest, assert, assertApprox, logSection } from './framework.js';
 
@@ -281,16 +281,13 @@ function sumBlueprintBuildCount(sim, data, centerX, centerY) {
 
 // Shared shader instance (compiled once, reused across all tests)
 let sharedPipeline = null;
-let sharedUniformBuffer = null;
 
 /**
  * Initialize the shared shader. Call once before running tests.
  */
 async function initSharedShader() {
     if (!sharedPipeline) {
-        const source = await loadShader('./src/shaders/ca/v2/mining_game.wgsl');
-        sharedPipeline = new ComputePipeline(source, { label: 'Mining test' });
-        sharedUniformBuffer = GPU.get().createUniformBuffer(16);
+        sharedPipeline = await SimulationPipeline.loadPipelines();
     }
     return sharedPipeline;
 }
@@ -302,6 +299,7 @@ async function initSharedShader() {
 function createMiningSimulation(width, height) {
     const gpu = GPU.get();
     const buffer = new PingPongBuffer(width, height, { format: 'float' });
+    const sim = new SimulationPipeline(width, height, sharedPipeline);
     let time = 0;
 
     return {
@@ -328,15 +326,7 @@ function createMiningSimulation(width, height) {
         },
 
         step(timeIncrement = 1) {
-            gpu.writeBuffer(sharedUniformBuffer, new Float32Array([width, height, time, 0]));
-            const bindGroup = sharedPipeline.createBindGroup([
-                { binding: 0, resource: buffer.getReadTexture().view },
-                { binding: 1, resource: buffer.getWriteTexture().view },
-                { binding: 2, resource: { buffer: sharedUniformBuffer } }
-            ]);
-            const workgroupsX = Math.ceil(width / 8);
-            const workgroupsY = Math.ceil(height / 8);
-            sharedPipeline.dispatch(bindGroup, workgroupsX, workgroupsY);
+            sim.step(buffer.getReadTexture(), buffer.getWriteTexture(), time);
             buffer.swap();
             time += timeIncrement;
         },
@@ -389,8 +379,9 @@ function createMiningSimulation(width, height) {
         },
 
         destroy() {
-            // Only destroy the buffer, not the shared pipeline
+            // Only destroy per-size resources, not the shared pipelines
             buffer.destroy();
+            sim.destroy();
         }
     };
 }

@@ -5,19 +5,9 @@
 // 2. Every pixel calls the same trait evaluators
 // 3. Each pixel extracts its role from the evaluation results
 // 4. Conservation is guaranteed because source/destination agree
-//
-// Performance structure (see core/intent.wgsl):
-// - sim_prepass.wgsl runs first and computes, once per cell, the expensive
-//   per-cell decisions (unit direction, resource direction, factory built
-//   state) plus a per-8x8-block "activity mask" of the cell types present.
-// - This pass reads those intents instead of re-evaluating neighbours, and
-//   skips whole trait evaluations when the 3x3 blocks around a cell contain
-//   nothing relevant. Results are bit-identical to evaluating everything
-//   inline (verified by the simulation equivalence tests).
 
 #include "./core/types.wgsl"
 #include "./core/traits.wgsl"
-#include "./core/intent.wgsl"
 #include "./traits/memory.wgsl"
 #include "./traits/movement.wgsl"
 #include "./traits/spawning.wgsl"
@@ -31,8 +21,6 @@
 @group(0) @binding(0) var u_state: texture_2d<f32>;
 @group(0) @binding(1) var u_output: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var<uniform> params: SimParams;
-@group(0) @binding(3) var u_intent: texture_2d<u32>;
-@group(0) @binding(4) var<storage, read> u_mask: array<u32>;
 
 struct SimParams {
     resolution: vec2f,
@@ -40,90 +28,24 @@ struct SimParams {
     flags: f32,     // bit 0 (> 0.5): factories may transform into missiles
 }
 
-// Activity mask of the 3x3 blocks around this workgroup's block.
-// One workgroup == one 8x8 block, so every invocation shares the same value.
-var<workgroup> wg_near: u32;
-
-fn computeNearMask(wid: vec2u) -> u32 {
-    let blocksX: i32 = i32(ceil(params.resolution.x / f32(BLOCK_SIZE)));
-    let blocksY: i32 = i32(ceil(params.resolution.y / f32(BLOCK_SIZE)));
-    let bx: i32 = i32(wid.x);
-    let by: i32 = i32(wid.y);
-    var near: u32 = 0u;
-    for (var dy: i32 = -1; dy <= 1; dy++) {
-        let yy: i32 = by + dy;
-        if (yy < 0 || yy >= blocksY) { continue; }
-        for (var dx: i32 = -1; dx <= 1; dx++) {
-            let xx: i32 = bx + dx;
-            if (xx < 0 || xx >= blocksX) { continue; }
-            near |= u_mask[u32(yy * blocksX + xx)];
-        }
-    }
-    return near;
-}
-
 // ============================================================================
 // Compute - Evaluate all traits and return the new cell state
 // ============================================================================
 
-fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) -> vec4f {
-    let unitsNear: bool = (near & ACT_UNITS) != 0u;
-    let factoriesNear: bool = (near & ACT_FACTORIES) != 0u;
-    let resourcesNear: bool = (near & ACT_RESOURCE) != 0u;
-    let missilesNear: bool = (near & ACT_MISSILES) != 0u;
-    let explosionsNear: bool = (near & ACT_EXPLOSION) != 0u;
-    let demolishNear: bool = (near & ACT_DEMOLISH) != 0u;
+fn compute(myPos: vec2f, myRaw: vec4f, myType: i32) -> vec4f {
 
     // ========================================================================
     // Evaluate all traits that might affect me
     // ========================================================================
 
-    // Movement needs a mobile cell within 1 of me (or of my target).
-    var movement: MovementResult;
-    movement.happened = false;
-    if (unitsNear) {
-        movement = evaluateMovementFast(myPos, myRaw, myIntent, u_state, u_intent, params.resolution, params.time);
-    }
-
-    // Spawning needs a factory within 2 of me.
-    var spawning: SpawnResult;
-    spawning.happened = false;
-    if (factoriesNear) {
-        spawning = evaluateSpawning(myPos, u_state, params.resolution);
-    }
-
-    // Deposit/build/attack/combat need a unit adjacent to a factory (or me).
-    var deposit_result: DepositResult;
-    deposit_result.happened = false;
-    var build: BuildResult;
-    build.happened = false;
-    var attack_result: AttackResult;
-    attack_result.happened = false;
-    if (unitsNear && factoriesNear) {
-        deposit_result = evaluateDepositFast(myPos, myRaw, myIntent, u_state, u_intent, params.resolution);
-        build = evaluateBuildFast(myPos, myRaw, myIntent, u_state, u_intent, params.resolution);
-        attack_result = evaluateAttack(myPos, u_state, params.resolution);
-    }
-
-    var demolish: DemolishResult;
-    demolish.happened = false;
-    if (unitsNear && demolishNear) {
-        demolish = evaluateDemolish(myPos, u_state, params.resolution);
-    }
-
-    var combat: CombatResult;
-    combat.inCombat = false;
-    combat.tookDamage = false;
-    combat.damageAmount = 0.0;
-    if (isUnit(myType)) {
-        combat = evaluateCombat(myPos, params.time, u_state, params.resolution);
-    }
-
-    var resourceMove: ResourceMoveResult;
-    resourceMove.happened = false;
-    if (resourcesNear) {
-        resourceMove = evaluateResourceMovementFast(myPos, myRaw, myIntent, params.time, u_state, u_intent, params.resolution);
-    }
+    let movement: MovementResult = evaluateMovement(myPos, u_state, params.resolution, params.time);
+    let spawning: SpawnResult = evaluateSpawning(myPos, u_state, params.resolution);
+    let deposit_result: DepositResult = evaluateDeposit(myPos, u_state, params.resolution);
+    let build: BuildResult = evaluateBuild(myPos, u_state, params.resolution);
+    let demolish: DemolishResult = evaluateDemolish(myPos, u_state, params.resolution);
+    let attack_result: AttackResult = evaluateAttack(myPos, u_state, params.resolution);
+    let combat: CombatResult = evaluateCombat(myPos, params.time, u_state, params.resolution);
+    let resourceMove: ResourceMoveResult = evaluateResourceMovement(myPos, params.time, u_state, params.resolution);
 
     // ========================================================================
     // Extract my role from each trait result
@@ -152,10 +74,9 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
     }
 
     // --- FACTORY → MISSILE TRANSFORMATION ---
-    // (needs >= 8 units in the ring around the factory; disabled unless the
-    // missile feature is enabled, because a crowd of depositing units would
-    // otherwise turn a player's only factory into a missile)
-    if (isFactory(myType) && unitsNear && params.flags > 0.5) {
+    // (gated by params.flags exactly like the optimised shader; this is the
+    // only behavioural change relative to the original single-pass shader)
+    if (isFactory(myType) && params.flags > 0.5) {
         let transformation: FactoryToMissileResult = checkFactoryToMissile(myPos, myRaw, u_state, params.resolution);
         if (transformation.shouldTransform) {
             return transformation.missileCell;
@@ -230,7 +151,7 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
             );
         }
         if (distance(build.blueprintPos, myPos) < 0.5) {
-            let builds: i32 = countBuildsFast(myPos, myRaw, myIntent, u_state, u_intent, params.resolution);
+            let builds: i32 = countBuilds(myPos, u_state, params.resolution);
             let newBuildProgress: f32 = min(getFactoryBuildProgress(myRaw) + f32(builds), MAX_BUILD_PER_CELL);
             let center: vec2f = getFactoryPos(myRaw);
             let factoryPlayer: i32 = getPlayer(myType);
@@ -286,28 +207,28 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
             );
         }
         if (distance(attack_result.factoryPos, myPos) < 0.5) {
+            let attacks: i32 = countAttacks(myPos, attack_result.defenderPlayer, u_state, params.resolution);
             return encodeEmpty();
         }
     }
 
-    // --- MISSILE EXPLOSION / ARRIVAL / PATH ---
-    // All three need a missile within 5 cells.
-    if (missilesNear) {
-        let explodingMissile: vec2f = findExplodingMissileAffecting(myPos, u_state, params.resolution);
-        if (explodingMissile.x >= 0.0) {
-            if (!isMissile(myType) || distance(getMissileCenter(myRaw), explodingMissile) > 0.5) {
-                return encodeEmpty();
-            }
-        }
-
-        let missileArrival: MissileMovementResult = checkMissileArrival(myPos, params.time, u_state, params.resolution);
-        if (missileArrival.happened) {
-            return missileArrival.arrivingCell;
-        }
-
-        if (!isMissile(myType) && isInMissilePath(myPos, params.time, u_state, params.resolution)) {
+    // --- MISSILE EXPLOSION ---
+    let explodingMissile: vec2f = findExplodingMissileAffecting(myPos, u_state, params.resolution);
+    if (explodingMissile.x >= 0.0) {
+        if (!isMissile(myType) || distance(getMissileCenter(myRaw), explodingMissile) > 0.5) {
             return encodeEmpty();
         }
+    }
+
+    // --- MISSILE ARRIVAL ---
+    let missileArrival: MissileMovementResult = checkMissileArrival(myPos, params.time, u_state, params.resolution);
+    if (missileArrival.happened) {
+        return missileArrival.arrivingCell;
+    }
+
+    // --- MISSILE IN PATH ---
+    if (!isMissile(myType) && isInMissilePath(myPos, params.time, u_state, params.resolution)) {
+        return encodeEmpty();
     }
 
     // ========================================================================
@@ -325,44 +246,48 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
         if (lifetime <= 0) {
             return encodeEmpty();
         }
+        let rDir: i32 = 1 + i32(hash(myPos, params.time) * 8.0);
+        let offset: vec2f = dirToOffset(rDir);
+        let targetPos: vec2f = myPos + offset;
+        let targetRaw: vec4f = textureLoad(u_state, vec2i(targetPos), 0);
+        let targetType: i32 = getType(targetRaw);
+        if (targetType != TYPE_EMPTY && !isExplosion(targetType)) {
+            return encodeExplosion(lifetime - 1);
+        }
         return encodeExplosion(lifetime - 1);
     }
 
     // --- EXPLOSION PARTICLE LOGIC ---
     if (myType == TYPE_EMPTY) {
-        if (missilesNear || explosionsNear) {
-            for (var d: i32 = 1; d <= 4; d++) {
-                let checkPos: vec2f = myPos + dirToOffset(d);
-                let checkRaw: vec4f = textureLoad(u_state, vec2i(checkPos), 0);
-                let checkType: i32 = getType(checkRaw);
+        for (var d: i32 = 1; d <= 4; d++) {
+            let checkPos: vec2f = myPos + dirToOffset(d);
+            let checkRaw: vec4f = textureLoad(u_state, vec2i(checkPos), 0);
+            let checkType: i32 = getType(checkRaw);
 
-                if (isMissile(checkType) && getMissileState(checkRaw) == MISSILE_EXPLODING) {
-                    let spawnChance: f32 = hash(myPos, params.time);
-                    if (spawnChance < 0.15) {
-                        return encodeExplosion(EXPLOSION_PARTICLE_LIFETIME);
-                    }
+            if (isMissile(checkType) && getMissileState(checkRaw) == MISSILE_EXPLODING) {
+                let spawnChance: f32 = hash(myPos, params.time);
+                if (spawnChance < 0.15) {
+                    return encodeExplosion(EXPLOSION_PARTICLE_LIFETIME);
                 }
+            }
 
-                if (isExplosion(checkType)) {
-                    let lifetime: i32 = getExplosionLifetime(checkRaw);
-                    if (lifetime > 0) {
-                        let particleDir: i32 = 1 + i32(hash(checkPos, params.time) * 4.0);
-                        let particleTarget: vec2f = checkPos + dirToOffset(particleDir);
-                        if (distance(particleTarget, myPos) < 0.5) {
-                            return encodeExplosion(lifetime - 1);
-                        }
+            if (isExplosion(checkType)) {
+                let lifetime: i32 = getExplosionLifetime(checkRaw);
+                if (lifetime > 0) {
+                    let particleDir: i32 = 1 + i32(hash(checkPos, params.time) * 4.0);
+                    let particleTarget: vec2f = checkPos + dirToOffset(particleDir);
+                    if (distance(particleTarget, myPos) < 0.5) {
+                        return encodeExplosion(lifetime - 1);
                     }
                 }
             }
         }
     } else if (!isExplosion(myType) && !isMissile(myType) && !isFactory(myType)) {
-        if (explosionsNear) {
-            for (var d: i32 = 1; d <= 4; d++) {
-                let checkPos: vec2f = myPos + dirToOffset(d);
-                let checkRaw: vec4f = textureLoad(u_state, vec2i(checkPos), 0);
-                if (isExplosion(getType(checkRaw))) {
-                    return encodeEmpty();
-                }
+        for (var d: i32 = 1; d <= 4; d++) {
+            let checkPos: vec2f = myPos + dirToOffset(d);
+            let checkRaw: vec4f = textureLoad(u_state, vec2i(checkPos), 0);
+            if (isExplosion(getType(checkRaw))) {
+                return encodeEmpty();
             }
         }
     }
@@ -412,11 +337,7 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
             factoryPos = vec2f(-1.0);
         }
 
-        // findVisibleFactory scans +-MEMORY_VISION_RANGE (5) < block reach (8)
-        var visibleFactory: vec2f = vec2f(-1.0);
-        if (factoriesNear) {
-            visibleFactory = findVisibleFactory(myPos, myPlayer, u_state, params.resolution);
-        }
+        let visibleFactory: vec2f = findVisibleFactory(myPos, myPlayer, u_state, params.resolution);
         if (visibleFactory.x >= 0.0 && distance(visibleFactory, factoryPos) > 0.5) {
             factoryPos = visibleFactory;
         }
@@ -427,7 +348,7 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
             mem.hasMemory = mem.freshness > 0.0;
             mem.factoryChanged = false;
         } else {
-            mem = evaluateMemoryFast(myPos, myRaw, myPlayer, factoriesNear, u_state, params.resolution);
+            mem = evaluateMemory(myPos, myRaw, myPlayer, u_state, params.resolution);
             if (mem.factoryChanged) {
                 factoryPos = mem.newFactoryPos;
             }
@@ -446,10 +367,7 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
 
     if (isFactory(myType)) {
         let myPlayer: i32 = getPlayer(myType);
-        var deposits: i32 = 0;
-        if (unitsNear) {
-            deposits = countDeposits(myPos, getFactoryPos(myRaw), myPlayer, u_state, params.resolution);
-        }
+        let deposits: i32 = countDeposits(myPos, getFactoryPos(myRaw), myPlayer, u_state, params.resolution);
         let newResources: f32 = getFactoryResources(myRaw) + f32(deposits);
         return encodeFactory(newResources, getFactoryPos(myRaw), myPlayer);
     }
@@ -462,23 +380,14 @@ fn compute(myPos: vec2f, myRaw: vec4f, myType: i32, myIntent: u32, near: u32) ->
 // ============================================================================
 
 @compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3u,
-        @builtin(local_invocation_index) lid: u32,
-        @builtin(workgroup_id) wid: vec3u) {
-    if (lid == 0u) {
-        wg_near = computeNearMask(wid.xy);
-    }
-    workgroupBarrier();
-    let near: u32 = wg_near;
-
+fn main(@builtin(global_invocation_id) gid: vec3u) {
     let pos: vec2i = vec2i(gid.xy);
     if (pos.x >= i32(params.resolution.x) || pos.y >= i32(params.resolution.y)) { return; }
 
     let myPos: vec2f = vec2f(f32(pos.x), f32(pos.y));
     let myRaw: vec4f = textureLoad(u_state, pos, 0);
     let myType: i32 = getType(myRaw);
-    let myIntent: u32 = textureLoad(u_intent, pos, 0).r;
 
-    let result: vec4f = compute(myPos, myRaw, myType, myIntent, near);
+    let result: vec4f = compute(myPos, myRaw, myType);
     textureStore(u_output, pos, result);
 }

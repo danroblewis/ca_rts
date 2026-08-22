@@ -1,17 +1,15 @@
 /**
- * NetworkSync - Handles multiplayer synchronization
- * 
+ * NetworkSync - WebSocket transport for multiplayer
+ *
  * Protocol:
- * - Control messages (join, leave, etc.) use JSON text
- * - Sync messages use binary format for efficiency:
- *   [4-byte header length][JSON header][raw grid bytes]
- * 
- * - When a player performs an action, they send:
- *   1. Their entire grid state (raw binary)
- *   2. The action they performed (in header)
- *   3. The current simulation tick (in header)
- * 
- * - The receiver replaces their grid with the sender's state
+ * - Control messages (join, leave, heartbeat, ...) are JSON text.
+ * - Lockstep input frames are JSON text: { type: 'inputs', playerId, frames }
+ *   where frames = [{ tick, actions }]. Sent every tick, relayed by the server
+ *   to every other client in the room.
+ * - State hashes are JSON text: { type: 'hash', playerId, tick, hash }.
+ * - Snapshots ("sync") are binary: [4-byte header length][JSON header][zlib grid]
+ *   The header carries { tick, counters, frames } so a joiner (or a client
+ *   recovering from a desync) can resume lockstep from the snapshot tick.
  */
 
 export class NetworkSync {
@@ -32,6 +30,16 @@ export class NetworkSync {
         this.onSpectating = null;  // Called when spectator joins
         this.onRestart = null;     // Called when game restarts
         this.onSpeedSync = null;   // Called when server sends target simulation speed
+        this.onInputsReceived = null;   // (playerId, frames) lockstep input frames
+        this.onHashReceived = null;     // (playerId, tick, hash)
+        this.onInputsRequested = null;  // (requestingPlayerId, fromTick) peer asks for re-send
+        this.onStateRequested = null;   // (requestingPlayerId) peer/spectator asks for a snapshot
+        this.onPong = null;             // (rttMs)
+        this.hostId = null;
+        this.rttMs = 0;          // smoothed round trip to the server
+        this.rttPeakMs = 0;      // max of the recent samples (jitter-aware)
+        this._rttSamples = [];
+        this.peerRttMs = {};     // playerId -> that peer's reported rttPeakMs
     }
 
     // ========================================================================
@@ -54,7 +62,7 @@ export class NetworkSync {
      * Format: [4-byte header length][JSON header][compressed grid bytes]
      * Header includes: compressed flag, original size for decompression
      */
-    createBinarySyncMessage(gridData, action, simTime) {
+    createBinarySyncMessage(gridData, action, simTime, extra = {}) {
         const start = performance.now();
         
         // Get raw grid bytes
@@ -76,7 +84,8 @@ export class NetworkSync {
             action: action,
             sentAt: Date.now(),
             compressed: isCompressed,
-            originalSize: originalSize
+            originalSize: originalSize,
+            ...extra
         };
         const headerJson = JSON.stringify(header);
         const headerBytes = new TextEncoder().encode(headerJson);
@@ -307,18 +316,13 @@ export class NetworkSync {
             console.log(`[NetworkSync] Network latency: ${networkLatency} ms`);
         }
         
-        // Process syncs from other players OR cached state from server (even if originally from us)
-        // The cached state might be from our previous session (before refresh)
-        // We detect this by checking if our local simTime is 0 or much lower than the sync
-        const isCachedStateFromServer = this.localSimTime === undefined || this.localSimTime < parsed.simTime - 100;
-        
-        if (this.isSpectator || parsed.playerId !== this.playerId || isCachedStateFromServer) {
-            console.log(`[NetworkSync] Received binary sync from Player ${parsed.playerId} at tick ${parsed.simTime} (cached: ${isCachedStateFromServer})`);
+        if (this.isSpectator || parsed.playerId !== this.playerId) {
+            console.log(`[NetworkSync] Received snapshot from Player ${parsed.playerId} at tick ${parsed.simTime}`);
             if (this.onStateReceived) {
                 this.onStateReceived(parsed);
             }
         } else {
-            console.log(`[NetworkSync] Ignoring our own sync (Player ${parsed.playerId}, tick ${parsed.simTime})`);
+            console.log(`[NetworkSync] Ignoring our own snapshot (tick ${parsed.simTime})`);
         }
     }
 
@@ -329,7 +333,8 @@ export class NetworkSync {
         switch (message.type) {
             case 'joined':
                 this.playerId = message.playerId;
-                console.log(`[NetworkSync] Joined as Player ${this.playerId}, mapSeed: ${message.mapSeed}, connectedPlayers: ${message.connectedPlayers}`);
+                if (message.hostId !== undefined) this.hostId = message.hostId;
+                console.log(`[NetworkSync] Joined as Player ${this.playerId}, mapSeed: ${message.mapSeed}, connectedPlayers: ${message.connectedPlayers}, host: ${this.hostId}`);
                 if (this.onPlayerJoined) {
                     this.onPlayerJoined(message.playerId, message.isHost, message.mapSeed, message.connectedPlayers);
                 }
@@ -346,17 +351,61 @@ export class NetworkSync {
                 
             case 'player_joined':
                 console.log(`[NetworkSync] Player ${message.playerId} joined`);
+                if (message.hostId !== undefined) this.hostId = message.hostId;
                 if (this.onPlayerJoined) {
                     this.onPlayerJoined(message.playerId, false);
                 }
                 break;
-                
+
             case 'player_left':
                 console.log(`[NetworkSync] Player ${message.playerId} left`);
+                if (message.hostId !== undefined) this.hostId = message.hostId;
                 if (this.onPlayerLeft) {
                     this.onPlayerLeft(message.playerId);
                 }
                 break;
+
+            case 'spectator_joined':
+                // Host sends a fresh snapshot so the spectator can follow
+                if (this.onStateRequested) {
+                    this.onStateRequested(null);
+                }
+                break;
+
+            case 'state_requested':
+                if (this.onStateRequested) {
+                    this.onStateRequested(message.requestingPlayerId);
+                }
+                break;
+
+            case 'inputs':
+                if (message.playerId !== this.playerId && this.onInputsReceived) {
+                    this.onInputsReceived(message.playerId, message.frames || []);
+                }
+                break;
+
+            case 'hash':
+                if (message.playerId !== this.playerId) {
+                    if (message.rtt !== undefined) this.peerRttMs[message.playerId] = message.rtt;
+                    if (this.onHashReceived) this.onHashReceived(message.playerId, message.tick, message.hash, message.rtt);
+                }
+                break;
+
+            case 'request_inputs':
+                if (this.onInputsRequested) {
+                    this.onInputsRequested(message.requestingPlayerId, message.fromTick);
+                }
+                break;
+
+            case 'pong': {
+                const rtt = Date.now() - message.t;
+                this.rttMs = this.rttMs ? this.rttMs * 0.7 + rtt * 0.3 : rtt;
+                this._rttSamples.push(rtt);
+                if (this._rttSamples.length > 8) this._rttSamples.shift();
+                this.rttPeakMs = Math.max(...this._rttSamples);
+                if (this.onPong) this.onPong(rtt);
+                break;
+            }
                 
             case 'sync':
                 // JSON sync message (from server cache - base64 encoded)
@@ -417,10 +466,10 @@ export class NetworkSync {
     /**
      * Sync state after performing an action (uses binary format - LEGACY, expensive)
      */
-    syncState(gridData, action, simTime) {
+    syncState(gridData, action, simTime, extra = {}) {
         if (!this.isConnected) return;
         
-        const binaryMessage = this.createBinarySyncMessage(gridData, action, simTime);
+        const binaryMessage = this.createBinarySyncMessage(gridData, action, simTime, extra);
         this.sendBinary(binaryMessage);
         console.log(`[NetworkSync] Synced binary state after action: ${action.type}`);
     }
@@ -446,6 +495,51 @@ export class NetworkSync {
         
         this.send(message);
         console.log(`[NetworkSync] Sent action: ${action.type} at tick ${simTime}`);
+    }
+
+    /**
+     * Send lockstep input frames: [{ tick, actions }]
+     */
+    sendInputs(frames) {
+        if (!this.isConnected || this.isSpectator || frames.length === 0) return;
+        this.send({
+            type: 'inputs',
+            playerId: this.playerId,
+            roomId: this.roomId,
+            frames: frames
+        });
+    }
+
+    /**
+     * Send a state hash for divergence detection.
+     */
+    sendHash(tick, hash) {
+        if (!this.isConnected || this.isSpectator) return;
+        // Piggy-back our round trip so peers can size their input delay for
+        // the full client->server->client path.
+        this.send({ type: 'hash', playerId: this.playerId, roomId: this.roomId, tick, hash, rtt: this.rttPeakMs });
+    }
+
+    /**
+     * Ask a peer to re-send its input frames from a tick (gap recovery).
+     */
+    requestInputs(targetPlayerId, fromTick) {
+        if (!this.isConnected) return;
+        this.send({
+            type: 'request_inputs',
+            roomId: this.roomId,
+            requestingPlayerId: this.playerId,
+            targetPlayerId: targetPlayerId,
+            fromTick: fromTick
+        });
+    }
+
+    /**
+     * Round-trip measurement (server echoes as 'pong').
+     */
+    sendPing() {
+        if (!this.isConnected) return;
+        this.send({ type: 'ping', roomId: this.roomId, t: Date.now() });
     }
 
     /**

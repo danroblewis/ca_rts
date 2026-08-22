@@ -109,6 +109,28 @@ export async function runWinConditionManagerTests() {
         assert(manager.gameOver === false, 'gameOver should remain false');
     });
 
+    await runTest('check is not fooled by a factory placed while the grid readback is in flight', async () => {
+        // Regression: P2's first factory gets applied DURING the (slow) GPU
+        // readback. The readback data predates it, but totalPlaced (read after
+        // the await) already counts it -> used to be a false "P2 lost".
+        const totals = { [PLAYER_1]: 1, [PLAYER_2]: 0 };
+        let gameOverCalled = false;
+        const manager = new WinConditionManager({
+            countFactories: async () => {
+                await new Promise(r => setTimeout(r, 20));
+                totals[PLAYER_2] = 1;                       // applied mid-readback
+                return { [PLAYER_1]: 1, [PLAYER_2]: 0 };    // stale snapshot
+            },
+            getPlayerTotalFactoriesPlaced: () => totals,
+            onGameOver: () => { gameOverCalled = true; }
+        });
+
+        const result = await manager.check();
+        assert(result === false, 'no game over from a stale snapshot');
+        assert(!gameOverCalled, 'onGameOver not called');
+        assert(manager.gameOver === false, 'gameOver stays false');
+    });
+
     await runTest('check calls onFactoryCountsUpdated', async () => {
         let updatedCounts = null;
 

@@ -12,7 +12,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-PORT=8080
+PORT="${E2E_PORT:-8080}"
+export E2E_PORT="$PORT"
 SERVER_PID=""
 
 cleanup() {

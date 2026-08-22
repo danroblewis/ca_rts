@@ -1,19 +1,17 @@
 /**
  * GameLoop - Orchestrates the game loop
- * 
+ *
  * Handles:
  * - Render loop via requestAnimationFrame
- * - Simulation stepping (sync and fast modes)
- * - Stats tracking (TPS/FPS)
- * - Network heartbeat
+ * - Fixed-timestep simulation pacing (targetTicksPerSecond) with bounded
+ *   catch-up, gated by lockstep input availability in multiplayer
+ * - Fast mode (many ticks per frame, single player)
+ * - Stats tracking (TPS/FPS) and the periodic network heartbeat
+ *
+ * The frame path is fully synchronous: nothing here awaits the GPU.
  */
 
 import { Logger } from '../utils/Logger.js';
-import { 
-    CELL_MISSILE, CELL_MISSILE_P2, 
-    MISSILE_BUILDING, MISSILE_ARMED, MISSILE_MOVING, MISSILE_EXPLODING,
-    getMissileStateFromG 
-} from '../utils/GameUtils.js';
 
 export class GameLoop {
     /**
@@ -27,13 +25,22 @@ export class GameLoop {
         this.renderer = options.renderer;
         this.config = options.config;
         this.networkManager = options.networkManager || null;
-        
+
+        // Dynamic resolution: step down the render scale when the GPU can't
+        // keep up (the 512x512 CA doesn't need retina pixels).
+        this.setRenderScale = options.setRenderScale || null;
+        this.renderScales = this.config.renderScales || [1.5, 1.0, 0.75, 0.5];
+        this.renderScaleIndex = 0;
+        this.renderScale = this.renderScales[0];
+        this.lowFpsSince = 0;
+
         // Timing
         this.lastRenderTime = 0;
-        this.lastSimStepTime = 0;
+        this.tickAccumulator = 0;        // ms of simulation time owed
+        this.maxStepsPerFrame = this.config.maxStepsPerFrame ?? 4;
         this.running = false;
-        
-        // Stats tracking (inline, no separate module needed)
+
+        // Stats tracking
         this.simStepCount = 0;
         this.tpsCalcStepCount = 0;
         this.tpsFrameTimeAccumulator = 0;
@@ -41,179 +48,130 @@ export class GameLoop {
         this.lastTpsCalcTime = performance.now();
         this.effectiveTps = 60;
         this.potentialTps = 60;
-        
+        this.frameTimes = [];            // recent frame times (ms) for p95 etc.
+
         // Network heartbeat timing
         this.lastHeartbeatTime = 0;
-        this.lastFullSyncTime = 0;
 
         // Auto perf mode: switch to performance mode if FPS < 55 for 5+ seconds
-        this.lowFpsStart = 0;          // timestamp when FPS first dropped below threshold
-        this.autoPerfTriggered = false; // only trigger once per session
-        
-        // Bind the loop method
+        this.lowFpsStart = 0;
+        this.autoPerfTriggered = false;
+
         this._loop = this._loop.bind(this);
     }
-    
-    /**
-     * Start the game loop
-     */
+
     start() {
         this.running = true;
         this.lastRenderTime = performance.now();
         this.lastTpsCalcTime = performance.now();
         requestAnimationFrame(this._loop);
-        
-        // If starting in fast mode, also start fast loop
+
         if (!this.game.syncWithRender) {
             this._fastLoop();
         }
     }
-    
-    /**
-     * Stop the game loop
-     */
+
     stop() {
         this.running = false;
     }
-    
-    /**
-     * Get effective TPS (actual simulation speed)
-     */
+
     getEffectiveTps() {
         return this.effectiveTps;
     }
-    
-    /**
-     * Get potential TPS (how fast we could run)
-     */
+
     getPotentialTps() {
         return this.potentialTps;
     }
-    
+
     /**
      * Main render loop
      */
-    async _loop(now) {
-        if (!this.running || this._inLoop) return;
-        this._inLoop = true;
+    _loop(now) {
+        if (!this.running) return;
 
-        // Track frame time for potential TPS
-        if (this.lastRenderTime > 0) {
-            const frameTime = now - this.lastRenderTime;
-            this.tpsFrameTimeAccumulator += frameTime;
-            this.tpsFrameCount++;
-        }
+        const frameTime = this.lastRenderTime > 0 ? now - this.lastRenderTime : 0;
         this.lastRenderTime = now;
+        this.tpsFrameTimeAccumulator += frameTime;
+        this.tpsFrameCount++;
+        this.frameTimes.push(frameTime);
+        if (this.frameTimes.length > 300) this.frameTimes.shift();
 
-        // Run simulation if in sync mode
         if (this.game.syncWithRender) {
-            await this._runSyncedSimulation(now);
+            this._runSyncedSimulation(frameTime);
         }
 
-        // Update stats
         this._updateStats();
+        this._updateNetwork();
 
-        // Update network (heartbeat, periodic sync)
-        await this._updateNetwork();
+        if (this.game.audioManager.isInitialized()) {
+            this.game.audioManager.update(this.game.grid.getReadTexture());
+        }
 
-        // Track missile state changes for sounds
-        this._updateMissileSounds();
-
-        // Update audio
-        this.game.audioManager.update(this.game.grid.getReadTexture());
-
-        // Render
         this.renderer.render();
 
-        this._inLoop = false;
-
-        // Continue loop
         requestAnimationFrame(this._loop);
     }
-    
+
     /**
-     * Run simulation steps in sync mode
+     * Run simulation steps for this frame (fixed timestep with catch-up).
      */
-    async _runSyncedSimulation(now) {
+    _runSyncedSimulation(frameTime) {
         const game = this.game;
-        const batchSize = this.config.syncSimBatchSize || 1;
-        const tpsMargin = this.config.tpsMargin || 5;
-        const maxStepsPerFrame = 3;
+        const tps = Math.max(1, game.targetTicksPerSecond || 60);
+        const tickMs = 1000 / tps;
 
-        // Calculate target frame time
-        const effectiveTargetTps = game.isMultiplayer
-            ? Math.max(1, game.targetTicksPerSecond + tpsMargin)
-            : 999;
-        const targetFrameTime = 1000 / effectiveTargetTps;
+        // Owe at most a frame-budget of catch-up; a long hitch must not turn
+        // into a burst of dozens of ticks.
+        this.tickAccumulator += Math.min(frameTime, tickMs * this.maxStepsPerFrame);
 
-        // Initialize on first frame
-        if (this.lastSimStepTime === 0) {
-            this.lastSimStepTime = now;
+        let steps = 0;
+        while (this.tickAccumulator >= tickMs && steps < this.maxStepsPerFrame) {
+            if (!game.simulationStep()) {
+                // Stalled (waiting for peer inputs / initial sync): don't
+                // accumulate debt while blocked.
+                this.tickAccumulator = Math.min(this.tickAccumulator, tickMs);
+                break;
+            }
+            this.tickAccumulator -= tickMs;
+            steps++;
+            this.simStepCount++;
+            this.tpsCalcStepCount++;
         }
-
-        if (!game.isMultiplayer) {
-            // Single player: run every frame
-            for (let i = 0; i < batchSize; i++) {
-                await game.simulationStep();
-                this.simStepCount++;
-                this.tpsCalcStepCount++;
-            }
-            this.lastSimStepTime = now;
-        } else {
-            // Multiplayer: throttle to target TPS
-            let stepsTaken = 0;
-            while ((now - this.lastSimStepTime) >= targetFrameTime && stepsTaken < maxStepsPerFrame) {
-                for (let i = 0; i < batchSize; i++) {
-                    if (this.networkManager) {
-                        await this.networkManager.waitForPendingActions();
-                    }
-                    await game.applyPendingActions();
-                    await game.simulationStep();
-                    this.simStepCount++;
-                    this.tpsCalcStepCount++;
-                }
-                this.lastSimStepTime += targetFrameTime;
-                stepsTaken++;
-            }
+        if (steps === this.maxStepsPerFrame) {
+            // Still behind after a full catch-up: drop the remainder so we
+            // don't try to run faster than the wall clock forever.
+            this.tickAccumulator = Math.min(this.tickAccumulator, tickMs);
         }
     }
-    
+
     /**
-     * Fast simulation loop (runs via setTimeout)
+     * Fast simulation loop (single player "fast" speed toggle).
      */
-    async _fastLoop() {
+    _fastLoop() {
         if (this.game.syncWithRender || !this.running) return;
 
         const batchSize = this.config.simBatchSize || 10;
-
         for (let i = 0; i < batchSize; i++) {
-            if (this.networkManager) {
-                await this.networkManager.waitForPendingActions();
-            }
-            await this.game.applyPendingActions();
-            await this.game.simulationStep();
+            if (!this.game.simulationStep()) break;
             this.simStepCount++;
             this.tpsCalcStepCount++;
         }
 
         this._updateStats();
-
         setTimeout(() => this._fastLoop(), 0);
     }
-    
+
     /**
      * Update TPS/FPS stats
      */
     _updateStats() {
         const now = performance.now();
         const tpsElapsed = now - this.lastTpsCalcTime;
-        
+
         if (tpsElapsed >= 500) {
-            // Calculate actual TPS
-            this.effectiveTps = Math.max(1, (this.tpsCalcStepCount / tpsElapsed) * 1000);
+            this.effectiveTps = Math.max(0, (this.tpsCalcStepCount / tpsElapsed) * 1000);
             this.tpsCalcStepCount = 0;
-            
-            // Calculate potential TPS from frame times
+
             if (this.tpsFrameCount > 0) {
                 const avgFrameTime = this.tpsFrameTimeAccumulator / this.tpsFrameCount;
                 this.potentialTps = Math.max(1, 1000 / avgFrameTime);
@@ -221,8 +179,7 @@ export class GameLoop {
             this.tpsFrameTimeAccumulator = 0;
             this.tpsFrameCount = 0;
             this.lastTpsCalcTime = now;
-            
-            // Update UI
+
             this.game.gameUI.updateFpsDisplay(
                 this.effectiveTps,
                 this.game.targetTicksPerSecond,
@@ -231,6 +188,23 @@ export class GameLoop {
             );
             this.game.gameUI.updateTickDisplay();
 
+            // Dynamic resolution: FPS < 55 for 3+ seconds -> lower the render scale
+            if (this.setRenderScale) {
+                if (this.potentialTps < 55) {
+                    if (this.lowFpsSince === 0) {
+                        this.lowFpsSince = now;
+                    } else if (now - this.lowFpsSince > 3000 && this.renderScaleIndex < this.renderScales.length - 1) {
+                        this.renderScaleIndex++;
+                        this.renderScale = this.renderScales[this.renderScaleIndex];
+                        this.setRenderScale(this.renderScale);
+                        this.lowFpsSince = 0;
+                        console.log(`Render scale lowered to ${this.renderScale} (FPS was ${Math.round(this.potentialTps)})`);
+                    }
+                } else {
+                    this.lowFpsSince = 0;
+                }
+            }
+
             // Auto perf mode: if FPS < 55 for 5+ seconds, switch to performance mode
             if (!this.autoPerfTriggered && !this.game.performanceMode) {
                 if (this.potentialTps < 55) {
@@ -238,149 +212,63 @@ export class GameLoop {
                         this.lowFpsStart = now;
                     } else if (now - this.lowFpsStart > 5000) {
                         this.autoPerfTriggered = true;
-                        // Toggle via the DOM checkbox so SettingsUI handles everything
                         const perfToggle = document.getElementById('perf-toggle');
                         if (perfToggle) {
                             perfToggle.checked = true;
                             perfToggle.dispatchEvent(new Event('change'));
                         } else {
-                            // Fallback: set directly
                             this.game.performanceMode = true;
                             this.game.showMinimap = false;
                         }
                         console.log(`Auto-switched to performance mode (FPS was ${Math.round(this.potentialTps)} for 5+ seconds)`);
                     }
                 } else {
-                    this.lowFpsStart = 0; // reset if FPS recovers
+                    this.lowFpsStart = 0;
                 }
             }
         }
     }
-    
-    /**
-     * Update network (heartbeat and periodic sync)
-     */
-    async _updateNetwork() {
-        const game = this.game;
 
+    /**
+     * Update network (heartbeat)
+     */
+    _updateNetwork() {
+        const game = this.game;
         if (!game.isMultiplayer || !game.networkSync?.isConnected || game.isSpectator) {
             return;
         }
 
         const now = performance.now();
         const heartbeatInterval = this.config.heartbeatInterval || 1000;
-        const fullSyncInterval = this.config.fullSyncInterval || 5000;
-
-        // Send heartbeat
         if (now - this.lastHeartbeatTime >= heartbeatInterval) {
-            if (this.potentialTps > 1) {
-                game.networkSync.sendHeartbeat(this.potentialTps, Math.floor(game.simTime));
-            }
+            game.networkSync.sendHeartbeat(this.effectiveTps, Math.floor(game.simTime));
+            this.networkManager?.onHeartbeat?.();
             this.lastHeartbeatTime = now;
         }
-
-        // Host sends periodic full sync
-        if (game.networkSync.playerId === 1 && now - this.lastFullSyncTime >= fullSyncInterval) {
-            const gridData = await game.grid.download();
-            game.networkSync.syncState(gridData, {
-                type: 'periodic_sync',
-                factoryCounts: { ...game.playerFactoryCounts },
-                totalPlaced: { ...game.playerTotalFactoriesPlaced },
-                factoriesPlaced: game.factoriesPlaced
-            }, game.simTime);
-            this.lastFullSyncTime = now;
-            Logger.log('sync', `Sent periodic sync at tick ${Math.floor(game.simTime)}`);
-        }
     }
-    
+
     /**
      * Called when speed mode changes
      */
     onSpeedChange(syncWithRender) {
         this.game.syncWithRender = syncWithRender;
-        
-        // If switching to fast mode, start fast loop
         if (!syncWithRender) {
             this._fastLoop();
         }
     }
-    
+
     /**
-     * Track missile state changes and trigger sounds
+     * Frame time statistics for the last ~5 seconds.
      */
-    _updateMissileSounds() {
-        const game = this.game;
-        const audioManager = game.audioManager;
-        
-        if (!audioManager.isInitialized()) return;
-        
-        // Scan grid for missiles every few frames (performance optimization)
-        this.missileCheckCounter = (this.missileCheckCounter || 0) + 1;
-        if (this.missileCheckCounter % 5 !== 0) return;
-        
-        const gridSize = game.config.gridSize;
-        const data = game.grid.download();
-        
-        const newMissileStates = new Map();
-        let hasMovingMissile = false;
-        let hasExplodingMissile = false;
-        
-        // Scan for missiles
-        for (let y = 0; y < gridSize; y++) {
-            for (let x = 0; x < gridSize; x++) {
-                const idx = (y * gridSize + x) * 4;
-                const cellType = Math.floor(data[idx] + 0.5);
-                
-                if (cellType === CELL_MISSILE || cellType === CELL_MISSILE_P2) {
-                    const g = data[idx + 1];
-                    const state = getMissileStateFromG(g);
-                    const key = `${x},${y}`;
-                    
-                    newMissileStates.set(key, state);
-                    
-                    if (state === MISSILE_MOVING) {
-                        hasMovingMissile = true;
-                    }
-                    if (state === MISSILE_EXPLODING) {
-                        hasExplodingMissile = true;
-                    }
-                    
-                    // Check for state changes
-                    const prevState = game.missileStates.get(key);
-                    if (prevState !== undefined && prevState !== state) {
-                        // State changed!
-                        if (state === MISSILE_ARMED && prevState === MISSILE_BUILDING) {
-                            audioManager.playMissileArmed();
-                        }
-                        if (state === MISSILE_EXPLODING && prevState === MISSILE_MOVING) {
-                            audioManager.playMissileExplosion();
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Check for newly armed missiles (weren't tracked before)
-        for (const [key, state] of newMissileStates) {
-            if (state === MISSILE_ARMED && !game.missileStates.has(key)) {
-                // New armed missile detected
-                audioManager.playMissileArmed();
-            }
-        }
-        
-        // Update moving sound loop
-        if (hasMovingMissile && !game.hasMovingMissile) {
-            audioManager.startMissileMoving();
-        } else if (!hasMovingMissile && game.hasMovingMissile) {
-            // No more moving missiles - stop the loop (if not exploding)
-            if (!hasExplodingMissile) {
-                audioManager.stopMissileMoving();
-            }
-        }
-        
-        // Update tracked state
-        game.missileStates = newMissileStates;
-        game.hasMovingMissile = hasMovingMissile;
+    getFrameStats() {
+        const ft = [...this.frameTimes].sort((a, b) => a - b);
+        if (ft.length === 0) return { avg: 0, p95: 0, max: 0, fps: 0 };
+        const avg = ft.reduce((a, b) => a + b, 0) / ft.length;
+        return {
+            avg,
+            p95: ft[Math.floor(ft.length * 0.95)],
+            max: ft[ft.length - 1],
+            fps: 1000 / avg
+        };
     }
 }
-

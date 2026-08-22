@@ -543,12 +543,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 print(f"Spectator {spectator.spectator_id} joined room '{room_id}' (spectators: {len(room.spectators)})")
                 
-                # Send cached game state to spectator (if available)
-                cached_state = game_state_cache.get(room_id)
-                if cached_state and "binary" in cached_state:
-                    # Send as binary (compressed)
-                    await websocket.send_bytes(cached_state["binary"])
-                    print(f"Sent cached binary game state to Spectator {spectator.spectator_id}")
+                # Ask the host for a fresh snapshot (lockstep needs a snapshot at
+                # a known tick plus the pending input frames; the cache is stale)
+                if room.host_id and room.host_id in room.players:
+                    try:
+                        await room.players[room.host_id].websocket.send_json({
+                            "type": "spectator_joined",
+                            "spectatorId": spectator.spectator_id
+                        })
+                    except Exception:
+                        pass
             
             elif msg_type == "join":
                 # Player joining a room
@@ -567,6 +571,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "joined",
                     "playerId": player.player_id,
                     "isHost": player.is_host,
+                    "hostId": room.host_id,
                     "roomId": room_id,
                     "displayName": room.display_name,
                     "playerCount": len(room.players),
@@ -574,22 +579,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     "connectedPlayers": connected_player_ids
                 })
                 
-                # Notify other players
+                # Notify other players (the host responds with a fresh snapshot)
                 await room.broadcast({
                     "type": "player_joined",
                     "playerId": player.player_id,
+                    "hostId": room.host_id,
                     "playerCount": len(room.players)
                 }, exclude_player_id=player.player_id)
                 
-                print(f"Player {player.player_id} joined room '{room_id}' (total: {len(room.players)})")
-                
-                # Send cached game state to ANY joiner (including hosts who may have refreshed)
-                # The cache contains the most recent state from whoever was last syncing
-                cached_state = game_state_cache.get(room_id)
-                if cached_state and "binary" in cached_state:
-                    # Send as binary (compressed)
-                    await websocket.send_bytes(cached_state["binary"])
-                    print(f"Sent cached binary game state (tick {cached_state.get('simTime', '?')}) to Player {player.player_id}")
+                print(f"Player {player.player_id} joined room '{room_id}' (total: {len(room.players)}, host: {room.host_id})")
                 
             elif msg_type == "sync":
                 # Legacy JSON sync (from older clients or internal messages)
@@ -635,6 +633,29 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Broadcast the minimum speed and tick sync info to all players
                     await room.broadcast_speed_sync()
             
+            elif msg_type == "inputs":
+                # Lockstep input frames: relay to everyone else (players + spectators)
+                if room and player:
+                    await room.broadcast(data, exclude_player_id=player.player_id)
+            
+            elif msg_type == "hash":
+                # State hash for divergence detection: relay to other players
+                if room and player:
+                    await room.broadcast(data, exclude_player_id=player.player_id, include_spectators=False)
+            
+            elif msg_type == "request_inputs":
+                # A client is missing input frames from a peer: forward the request
+                if room:
+                    target = data.get("targetPlayerId")
+                    if target in room.players:
+                        try:
+                            await room.players[target].websocket.send_json(data)
+                        except Exception:
+                            pass
+            
+            elif msg_type == "ping":
+                await websocket.send_json({"type": "pong", "t": data.get("t")})
+            
             elif msg_type == "game_action":
                 # Lightweight action message (for rollback netcode)
                 # No grid state - just forward the action to other players
@@ -669,6 +690,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await room.broadcast({
                 "type": "player_left",
                 "playerId": player_id,
+                "hostId": room.host_id,
                 "playerCount": len(room.players)
             })
         

@@ -64,9 +64,12 @@ export class WinConditionManager {
     async check() {
         if (this.gameOver) return false;
 
+        // Capture "placed so far" BEFORE the readback: the grid copy is enqueued
+        // synchronously, so anything applied while we await it would show up in
+        // totalPlaced but not in the grid and cause a false game over.
+        const totalPlaced = { ...this.getPlayerTotalFactoriesPlaced() };
         // Count actual factories on map (async GPU readback)
         const actualCounts = await this.countFactories();
-        const totalPlaced = this.getPlayerTotalFactoriesPlaced();
 
         // Notify that counts have been updated
         this.onFactoryCountsUpdated(actualCounts);

@@ -13,6 +13,7 @@
 import { GPU } from '../gpu/GPU.js';
 import { PingPongBuffer } from '../gpu/PingPongBuffer.js';
 import { DataTexture } from '../gpu/DataTexture.js';
+import { SimulationPipeline } from '../ca/SimulationPipeline.js';
 import { ComputePipeline } from '../gpu/ComputePipeline.js';
 import { RenderPipeline } from '../gpu/RenderPipeline.js';
 import { RingBuffer } from '../gpu/RingBuffer.js';
@@ -26,16 +27,17 @@ const RENDER_FRAMES = 50;
 const RENDER_SIZE = 512;
 
 // Shared pipelines (compiled once)
-let simPipeline, metaballPipeline, debugPipeline;
+let simPipeline, refPipeline, metaballPipeline, debugPipeline;
 
 async function ensureShaders() {
     if (simPipeline) return;
-    const [simSrc, metaballSrc, debugSrc] = await Promise.all([
-        loadShader('./src/shaders/ca/v2/mining_game.wgsl'),
+    const [refSrc, metaballSrc, debugSrc] = await Promise.all([
+        loadShader('./src/shaders/ca/v2ref/mining_game.wgsl'),
         loadShader('./src/shaders/ca/render_metaballs.wgsl'),
         loadShader('./src/shaders/ca/v2/render.wgsl')
     ]);
-    simPipeline = new ComputePipeline(simSrc, { label: 'Perf sim' });
+    simPipeline = await SimulationPipeline.create(GRID_SIZE, GRID_SIZE);
+    refPipeline = new ComputePipeline(refSrc, { label: 'Perf reference sim' });
     metaballPipeline = new RenderPipeline(metaballSrc, { label: 'Perf metaball' });
     debugPipeline = new RenderPipeline(debugSrc, { label: 'Perf debug' });
 }
@@ -111,18 +113,11 @@ export async function runPerformanceTests() {
     // ====================================================================
     await runTest('Perf: compute sim throughput (individual dispatch)', async () => {
         const buffer = new PingPongBuffer(GRID_SIZE, GRID_SIZE, { format: 'float' });
-        const uniformBuffer = gpu.createUniformBuffer(16, 'Perf sim params');
         buffer.upload(gridData);
 
         // Warmup
         for (let i = 0; i < WARMUP; i++) {
-            gpu.writeBuffer(uniformBuffer, new Float32Array([GRID_SIZE, GRID_SIZE, i, 0]));
-            const bg = simPipeline.createBindGroup([
-                { binding: 0, resource: buffer.getReadTexture().view },
-                { binding: 1, resource: buffer.getWriteTexture().view },
-                { binding: 2, resource: { buffer: uniformBuffer } }
-            ]);
-            simPipeline.dispatch(bg, workgroups, workgroups);
+            simPipeline.step(buffer.getReadTexture(), buffer.getWriteTexture(), i);
             buffer.swap();
         }
         await gpu.device.queue.onSubmittedWorkDone();
@@ -130,13 +125,7 @@ export async function runPerformanceTests() {
         // Benchmark
         const start = performance.now();
         for (let i = 0; i < COMPUTE_STEPS; i++) {
-            gpu.writeBuffer(uniformBuffer, new Float32Array([GRID_SIZE, GRID_SIZE, WARMUP + i, 0]));
-            const bg = simPipeline.createBindGroup([
-                { binding: 0, resource: buffer.getReadTexture().view },
-                { binding: 1, resource: buffer.getWriteTexture().view },
-                { binding: 2, resource: { buffer: uniformBuffer } }
-            ]);
-            simPipeline.dispatch(bg, workgroups, workgroups);
+            simPipeline.step(buffer.getReadTexture(), buffer.getWriteTexture(), WARMUP + i);
             buffer.swap();
         }
         await gpu.device.queue.onSubmittedWorkDone();
@@ -146,8 +135,44 @@ export async function runPerformanceTests() {
         console.log(`  Compute ${GRID_SIZE}x${GRID_SIZE} individual: ${tps.toFixed(1)} TPS, ${(elapsed / COMPUTE_STEPS).toFixed(2)}ms/step (${COMPUTE_STEPS} steps in ${elapsed.toFixed(0)}ms)`);
 
         buffer.destroy();
-        uniformBuffer.destroy();
         assert(tps > 10, `Compute TPS too low: ${tps.toFixed(1)} (need > 10)`);
+    });
+
+    // ====================================================================
+    // 1b. Reference (single-pass) shader, for comparison with the two-pass sim
+    // ====================================================================
+    await runTest('Perf: optimised two-pass sim is faster than the reference single-pass shader', async () => {
+        const buffer = new PingPongBuffer(GRID_SIZE, GRID_SIZE, { format: 'float' });
+        const uniformBuffer = gpu.createUniformBuffer(16, 'Perf ref params');
+        buffer.upload(gridData);
+        const refStep = (t) => {
+            gpu.writeBuffer(uniformBuffer, new Float32Array([GRID_SIZE, GRID_SIZE, t, 0]));
+            const bg = refPipeline.createBindGroup([
+                { binding: 0, resource: buffer.getReadTexture().view },
+                { binding: 1, resource: buffer.getWriteTexture().view },
+                { binding: 2, resource: { buffer: uniformBuffer } }
+            ]);
+            refPipeline.dispatch(bg, workgroups, workgroups);
+            buffer.swap();
+        };
+        for (let i = 0; i < WARMUP; i++) refStep(i);
+        await gpu.device.queue.onSubmittedWorkDone();
+        let start = performance.now();
+        for (let i = 0; i < COMPUTE_STEPS; i++) refStep(WARMUP + i);
+        await gpu.device.queue.onSubmittedWorkDone();
+        const refMs = (performance.now() - start) / COMPUTE_STEPS;
+
+        for (let i = 0; i < WARMUP; i++) { simPipeline.step(buffer.getReadTexture(), buffer.getWriteTexture(), i); buffer.swap(); }
+        await gpu.device.queue.onSubmittedWorkDone();
+        start = performance.now();
+        for (let i = 0; i < COMPUTE_STEPS; i++) { simPipeline.step(buffer.getReadTexture(), buffer.getWriteTexture(), WARMUP + i); buffer.swap(); }
+        await gpu.device.queue.onSubmittedWorkDone();
+        const newMs = (performance.now() - start) / COMPUTE_STEPS;
+
+        console.log(`  Reference single-pass: ${refMs.toFixed(2)}ms/step, two-pass: ${newMs.toFixed(2)}ms/step (${(refMs / newMs).toFixed(1)}x)`);
+        buffer.destroy();
+        uniformBuffer.destroy();
+        assert(newMs < refMs, `two-pass (${newMs.toFixed(2)}ms) should beat reference (${refMs.toFixed(2)}ms)`);
     });
 
     // ====================================================================
@@ -155,21 +180,13 @@ export async function runPerformanceTests() {
     // ====================================================================
     await runTest('Perf: compute sim throughput (batched dispatch)', async () => {
         const buffer = new PingPongBuffer(GRID_SIZE, GRID_SIZE, { format: 'float' });
-        const uniformBuffer = gpu.createUniformBuffer(16, 'Perf sim batch params');
         buffer.upload(gridData);
-
-        // Write uniform once (all passes in batch see same time - fine for benchmarking)
-        gpu.writeBuffer(uniformBuffer, new Float32Array([GRID_SIZE, GRID_SIZE, 0, 0]));
+        const BATCH = 20;   // ticks per command buffer (uniform ring size permitting)
 
         // Warmup
         let encoder = gpu.createCommandEncoder('Perf warmup batch');
         for (let i = 0; i < WARMUP; i++) {
-            const bg = simPipeline.createBindGroup([
-                { binding: 0, resource: buffer.getReadTexture().view },
-                { binding: 1, resource: buffer.getWriteTexture().view },
-                { binding: 2, resource: { buffer: uniformBuffer } }
-            ]);
-            simPipeline.dispatch(bg, workgroups, workgroups, 1, encoder);
+            simPipeline.encodeStep(encoder, buffer.getReadTexture(), buffer.getWriteTexture(), i);
             buffer.swap();
         }
         gpu.submit([encoder.finish()]);
@@ -177,17 +194,14 @@ export async function runPerformanceTests() {
 
         // Benchmark
         const start = performance.now();
-        encoder = gpu.createCommandEncoder('Perf bench batch');
-        for (let i = 0; i < COMPUTE_STEPS; i++) {
-            const bg = simPipeline.createBindGroup([
-                { binding: 0, resource: buffer.getReadTexture().view },
-                { binding: 1, resource: buffer.getWriteTexture().view },
-                { binding: 2, resource: { buffer: uniformBuffer } }
-            ]);
-            simPipeline.dispatch(bg, workgroups, workgroups, 1, encoder);
-            buffer.swap();
+        for (let b = 0; b < COMPUTE_STEPS / BATCH; b++) {
+            encoder = gpu.createCommandEncoder('Perf bench batch');
+            for (let i = 0; i < BATCH; i++) {
+                simPipeline.encodeStep(encoder, buffer.getReadTexture(), buffer.getWriteTexture(), WARMUP + b * BATCH + i);
+                buffer.swap();
+            }
+            gpu.submit([encoder.finish()]);
         }
-        gpu.submit([encoder.finish()]);
         await gpu.device.queue.onSubmittedWorkDone();
         const elapsed = performance.now() - start;
 
@@ -195,7 +209,6 @@ export async function runPerformanceTests() {
         console.log(`  Compute ${GRID_SIZE}x${GRID_SIZE} batched:    ${tps.toFixed(1)} TPS, ${(elapsed / COMPUTE_STEPS).toFixed(2)}ms/step (${COMPUTE_STEPS} steps in ${elapsed.toFixed(0)}ms)`);
 
         buffer.destroy();
-        uniformBuffer.destroy();
         assert(tps > 10, `Batched compute TPS too low: ${tps.toFixed(1)} (need > 10)`);
     });
 
@@ -303,13 +316,7 @@ export async function runPerformanceTests() {
         // Helper: one sim+render cycle
         function doFrame(time) {
             // Sim step
-            gpu.writeBuffer(simUniformBuffer, new Float32Array([GRID_SIZE, GRID_SIZE, time, 0]));
-            const computeBG = simPipeline.createBindGroup([
-                { binding: 0, resource: ring.getReadTexture().view },
-                { binding: 1, resource: ring.getWriteTexture().view },
-                { binding: 2, resource: { buffer: simUniformBuffer } }
-            ]);
-            simPipeline.dispatch(computeBG, workgroups, workgroups);
+            simPipeline.step(ring.getReadTexture(), ring.getWriteTexture(), time);
             ring.swap();
 
             // Render step

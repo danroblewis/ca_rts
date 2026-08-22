@@ -80,11 +80,7 @@ export class GPU {
         }
 
         this.device = await this.adapter.requestDevice({
-            requiredFeatures,
-            requiredLimits: {
-                maxStorageTexturesPerShaderStage: 1,
-                maxStorageBuffersPerShaderStage: 1,
-            }
+            requiredFeatures
         });
 
         // Handle device loss

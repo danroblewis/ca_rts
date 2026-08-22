@@ -11,7 +11,7 @@
 
 import { GPU } from '../gpu/GPU.js';
 import { PingPongBuffer } from '../gpu/PingPongBuffer.js';
-import { ComputePipeline } from '../gpu/ComputePipeline.js';
+import { SimulationPipeline } from '../ca/SimulationPipeline.js';
 import { loadShader } from '../shaders/load.js';
 import { runTest, assert, assertApprox, logSection } from './framework.js';
 
@@ -198,10 +198,8 @@ class MissileSimulation {
         const gpu = GPU.get();
         this.pingpong = new PingPongBuffer(this.gridSize, this.gridSize, { format: 'float' });
 
-        // Load and compile shader
-        const source = await loadShader('./src/shaders/ca/v2/mining_game.wgsl');
-        this.pipeline = new ComputePipeline(source, { label: 'Missile test' });
-        this.uniformBuffer = gpu.createUniformBuffer(16);
+        // Shared simulation pipelines (prepass + main)
+        this.sim = await SimulationPipeline.create(this.gridSize, this.gridSize, { missilesEnabled: true });
     }
 
     createData() {
@@ -232,14 +230,7 @@ class MissileSimulation {
         this.pingpong.upload(data);
 
         // Run compute shader
-        gpu.writeBuffer(this.uniformBuffer, new Float32Array([this.gridSize, this.gridSize, time, 0]));
-        const bindGroup = this.pipeline.createBindGroup([
-            { binding: 0, resource: this.pingpong.getReadTexture().view },
-            { binding: 1, resource: this.pingpong.getWriteTexture().view },
-            { binding: 2, resource: { buffer: this.uniformBuffer } }
-        ]);
-        const workgroups = Math.ceil(this.gridSize / 8);
-        this.pipeline.dispatch(bindGroup, workgroups, workgroups);
+        this.sim.step(this.pingpong.getReadTexture(), this.pingpong.getWriteTexture(), time);
         this.pingpong.swap();
 
         return this.pingpong.download();
@@ -247,7 +238,7 @@ class MissileSimulation {
 
     cleanup() {
         if (this.pingpong) this.pingpong.destroy();
-        if (this.pipeline) this.pipeline.destroy();
+        if (this.sim) this.sim.destroy();
     }
     
     // Create a 3x3 factory centered at (x, y)

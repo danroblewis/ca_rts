@@ -3,11 +3,17 @@
  */
 import { runTest, assert, logSection } from './framework.js';
 import { NetworkManager } from '../network/NetworkManager.js';
+import { LockstepSync } from '../network/LockstepSync.js';
 
 // Mock dependencies
 function createMockNetworkSync() {
-    return {
+    const ns = {
         playerId: null,
+        hostId: null,
+        isConnected: true,
+        rttMs: 0,
+        rttPeakMs: 0,
+        peerRttMs: {},
         onConnectionChange: null,
         onSpectating: null,
         onRestart: null,
@@ -16,14 +22,26 @@ function createMockNetworkSync() {
         onPlayerLeft: null,
         onStateReceived: null,
         onActionReceived: null,
+        onInputsReceived: null,
+        onHashReceived: null,
+        onInputsRequested: null,
+        onStateRequested: null,
+        onPong: null,
+        sent: { inputs: [], hashes: [], snapshots: [], pings: 0, stateRequests: 0, inputRequests: [] },
         connect: async () => {},
         disconnect: () => {},
-        syncState: () => {}
+        syncState: (gridData, action, simTime, extra) => { ns.sent.snapshots.push({ gridData, action, simTime, extra }); },
+        sendInputs: (frames) => { ns.sent.inputs.push(frames); },
+        sendHash: (tick, hash) => { ns.sent.hashes.push({ tick, hash }); },
+        sendPing: () => { ns.sent.pings++; },
+        requestState: () => { ns.sent.stateRequests++; },
+        requestInputs: (player, fromTick) => { ns.sent.inputRequests.push({ player, fromTick }); }
     };
+    return ns;
 }
 
 function createMockGame() {
-    return {
+    const game = {
         mapSeed: 12345,
         isMultiplayer: false,
         isSpectator: false,
@@ -32,12 +50,15 @@ function createMockGame() {
         simTime: 0,
         waitingForSync: false,
         waitingForSyncStartTime: null,
-        targetTicksPerSecond: 30,
+        targetTicksPerSecond: 60,
+        multiplayerInputDelay: 6,
+        desyncDetected: false,
         playerFactoryCounts: { 1: 0, 2: 0 },
         playerTotalFactoriesPlaced: { 1: 0, 2: 0 },
         factoriesPlaced: 0,
+        lockstep: new LockstepSync({ inputDelay: 6 }),
         grid: {
-            download: async () => new Uint8Array(100),
+            download: async () => new Float32Array(16),
             upload: () => {},
             getReadTexture: () => ({}),
             swap: () => {}
@@ -46,14 +67,37 @@ function createMockGame() {
             updatePlayerIndicator: () => {},
             setTargetTick: () => {}
         },
-        rollbackManager: {
-            processRemoteAction: async () => {},
-            clear: () => {},
-            saveInitialCheckpoint: async () => {}
-        },
         generateMap: () => {},
-        simulationStep: () => {}
+        simulationStep: () => {},
+        enterMultiplayer(playerId) {
+            game.isMultiplayer = true;
+            game.currentPlayer = playerId === 2 ? 2 : 1;
+            game.lockstep.inputDelay = game.multiplayerInputDelay;
+            game.lockstep.start(game.simTime, game.currentPlayer);
+        },
+        leaveMultiplayer() {
+            game.isMultiplayer = false;
+            game.connectedPlayers.clear();
+            game.lockstep.peers.clear();
+        },
+        async createSnapshot() {
+            return { tick: game.simTime, gridData: new Float32Array(16), counters: { factoryCounts: { ...game.playerFactoryCounts }, totalPlaced: { ...game.playerTotalFactoriesPlaced }, factoriesPlaced: game.factoriesPlaced }, frames: game.lockstep.allFramesSince(game.simTime) };
+        },
+        applySnapshot(snapshot) {
+            game.simTime = snapshot.tick;
+            if (snapshot.counters?.factoryCounts) Object.assign(game.playerFactoryCounts, snapshot.counters.factoryCounts);
+            if (snapshot.counters?.totalPlaced) Object.assign(game.playerTotalFactoriesPlaced, snapshot.counters.totalPlaced);
+            if (snapshot.counters?.factoriesPlaced !== undefined) game.factoriesPlaced = snapshot.counters.factoriesPlaced;
+            game.lockstep.start(snapshot.tick, game.currentPlayer);
+            if (snapshot.frames?.length) game.lockstep.importFrames(snapshot.frames);
+            game.waitingForSync = false;
+            game.desyncDetected = false;
+            game.gameUI.updatePlayerIndicator();
+        },
+        receivedHashes: [],
+        receivePeerHash(playerId, tick, hash) { game.receivedHashes.push({ playerId, tick, hash }); }
     };
+    return game;
 }
 
 function createMockGameLoop() {
@@ -148,7 +192,10 @@ export async function runNetworkManagerTests() {
         assert(typeof ns.onPlayerJoined === 'function', 'Should bind onPlayerJoined');
         assert(typeof ns.onPlayerLeft === 'function', 'Should bind onPlayerLeft');
         assert(typeof ns.onStateReceived === 'function', 'Should bind onStateReceived');
-        assert(typeof ns.onActionReceived === 'function', 'Should bind onActionReceived');
+        assert(typeof ns.onInputsReceived === 'function', 'Should bind onInputsReceived');
+        assert(typeof ns.onHashReceived === 'function', 'Should bind onHashReceived');
+        assert(typeof ns.onInputsRequested === 'function', 'Should bind onInputsRequested');
+        assert(typeof ns.onStateRequested === 'function', 'Should bind onStateRequested');
     });
     
     // ========================================================================
@@ -157,9 +204,10 @@ export async function runNetworkManagerTests() {
     
     logSection('NetworkManager - Connection Events');
     
-    await runTest('onConnectionChange sets multiplayer on connect', async () => {
+    await runTest('onPlayerJoined (self, first in room) enters multiplayer without waiting', async () => {
         const ns = createMockNetworkSync();
         const game = createMockGame();
+        ns.playerId = 1; ns.hostId = 1;
         
         new NetworkManager({
             networkSync: ns,
@@ -171,8 +219,33 @@ export async function runNetworkManagerTests() {
             isOnLocalhost: true
         });
         
-        ns.onConnectionChange(true);
-        assert(game.isMultiplayer === true, 'Should set isMultiplayer to true on connect');
+        ns.onPlayerJoined(1, true, 12345, [1]);
+        assert(game.isMultiplayer === true, 'Should enter multiplayer');
+        assert(game.waitingForSync === false, 'Alone in the room: nothing to wait for');
+        assert(game.lockstep.peers.size === 0, 'No peers yet');
+    });
+
+    await runTest('onPlayerJoined (self, others present) waits for the host snapshot and gates on peers', async () => {
+        const ns = createMockNetworkSync();
+        const game = createMockGame();
+        ns.playerId = 2; ns.hostId = 1;
+        game.simTime = 50;
+        
+        new NetworkManager({
+            networkSync: ns,
+            game,
+            gameLoop: createMockGameLoop(),
+            networkIndicator: createMockNetworkIndicator(),
+            speedToggle: createMockSpeedToggle(),
+            config: {},
+            isOnLocalhost: true
+        });
+        
+        ns.onPlayerJoined(2, false, 12345, [1, 2]);
+        assert(game.isMultiplayer === true, 'Should enter multiplayer');
+        assert(game.waitingForSync === true, 'Must wait for the snapshot');
+        assert(game.lockstep.hasPeer(1), 'Player 1 is a peer');
+        assert(!game.lockstep.canSimulate(50), 'Cannot simulate without peer frames');
     });
     
     await runTest('onConnectionChange clears players on disconnect', async () => {
@@ -219,10 +292,13 @@ export async function runNetworkManagerTests() {
         assert(uiUpdated, 'Should update player indicator');
     });
     
-    await runTest('onPlayerJoined adds player and updates indicator', async () => {
+    await runTest('onPlayerJoined (remote) adds peer, stalls host at current tick, host sends snapshot', async () => {
         const ns = createMockNetworkSync();
-        ns.playerId = 1; // We are player 1
+        ns.playerId = 1; ns.hostId = 1;
         const game = createMockGame();
+        game.enterMultiplayer(1);
+        game.simTime = 120;
+        game.lockstep.emitFramesThrough(125);
         let indicatorUpdated = false;
         const networkIndicator = createMockNetworkIndicator();
         networkIndicator.update = () => { indicatorUpdated = true; };
@@ -237,10 +313,38 @@ export async function runNetworkManagerTests() {
             isOnLocalhost: true
         });
         
-        // Another player joins
-        ns.onPlayerJoined(2, false, 12345, [1, 2]);
+        ns.onPlayerJoined(2, false);
         assert(game.connectedPlayers.has(2), 'Should add new player to connectedPlayers');
+        assert(game.lockstep.hasPeer(2), 'Should gate on the new peer');
+        assert(!game.lockstep.canSimulate(120), 'Host stalls at its current tick until peer frames arrive');
         assert(indicatorUpdated, 'Should update network indicator');
+        await new Promise(r => setTimeout(r, 0));
+        assert(ns.sent.snapshots.length === 1, 'Host sent one snapshot');
+        const snap = ns.sent.snapshots[0];
+        assert(snap.simTime === 120, `Snapshot at the stalled tick (got ${snap.simTime})`);
+        assert(snap.extra.frames.length === 6, `Snapshot carries the host's future frames 120..125 (got ${snap.extra.frames.length})`);
+    });
+
+    await runTest('onPlayerJoined (remote) on a non-host does not send a snapshot', async () => {
+        const ns = createMockNetworkSync();
+        ns.playerId = 2; ns.hostId = 1;
+        const game = createMockGame();
+        game.enterMultiplayer(2);
+        
+        new NetworkManager({
+            networkSync: ns,
+            game,
+            gameLoop: createMockGameLoop(),
+            networkIndicator: createMockNetworkIndicator(),
+            speedToggle: createMockSpeedToggle(),
+            config: {},
+            isOnLocalhost: true
+        });
+        
+        ns.onPlayerJoined(3, false);
+        await new Promise(r => setTimeout(r, 0));
+        assert(ns.sent.snapshots.length === 0, 'Only the host snapshots');
+        assert(game.lockstep.hasPeer(3), 'But it still gates on the new peer');
     });
     
     await runTest('onPlayerLeft removes player from set', async () => {
@@ -264,17 +368,12 @@ export async function runNetworkManagerTests() {
         assert(game.connectedPlayers.has(1), 'Should keep other players');
     });
     
-    await runTest('onActionReceived routes to rollbackManager', async () => {
+    await runTest('onInputsReceived stores peer frames for lockstep', async () => {
         const ns = createMockNetworkSync();
+        ns.playerId = 1; ns.hostId = 1;
         const game = createMockGame();
-        let processedAction = null;
-        let processedPlayer = null;
-        let processedTick = null;
-        game.rollbackManager.processRemoteAction = async (action, player, tick) => {
-            processedAction = action;
-            processedPlayer = player;
-            processedTick = tick;
-        };
+        game.enterMultiplayer(1);
+        game.lockstep.addPeer(2, 0);
         
         new NetworkManager({
             networkSync: ns,
@@ -286,15 +385,107 @@ export async function runNetworkManagerTests() {
             isOnLocalhost: true
         });
         
-        ns.onActionReceived({
-            playerId: 2,
-            simTime: 100,
-            action: { type: 'place_factory', x: 10, y: 20 }
+        ns.onInputsReceived(2, [{ tick: 0, actions: [{ type: 'place_factory', x: 1, y: 2 }] }, { tick: 1, actions: [] }]);
+        assert(game.lockstep.canSimulate(1), 'Frames 0 and 1 present');
+        assert(game.lockstep.actionsForTick(0)[0].action.type === 'place_factory', 'Action stored at its tick');
+        assert(game.connectedPlayers.has(2), 'Player remembered');
+    });
+
+    await runTest('Game frames are sent to peers; hashes are forwarded both ways', async () => {
+        const ns = createMockNetworkSync();
+        ns.playerId = 1; ns.hostId = 1;
+        const game = createMockGame();
+        game.enterMultiplayer(1);
+        game.lockstep.addPeer(2, 0);
+        
+        new NetworkManager({
+            networkSync: ns,
+            game,
+            gameLoop: createMockGameLoop(),
+            networkIndicator: createMockNetworkIndicator(),
+            speedToggle: createMockSpeedToggle(),
+            config: {},
+            isOnLocalhost: true
         });
         
-        assert(processedAction.type === 'place_factory', 'Should pass action to rollbackManager');
-        assert(processedPlayer === 2, 'Should pass playerId');
-        assert(processedTick === 100, 'Should pass simTime');
+        game.onFramesEmitted([{ tick: 0, actions: [] }]);
+        assert(ns.sent.inputs.length === 1, 'Frames sent');
+        game.onLocalHash(60, 1234);
+        assert(ns.sent.hashes.length === 1 && ns.sent.hashes[0].hash === 1234, 'Hash sent');
+        ns.onHashReceived(2, 60, 1234);
+        assert(game.receivedHashes.length === 1, 'Peer hash delivered to the game');
+    });
+
+    await runTest('onInputsRequested re-sends own frames from the requested tick', async () => {
+        const ns = createMockNetworkSync();
+        ns.playerId = 1; ns.hostId = 1;
+        const game = createMockGame();
+        game.enterMultiplayer(1);
+        game.lockstep.emitFramesThrough(20);
+        
+        new NetworkManager({
+            networkSync: ns,
+            game,
+            gameLoop: createMockGameLoop(),
+            networkIndicator: createMockNetworkIndicator(),
+            speedToggle: createMockSpeedToggle(),
+            config: {},
+            isOnLocalhost: true
+        });
+        
+        ns.onInputsRequested(2, 15);
+        assert(ns.sent.inputs.length === 1, 'Re-sent');
+        assert(ns.sent.inputs[0].length === 6 && ns.sent.inputs[0][0].tick === 15, 'Frames 15..20');
+    });
+
+    await runTest('onDesync on a non-host requests a snapshot from the host (rate limited)', async () => {
+        const ns = createMockNetworkSync();
+        ns.playerId = 2; ns.hostId = 1;
+        const game = createMockGame();
+        game.enterMultiplayer(2);
+        
+        new NetworkManager({
+            networkSync: ns,
+            game,
+            gameLoop: createMockGameLoop(),
+            networkIndicator: createMockNetworkIndicator(),
+            speedToggle: createMockSpeedToggle(),
+            config: {},
+            isOnLocalhost: true
+        });
+        
+        game.onDesync(600);
+        game.onDesync(660);
+        assert(ns.sent.stateRequests === 1, 'One request (rate limited)');
+    });
+
+    await runTest('onPong adapts the input delay to the round-trip time', async () => {
+        const ns = createMockNetworkSync();
+        ns.playerId = 1; ns.hostId = 1;
+        const game = createMockGame();
+        game.enterMultiplayer(1);
+        
+        new NetworkManager({
+            networkSync: ns,
+            game,
+            gameLoop: createMockGameLoop(),
+            networkIndicator: createMockNetworkIndicator(),
+            speedToggle: createMockSpeedToggle(),
+            config: {},
+            isOnLocalhost: true
+        });
+        
+        ns.rttMs = 2; ns.rttPeakMs = 2; ns.onPong(2);
+        assert(game.multiplayerInputDelay === 6, `LAN rtt keeps the minimum delay (got ${game.multiplayerInputDelay})`);
+        ns.rttMs = 600; ns.rttPeakMs = 600; ns.onPong(600);
+        assert(game.multiplayerInputDelay > 20 && game.multiplayerInputDelay <= 90, `600ms rtt raises the delay (got ${game.multiplayerInputDelay})`);
+        assert(game.lockstep.inputDelay === game.multiplayerInputDelay, 'Lockstep delay updated');
+        // A far-away peer raises it further (client->server->client path)
+        const before = game.multiplayerInputDelay;
+        game.lockstep.addPeer(2, 0);
+        ns.peerRttMs[2] = 1200;
+        ns.onHashReceived(2, 60, 1, 1200);
+        assert(game.multiplayerInputDelay > before, `peer rtt raises the delay (${before} -> ${game.multiplayerInputDelay})`);
     });
     
     // ========================================================================
@@ -358,9 +549,13 @@ export async function runNetworkManagerTests() {
     
     logSection('NetworkManager - State Sync');
     
-    await runTest('onStateReceived updates factory counts and simTime', async () => {
+    await runTest('onStateReceived applies a host snapshot (counters, tick, frames)', async () => {
         const ns = createMockNetworkSync();
+        ns.playerId = 2; ns.hostId = 1;
         const game = createMockGame();
+        game.enterMultiplayer(2);
+        game.lockstep.addPeer(1, 0);
+        game.waitingForSync = true;
         let uiUpdated = false;
         game.gameUI.updatePlayerIndicator = () => { uiUpdated = true; };
         
@@ -375,14 +570,12 @@ export async function runNetworkManagerTests() {
         });
         
         ns.onStateReceived({
-            gridState: new Uint8Array(10),
+            playerId: 1,
+            gridState: new Float32Array(16),
             simTime: 100,
-            action: {
-                type: 'player_sync',
-                factoryCounts: { 1: 5, 2: 3 },
-                totalPlaced: { 1: 10, 2: 8 },
-                factoriesPlaced: 18
-            }
+            action: { type: 'snapshot' },
+            counters: { factoryCounts: { 1: 5, 2: 3 }, totalPlaced: { 1: 10, 2: 8 }, factoriesPlaced: 18 },
+            frames: [{ playerId: 1, tick: 100, actions: [] }, { playerId: 1, tick: 101, actions: [] }]
         });
         
         assert(game.playerFactoryCounts[1] === 5, 'Should update player 1 factory count');
@@ -390,12 +583,38 @@ export async function runNetworkManagerTests() {
         assert(game.playerTotalFactoriesPlaced[1] === 10, 'Should update player 1 total placed');
         assert(game.factoriesPlaced === 18, 'Should update total factories placed');
         assert(game.simTime === 100, 'Should update simTime');
+        assert(game.waitingForSync === false, 'No longer waiting');
+        assert(game.lockstep.canSimulate(101), 'Host frames from the snapshot are usable');
         assert(uiUpdated, 'Should update UI');
+    });
+
+    await runTest('onStateReceived ignores snapshots from non-hosts', async () => {
+        const ns = createMockNetworkSync();
+        ns.playerId = 2; ns.hostId = 1;
+        const game = createMockGame();
+        game.enterMultiplayer(2);
+        game.waitingForSync = true;
+        
+        new NetworkManager({
+            networkSync: ns,
+            game,
+            gameLoop: createMockGameLoop(),
+            networkIndicator: createMockNetworkIndicator(),
+            speedToggle: createMockSpeedToggle(),
+            config: {},
+            isOnLocalhost: true
+        });
+        
+        ns.onStateReceived({ playerId: 3, gridState: new Float32Array(16), simTime: 100, action: { type: 'snapshot' } });
+        assert(game.waitingForSync === true, 'Still waiting: snapshot was not from the host');
+        assert(game.simTime === 0, 'Tick unchanged');
     });
     
     await runTest('onStateReceived clears waitingForSync flag', async () => {
         const ns = createMockNetworkSync();
+        ns.playerId = 2; ns.hostId = 1;
         const game = createMockGame();
+        game.enterMultiplayer(2);
         game.waitingForSync = true;
         
         new NetworkManager({
@@ -409,9 +628,10 @@ export async function runNetworkManagerTests() {
         });
         
         ns.onStateReceived({
-            gridState: [],
+            playerId: 1,
+            gridState: new Float32Array(16),
             simTime: 0,
-            action: {}
+            action: { type: 'snapshot' }
         });
         
         assert(game.waitingForSync === false, 'Should clear waitingForSync flag');

@@ -5,7 +5,6 @@
 
 #include "../core/types.wgsl"
 #include "../core/random.wgsl"
-#include "../core/intent.wgsl"
 
 // ============================================================================
 // Configuration
@@ -316,116 +315,6 @@ fn evaluateResourceMovement(myPos: vec2f, time: f32, state: texture_2d<f32>, res
                     result.fromPos = neighborPos;
                     result.toPos = myPos;
                     result.movingCell = neighborRaw;
-                    return result;
-                }
-            }
-        }
-    }
-
-    return result;
-}
-
-
-// ============================================================================
-// INTENT-BASED RESOURCE MOVEMENT (used by the main pass)
-//
-// Identical semantics to evaluateResourceMovement(); neighbour direction
-// decisions come from the prepass intent texture instead of being recomputed.
-// A resource's intent has INTENT_RES_MOVES set iff shouldResourceMove() and
-// getResourceDirection() != DIR_NONE for that cell this tick.
-// ============================================================================
-
-fn resourceWinsCollisionFast(pos: vec2f, targetPos: vec2f, time: f32, intent: texture_2d<u32>, resolution: vec2f) -> bool {
-    let myPriority: f32 = getResourcePriority(pos, time, resolution);
-
-    for (var d: i32 = 1; d <= 8; d++) {
-        let competitorPos: vec2f = targetPos + dirToOffset(d);
-        if (distance(competitorPos, pos) < 0.5) { continue; }
-
-        if (competitorPos.x < 0.0 || competitorPos.x >= resolution.x ||
-            competitorPos.y < 0.0 || competitorPos.y >= resolution.y) {
-            continue;
-        }
-
-        let competitorIntent: u32 = textureLoad(intent, vec2i(competitorPos), 0).r;
-        if (intentType(competitorIntent) != TYPE_RESOURCE) { continue; }
-        if (!intentResourceMoves(competitorIntent)) { continue; }
-
-        let theirDir: i32 = intentDir(competitorIntent);
-        let theirTarget: vec2f = competitorPos + dirToOffset(theirDir);
-
-        if (distance(theirTarget, targetPos) < 0.5) {
-            let theirPriority: f32 = getResourcePriority(competitorPos, time, resolution);
-            if (theirPriority > myPriority) {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
-fn evaluateResourceMovementFast(myPos: vec2f, myRaw: vec4f, myIntent: u32, time: f32, state: texture_2d<f32>, intent: texture_2d<u32>, resolution: vec2f) -> ResourceMoveResult {
-    var result: ResourceMoveResult;
-    result.happened = false;
-    result.fromPos = vec2f(-1.0);
-    result.toPos = vec2f(-1.0);
-    result.movingCell = vec4f(0.0);
-
-    let myType: i32 = getType(myRaw);
-
-    // ========================================
-    // CASE 1: I'm a resource - am I leaving?
-    // ========================================
-    if (myType == TYPE_RESOURCE) {
-        if (intentResourceMoves(myIntent)) {
-            let myDir: i32 = intentDir(myIntent);
-            let targetPos: vec2f = myPos + dirToOffset(myDir);
-
-            if (targetPos.x >= 0.0 && targetPos.y >= 0.0 &&
-                targetPos.x < resolution.x && targetPos.y < resolution.y) {
-
-                let targetRaw: vec4f = textureLoad(state, vec2i(targetPos), 0);
-                let targetType: i32 = getType(targetRaw);
-
-                if (targetType == TYPE_EMPTY) {
-                    if (resourceWinsCollisionFast(myPos, targetPos, time, intent, resolution)) {
-                        result.happened = true;
-                        result.fromPos = myPos;
-                        result.toPos = targetPos;
-                        result.movingCell = myRaw;
-                        return result;
-                    }
-                }
-            }
-        }
-    }
-
-    // ========================================
-    // CASE 2: I'm empty - is a resource arriving?
-    // ========================================
-    if (myType == TYPE_EMPTY) {
-        for (var d: i32 = 1; d <= 8; d++) {
-            let neighborPos: vec2f = myPos + dirToOffset(d);
-
-            if (neighborPos.x < 0.0 || neighborPos.y < 0.0 ||
-                neighborPos.x >= resolution.x || neighborPos.y >= resolution.y) {
-                continue;
-            }
-
-            let neighborIntent: u32 = textureLoad(intent, vec2i(neighborPos), 0).r;
-            if (intentType(neighborIntent) != TYPE_RESOURCE) { continue; }
-            if (!intentResourceMoves(neighborIntent)) { continue; }
-
-            let theirDir: i32 = intentDir(neighborIntent);
-            let theirTarget: vec2f = neighborPos + dirToOffset(theirDir);
-
-            if (distance(theirTarget, myPos) < 0.5) {
-                if (resourceWinsCollisionFast(neighborPos, myPos, time, intent, resolution)) {
-                    result.happened = true;
-                    result.fromPos = neighborPos;
-                    result.toPos = myPos;
-                    result.movingCell = textureLoad(state, vec2i(neighborPos), 0);
                     return result;
                 }
             }

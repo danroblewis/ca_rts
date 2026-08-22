@@ -10,8 +10,9 @@
  */
 
 import { GPU } from './gpu/GPU.js';
-import { ComputePipeline } from './gpu/ComputePipeline.js';
 import { RenderPipeline } from './gpu/RenderPipeline.js';
+import { SimulationPipeline } from './ca/SimulationPipeline.js';
+import { ActionPipeline } from './game/ActionPipeline.js';
 import { loadShader } from './shaders/load.js';
 import { getNetworkSync } from './network/NetworkSync.js';
 import { PLAYER_1 } from './utils/GameUtils.js';
@@ -66,19 +67,21 @@ const CONFIG = {
     deleteRadius: 5,
     maxFactoriesPerPlayer: 7,
     
-    // Rollback
-    checkpointInterval: 10,
-    maxCheckpoints: 30,
+    // Lockstep
+    inputDelay: 6,            // ticks between issuing and applying an action (adaptive)
+    adaptiveInputDelay: true,
+    hashInterval: 60,         // ticks between state-hash exchanges
+    inputHistoryTicks: 1800,
     syncWaitTimeout: 3000,
+    maxStepsPerFrame: 4,
     
     // Network
     heartbeatInterval: 1000,
-    fullSyncInterval: 5000,
-    tickSyncThreshold: 30,
-    tickSyncHardThreshold: 300,
-    tickCatchupBatch: 10,
-    tpsMargin: 5,
-    tickSyncDisplayThreshold: 30
+    tickSyncDisplayThreshold: 30,
+
+    // Rendering resolution: cap the backing-store scale so retina displays
+    // don't quadruple the per-pixel render cost (the CA is 512x512 anyway).
+    maxDevicePixelRatio: 1.5
 };
 
 // ============================================================================
@@ -105,15 +108,22 @@ console.log(`Map seed: ${mapSeed}`);
 const canvas = document.getElementById('canvas');
 const gpu = await GPU.init(canvas);
 
+// Render scale: the canvas backing store is window size x min(devicePixelRatio, renderScale).
+// The GameLoop lowers renderScale on slow GPUs to keep the frame rate up.
+let renderScale = CONFIG.maxDevicePixelRatio;
 function resize() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, renderScale);
     // Fullscreen canvas - use entire window
     const width = window.innerWidth;
     const height = window.innerHeight;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
+}
+function setRenderScale(scale) {
+    renderScale = scale;
+    resize();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -128,17 +138,18 @@ console.time('⏱️ Total shader initialization');
 
 // Phase 1: Load shader source files
 console.time('  📥 Load shader sources');
-const [simShaderSource, metaballShaderSource, debugShaderSource] = await Promise.all([
-    loadShader('./src/shaders/ca/v2/mining_game.wgsl'),
+const [metaballShaderSource, debugShaderSource, simPipeline, actionPipeline] = await Promise.all([
     loadShader('./src/shaders/ca/render_metaballs.wgsl'),
-    loadShader('./src/shaders/ca/v2/render.wgsl')
+    loadShader('./src/shaders/ca/v2/render.wgsl'),
+    SimulationPipeline.create(CONFIG.gridSize, CONFIG.gridSize),
+    ActionPipeline.create(CONFIG.gridSize, CONFIG.gridSize, {
+        deleteRadius: CONFIG.deleteRadius,
+        firstFactoryResources: CONFIG.firstFactoryResources
+    })
 ]);
 console.timeEnd('  📥 Load shader sources');
 
 // Phase 2: Create GPU pipelines
-console.time('  🔨 Create simShader (ComputePipeline)');
-const simShader = new ComputePipeline(simShaderSource, { label: 'Simulation' });
-console.timeEnd('  🔨 Create simShader (ComputePipeline)');
 
 console.time('  🔨 Create metaballRenderShader (RenderPipeline)');
 const metaballRenderShader = new RenderPipeline(metaballShaderSource, { label: 'Metaball Render' });
@@ -158,7 +169,8 @@ console.time('🎮 Create Game instance');
 const game = new Game({
     ...CONFIG,
     canvas,
-    simShader,
+    simPipeline,
+    actionPipeline,
     renderShader: metaballRenderShader,
     mapSeed,
     currentPlayer: PLAYER_1,
@@ -194,11 +206,11 @@ const gameLoop = new GameLoop({
     renderer,
     config: {
         simBatchSize: CONFIG.simBatchSize,
-        syncSimBatchSize: CONFIG.syncSimBatchSize,
-        tpsMargin: CONFIG.tpsMargin,
+        maxStepsPerFrame: CONFIG.maxStepsPerFrame,
         heartbeatInterval: CONFIG.heartbeatInterval,
-        fullSyncInterval: CONFIG.fullSyncInterval
-    }
+        renderScales: [CONFIG.maxDevicePixelRatio, 1.0, 0.75, 0.5]
+    },
+    setRenderScale
 });
 
 // ============================================================================
@@ -277,8 +289,11 @@ if (roomParam && !isOnGitHub) {
 
 // Expose for debugging
 window.game = game;
+window.gameLoop = gameLoop;
+window.networkManager = networkManager;
 window.toggleMultiplayer = () => networkManager.toggleMultiplayer();
 window.networkSync = networkSync;
 window.switchPlayer = (p) => game.switchPlayer(p);
+window.getSyncStats = () => ({ ...game.getSyncStats(), net: networkManager.getStats(), frame: gameLoop.getFrameStats(), renderScale: gameLoop.renderScale });
 
 console.log(`Room ID: ${networkManager.getRoomId()} - Click network indicator or call toggleMultiplayer() to connect`);

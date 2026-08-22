@@ -1,5 +1,12 @@
 # Refactoring Plan: CA RTS Game
 
+> **August 2026 update:** the rollback netcode (`RollbackManager`, `ActionQueue`,
+> `CheckpointBuffer`, `NetworkHeartbeat`, `SimulationScheduler`) has been replaced by
+> input-delay lockstep (`network/LockstepSync.js`) with GPU-side action application
+> (`game/ActionPipeline.js`) and a two-pass simulation (`ca/SimulationPipeline.js`).
+> See [SIMULATION_AND_NETCODE.md](SIMULATION_AND_NETCODE.md) for the current design;
+> the module table below predates that change.
+
 ## Current State (January 2026)
 
 ### Completed Refactors

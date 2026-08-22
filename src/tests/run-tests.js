@@ -20,6 +20,8 @@ import { runResourceMovementTests } from './resourcemovement.test.js';
 import { runMissileTests } from './missile.test.js';
 import { runPerformanceTests } from './performance.test.js';
 import { runSyncTests } from './sync.test.js';
+import { runActionPipelineTests } from './actionpipeline.test.js';
+import { runSimEquivalenceTests } from './simequivalence.test.js';
 
 // Import refactored module test suites (pure JS, no GPU needed)
 import { runGameUtilsTests } from './gameutils.test.js';
@@ -27,24 +29,24 @@ import { runCameraTests } from './camera.test.js';
 import { runGridActionsTests } from './gridactions.test.js';
 import { runMapGeneratorTests } from './mapgenerator.test.js';
 import { runActionApplierTests } from './actionapplier.test.js';
-import { runRollbackManagerTests } from './rollbackmanager.test.js';
 import { runAudioManagerTests } from './audiomanager.test.js';
 import { runWinConditionManagerTests } from './winconditionmanager.test.js';
 import { runNetworkIndicatorTests } from './networkindicator.test.js';
 import { runSpeedToggleTests } from './speedtoggle.test.js';
 import { runNetworkManagerTests } from './networkmanager.test.js';
-import { runActionQueueTests } from './actionqueue.test.js';
+import { runLockstepSyncTests } from './lockstepsync.test.js';
 
 // Check if we should skip GPU tests
 const skipGPU = shouldSkipGPU();
 
-// Total test count:
-// GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) + resourceMovement(5) + missile(24) + perf(9) + sync(45) = 130+45=175
+// Total test count (approximate; only drives the progress bar):
+// GPU tests: gpu(15) + gol(10) + mining(39) + unitMovementNearFactory(10) + random(10) + resourceMovement(5) + missile(24) +
+//            perf(10) + actionPipeline(12) + simEquivalence(5) + sync(21) = 161
 // Unit tests: GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 +
-//             RollbackManager:15 + AudioManager:15 + WinCondition:16 + NetworkIndicator:12 +
-//             SpeedToggle:14 + NetworkManager:18 + ActionQueue:23 = 195
-const gpuTestCount = 175;  // 130 + 45 sync tests
-const unitTestCount = 195; // 172 + 23 ActionQueue tests
+//             AudioManager:15 + WinCondition:16 + NetworkIndicator:12 + SpeedToggle:14 +
+//             NetworkManager:18 + LockstepSync:21 = 178
+const gpuTestCount = 161;
+const unitTestCount = 178;
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
 // Initialize GPU (needed even for some unit tests that mock canvas)
@@ -61,6 +63,8 @@ if (!skipGPU) {
     await runResourceMovementTests();
     await runMissileTests();
     await runPerformanceTests();
+    await runActionPipelineTests();
+    await runSimEquivalenceTests();
     await runSyncTests();
 } else {
     logSection('GPU Tests (SKIPPED - ?fast=1)');
@@ -73,13 +77,12 @@ await runCameraTests();
 await runGridActionsTests();
 await runMapGeneratorTests();
 await runActionApplierTests();
-await runRollbackManagerTests();
 await runAudioManagerTests();
 await runWinConditionManagerTests();
 await runNetworkIndicatorTests();
 await runSpeedToggleTests();
 await runNetworkManagerTests();
-await runActionQueueTests();
+await runLockstepSyncTests();
 
 // Output final results
 outputResults();
