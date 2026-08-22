@@ -160,6 +160,8 @@ triggers; it is the safety net for GPUs with different float behaviour.
     rollback). They place factories at fixed coordinates on a
     server-randomised map, so an individual run can be seed-flaky.
 
-Run: `python3 server.py --port 8765`, then
-`cd e2e && E2E_PORT=8765 npx playwright test`, and open
-`http://localhost:8765/test.html` for the unit suite.
+Run: `python3 server.py --port 8765` (HTTPS with the repo's self-signed
+cert — WebGPU needs a secure context), then
+`cd e2e && E2E_PORT=8765 npx playwright test` (Playwright ignores the
+certificate warning), and open `https://localhost:8765/test.html` for the
+unit suite.

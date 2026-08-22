@@ -9,6 +9,8 @@ set -euo pipefail
 #   ./e2e/run.sh --headed -g "demolish"   # combine flags
 #
 # All arguments are forwarded to `npx playwright test`.
+# E2E_PORT selects the port (default 8080). The server is started with TLS
+# (self-signed cert.pem/key.pem) and Playwright ignores the cert warning.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -43,7 +45,7 @@ SERVER_PID=$!
 # Wait for server to be ready
 echo "Waiting for server..."
 for i in $(seq 1 30); do
-    if curl -s -o /dev/null "http://localhost:$PORT" 2>/dev/null; then
+    if curl -sk -o /dev/null "https://localhost:$PORT" 2>/dev/null; then
         echo "Server ready."
         break
     fi

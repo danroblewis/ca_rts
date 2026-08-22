@@ -870,16 +870,29 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind to")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
-    parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with self-signed cert")
-    parser.add_argument("--certfile", default="cert.pem", help="SSL certificate file")
-    parser.add_argument("--keyfile", default="key.pem", help="SSL key file")
+    # TLS is on by default: WebGPU only exists in secure contexts (https:// or
+    # localhost), so the game must be served over HTTPS to be reachable from
+    # other machines. The self-signed cert.pem / key.pem live in the repo
+    # (regenerate with ./gen-cert.sh); browsers need one click-through.
+    parser.add_argument("--ssl", dest="ssl", action="store_true", default=True,
+                        help="Serve HTTPS/WSS with the self-signed cert (default)")
+    parser.add_argument("--no-ssl", dest="ssl", action="store_false",
+                        help="Serve plain HTTP/WS (WebGPU then only works on localhost)")
+    parser.add_argument("--certfile", default=str(BASE_DIR / "cert.pem"), help="SSL certificate file")
+    parser.add_argument("--keyfile", default=str(BASE_DIR / "key.pem"), help="SSL key file")
 
     args = parser.parse_args()
+
+    if args.ssl and not (os.path.exists(args.certfile) and os.path.exists(args.keyfile)):
+        print(f"TLS cert/key not found ({args.certfile}, {args.keyfile}); run ./gen-cert.sh or use --no-ssl")
+        raise SystemExit(1)
 
     protocol = "https" if args.ssl else "http"
     ws_protocol = "wss" if args.ssl else "ws"
     print(f"Starting CA RTS Server at {protocol}://{args.host}:{args.port}")
     print(f"WebSocket endpoint: {ws_protocol}://{args.host}:{args.port}/ws")
+    if args.ssl:
+        print("Self-signed certificate: accept the browser warning once per machine.")
 
     ssl_kwargs = {}
     if args.ssl:
