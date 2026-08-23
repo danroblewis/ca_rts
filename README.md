@@ -20,6 +20,11 @@ machine, and share the room link. Use `--no-ssl` for plain HTTP (then only
 
 Chrome (or another WebGPU-capable browser) is required.
 
+Graphics quality adapts to the machine automatically (seven levels from
+"ultra" to "potato"; the simulation itself always runs at full fidelity).
+Pick a level with the Quality dropdown or `?quality=…`; simulate a slow
+machine with `?gpuload=N` / `?cpuload=MS`.
+
 ## Tests
 
 * Unit / shader suite: open `https://localhost:8080/test.html`.

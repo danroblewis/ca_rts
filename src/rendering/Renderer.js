@@ -47,6 +47,23 @@ export class Renderer {
         this.uniformData = new Float32Array(32);
         // Int view for writing frameCount as i32
         this.uniformDataInt = new Int32Array(this.uniformData.buffer);
+
+        // Shader quality tier (3 full, 2 perf kernels, 1 lite); see QualityManager
+        this.quality = 3;
+
+        // GPU time estimate: every few frames, measure how long the queued work
+        // (sim + render) takes to finish after submit. Asynchronous, never awaited
+        // on the frame path.
+        this.gpuFrameMs = 0;
+        this._gpuProbeFrame = 0;
+        this._gpuProbePending = false;
+    }
+
+    /**
+     * Set the shader quality tier (3 full, 2 perf kernels, 1 lite).
+     */
+    setQuality(q) {
+        this.quality = q;
     }
 
     /**
@@ -187,9 +204,9 @@ export class Renderer {
         d[22] = game.camera.zoom;               // cameraZoom
         d[23] = game.camera.getAspectRatio();   // aspectRatio
         d[24] = game.showMinimap ? 1.0 : 0.0;  // showMinimap
-        d[25] = game.performanceMode ? 1.0 : 0.0; // performanceMode
-        d[26] = 0;                              // _pad.x
-        d[27] = 0;                              // _pad.y
+        d[25] = (game.performanceMode || this.quality <= 2) ? 1.0 : 0.0; // performanceMode
+        d[26] = this.quality;                   // quality tier
+        d[27] = 0;                              // _pad1
 
         // Write uniform data to GPU buffer
         gpu.writeBuffer(this.uniformBuffer, d);
@@ -215,5 +232,19 @@ export class Renderer {
         // Draw fullscreen triangle to canvas
         const targetView = gpu.getCurrentTextureView();
         shader.draw(bindGroup, targetView);
+
+        this._probeGpuTime(gpu);
+    }
+
+    _probeGpuTime(gpu) {
+        this._gpuProbeFrame++;
+        if (this._gpuProbePending || this._gpuProbeFrame % 4 !== 0) return;
+        this._gpuProbePending = true;
+        const t0 = performance.now();
+        gpu.device.queue.onSubmittedWorkDone().then(() => {
+            const ms = performance.now() - t0;
+            this.gpuFrameMs = this.gpuFrameMs ? this.gpuFrameMs * 0.8 + ms * 0.2 : ms;
+            this._gpuProbePending = false;
+        }).catch(() => { this._gpuProbePending = false; });
     }
 }

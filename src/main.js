@@ -21,6 +21,8 @@ import { Game } from './game/Game.js';
 import { GameLoop } from './game/GameLoop.js';
 import { Renderer } from './rendering/Renderer.js';
 import { SettingsUI } from './ui/SettingsUI.js';
+import { QualityManager, QUALITY_LEVELS } from './rendering/QualityManager.js';
+import { GpuLoad } from './gpu/GpuLoad.js';
 import { NetworkIndicator } from './ui/NetworkIndicator.js';
 import { SpeedToggle } from './ui/SpeedToggle.js';
 import { NetworkManager } from './network/NetworkManager.js';
@@ -79,9 +81,10 @@ const CONFIG = {
     heartbeatInterval: 1000,
     tickSyncDisplayThreshold: 30,
 
-    // Rendering resolution: cap the backing-store scale so retina displays
-    // don't quadruple the per-pixel render cost (the CA is 512x512 anyway).
-    maxDevicePixelRatio: 1.5
+    // Graphics quality ladder (see rendering/QualityManager.js). The CA is
+    // 512x512, so even "ultra" caps the backing-store scale at 1.5x DPR.
+    initialQuality: 0,          // index into QUALITY_LEVELS
+    autoQuality: true
 };
 
 // ============================================================================
@@ -94,6 +97,11 @@ const roomParam = urlParams.get('room');
 const playerParam = urlParams.get('player');
 const spectatorParam = urlParams.get('spectator');
 const performanceMode = urlParams.get('perf') === '1';
+// Quality: ?quality=auto|ultra|high|medium|low|minimal|potato|0-5
+// Legacy: ?perf=1 -> medium, ?shader=debug -> minimal (both manual).
+const qualityParam = urlParams.get('quality');
+const gpuLoadParam = parseInt(urlParams.get('gpuload')) || 0;
+const cpuLoadParam = parseFloat(urlParams.get('cpuload')) || 0;
 
 const isOnGitHub = window.location.hostname.includes('github');
 const isOnLocalhost = window.location.hostname.includes('localhost');
@@ -109,8 +117,8 @@ const canvas = document.getElementById('canvas');
 const gpu = await GPU.init(canvas);
 
 // Render scale: the canvas backing store is window size x min(devicePixelRatio, renderScale).
-// The GameLoop lowers renderScale on slow GPUs to keep the frame rate up.
-let renderScale = CONFIG.maxDevicePixelRatio;
+// The QualityManager lowers renderScale on slow GPUs to keep the frame rate up.
+let renderScale = QUALITY_LEVELS[CONFIG.initialQuality].renderScale;
 function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, renderScale);
     // Fullscreen canvas - use entire window
@@ -138,15 +146,17 @@ console.time('⏱️ Total shader initialization');
 
 // Phase 1: Load shader source files
 console.time('  📥 Load shader sources');
-const [metaballShaderSource, debugShaderSource, simPipeline, actionPipeline] = await Promise.all([
+const [metaballShaderSource, debugShaderSource, simPipeline, actionPipeline, gpuLoad] = await Promise.all([
     loadShader('./src/shaders/ca/render_metaballs.wgsl'),
     loadShader('./src/shaders/ca/v2/render.wgsl'),
     SimulationPipeline.create(CONFIG.gridSize, CONFIG.gridSize),
     ActionPipeline.create(CONFIG.gridSize, CONFIG.gridSize, {
         deleteRadius: CONFIG.deleteRadius,
         firstFactoryResources: CONFIG.firstFactoryResources
-    })
+    }),
+    GpuLoad.create()
 ]);
+gpuLoad.setIterations(gpuLoadParam);
 console.timeEnd('  📥 Load shader sources');
 
 // Phase 2: Create GPU pipelines
@@ -198,6 +208,26 @@ const renderer = new Renderer({
 });
 
 // ============================================================================
+// Graphics quality
+// ============================================================================
+
+let settingsUI = null;   // created below; the quality callback updates it
+
+const qualityManager = new QualityManager({
+    initialLevel: CONFIG.initialQuality,
+    auto: CONFIG.autoQuality,
+    apply: (level, index, reason) => {
+        renderer.setShaderMode(level.shader);
+        renderer.setQuality(level.quality);
+        game.performanceMode = level.quality <= 2;
+        game.showMinimap = level.minimap;
+        setRenderScale(level.renderScale);
+        settingsUI?.showQuality(index, qualityManager.auto);
+        console.log(`Quality: ${level.name} (${reason})`);
+    }
+});
+
+// ============================================================================
 // Create GameLoop
 // ============================================================================
 
@@ -207,29 +237,40 @@ const gameLoop = new GameLoop({
     config: {
         simBatchSize: CONFIG.simBatchSize,
         maxStepsPerFrame: CONFIG.maxStepsPerFrame,
-        heartbeatInterval: CONFIG.heartbeatInterval,
-        renderScales: [CONFIG.maxDevicePixelRatio, 1.0, 0.75, 0.5]
+        heartbeatInterval: CONFIG.heartbeatInterval
     },
-    setRenderScale
+    qualityManager,
+    gpuLoad
 });
+gameLoop.setCpuLoad(cpuLoadParam);
 
 // ============================================================================
 // Settings UI
 // ============================================================================
 
-const settingsUI = new SettingsUI({
-    shaders: {
-        metaball: metaballRenderShader,
-        debug: debugRenderShader
-    },
-    onShaderChange: (shader, mode) => {
-        renderer.setShaderMode(mode);
-    },
-    onPerformanceChange: (enabled, minimap) => {
-        game.performanceMode = enabled;
-        game.showMinimap = minimap;
+settingsUI = new SettingsUI({
+    levels: QUALITY_LEVELS,
+    onQualityChange: (selection) => {
+        // selection: 'auto' or a level index
+        qualityManager.setManual(selection === 'auto' ? 'auto' : selection);
+        settingsUI.showQuality(qualityManager.index, qualityManager.auto);
     }
 });
+
+// Initial selection from the URL (legacy ?perf=1 / ?shader=debug still work)
+{
+    let initial = null;
+    if (qualityParam !== null && qualityParam !== 'auto') {
+        const idx = parseInt(qualityParam);
+        initial = Number.isNaN(idx) ? qualityParam : idx;
+    } else if (urlParams.get('shader') === 'debug') {
+        initial = 'minimal';
+    } else if (performanceMode) {
+        initial = 'medium';
+    }
+    if (initial !== null) qualityManager.setManual(initial);
+    settingsUI.showQuality(qualityManager.index, qualityManager.auto);
+}
 
 // ============================================================================
 // Network Setup
@@ -294,6 +335,10 @@ window.networkManager = networkManager;
 window.toggleMultiplayer = () => networkManager.toggleMultiplayer();
 window.networkSync = networkSync;
 window.switchPlayer = (p) => game.switchPlayer(p);
-window.getSyncStats = () => ({ ...game.getSyncStats(), net: networkManager.getStats(), frame: gameLoop.getFrameStats(), renderScale: gameLoop.renderScale });
+window.getSyncStats = () => ({ ...game.getSyncStats(), net: networkManager.getStats(), frame: gameLoop.getFrameStats(), quality: qualityManager.getState(), gpuFrameMs: renderer.gpuFrameMs });
+window.qualityManager = qualityManager;
+window.setQuality = (q) => qualityManager.setManual(q);
+window.setGpuLoad = (n) => gpuLoad.setIterations(n);
+window.setCpuLoad = (ms) => gameLoop.setCpuLoad(ms);
 
 console.log(`Room ID: ${networkManager.getRoomId()} - Click network indicator or call toggleMultiplayer() to connect`);

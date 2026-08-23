@@ -35,6 +35,7 @@ import { runNetworkIndicatorTests } from './networkindicator.test.js';
 import { runSpeedToggleTests } from './speedtoggle.test.js';
 import { runNetworkManagerTests } from './networkmanager.test.js';
 import { runLockstepSyncTests } from './lockstepsync.test.js';
+import { runQualityManagerTests } from './qualitymanager.test.js';
 
 // Check if we should skip GPU tests
 const skipGPU = shouldSkipGPU();
@@ -44,9 +45,9 @@ const skipGPU = shouldSkipGPU();
 //            perf(10) + actionPipeline(12) + simEquivalence(5) + sync(21) = 161
 // Unit tests: GameUtils:20 + Camera:13 + GridActions:19 + MapGenerator:12 + ActionApplier:18 +
 //             AudioManager:15 + WinCondition:16 + NetworkIndicator:12 + SpeedToggle:14 +
-//             NetworkManager:18 + LockstepSync:21 = 178
+//             NetworkManager:18 + LockstepSync:21 + QualityManager:11 = 189
 const gpuTestCount = 161;
-const unitTestCount = 178;
+const unitTestCount = 189;
 setTotalTests(skipGPU ? unitTestCount : gpuTestCount + unitTestCount);
 
 // Initialize GPU (needed even for some unit tests that mock canvas)
@@ -83,6 +84,7 @@ await runNetworkIndicatorTests();
 await runSpeedToggleTests();
 await runNetworkManagerTests();
 await runLockstepSyncTests();
+await runQualityManagerTests();
 
 // Output final results
 outputResults();

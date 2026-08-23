@@ -73,14 +73,41 @@ into a missile, which the win condition read as "lost all bases". The rest of
 the missile code is kept and the missile unit tests enable the flag. The
 reference shader carries the same gate so the equivalence tests stay exact.
 
-### 1.3 Rendering cost
+### 1.3 Rendering cost and the quality ladder
 
 The CA is 512² but the metaball render shader runs per screen pixel; on a
 retina display at DPR 2 that is ~6 M pixels per frame and was the actual
-frame-rate limiter. `main.js` caps the backing-store scale at
-`maxDevicePixelRatio` (1.5) and `GameLoop` lowers it further
-(1.5 → 1.0 → 0.75 → 0.5) whenever the measured FPS stays below 55 for 3 s.
-The render shaders themselves are unchanged.
+frame-rate limiter. Rendering therefore adapts while the simulation never
+does (`src/rendering/QualityManager.js`):
+
+| level   | shader   | tier | scale (× DPR) | minimap | ms/frame* |
+|---------|----------|------|---------------|---------|-----------|
+| ultra   | metaball | 3 full kernels + procedural rock textures + unit trails | 1.5 | yes | ~32 |
+| high    | metaball | 3    | 1.0  | yes | ~16 |
+| medium  | metaball | 2 (3×3 kernels) | 1.0 | no | ~13 |
+| lite    | metaball | 1 (flat rock shading, no trail frame) | 1.0 | no | ~7 |
+| low     | metaball | 1    | 0.75 | no | ~4 |
+| minimal | debug    | –    | 1.0  | no | ~2 |
+| potato  | debug    | –    | 0.5  | no | ~2 |
+
+\* Apple M-series, 1512×982 window.
+
+The tier is passed to the shader as `RenderParams.quality`. In **auto** mode
+the manager steps down one level when fps stays below 55 for 2 s and steps
+up when fps stays ≥ 58 *and* the estimated GPU time per frame is under 10 ms
+for 10 s (the renderer measures `queue.onSubmittedWorkDone()` latency every
+few frames). A step up that is followed by a step down within 20 s blocks that
+level for 2 minutes, so the quality cannot oscillate. Changes are never
+closer than 3 s apart. The "Quality" dropdown (or `?quality=auto|ultra|…|potato`)
+overrides it; the legacy `?perf=1` and `?shader=debug` map to medium/minimal.
+
+To test on a fast machine the game can be made artificially slow:
+`?gpuload=N` / `window.setGpuLoad(N)` adds a synthetic compute pass of N
+loop iterations × 65k threads per frame (`shaders/gpu_load.wgsl`), and
+`?cpuload=MS` / `window.setCpuLoad(MS)` busy-waits the main thread for MS
+per frame. `e2e/quality.spec.js` calibrates a load that makes ultra too slow
+and verifies the ladder recovers the frame rate, alone and for one
+constrained client in a lockstep game.
 
 ## 2. Lockstep multiplayer
 

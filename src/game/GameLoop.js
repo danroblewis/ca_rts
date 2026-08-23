@@ -26,13 +26,13 @@ export class GameLoop {
         this.config = options.config;
         this.networkManager = options.networkManager || null;
 
-        // Dynamic resolution: step down the render scale when the GPU can't
-        // keep up (the 512x512 CA doesn't need retina pixels).
-        this.setRenderScale = options.setRenderScale || null;
-        this.renderScales = this.config.renderScales || [1.5, 1.0, 0.75, 0.5];
-        this.renderScaleIndex = 0;
-        this.renderScale = this.renderScales[0];
-        this.lowFpsSince = 0;
+        // Graphics quality ladder (auto-adjusts to the frame rate)
+        this.qualityManager = options.qualityManager || null;
+
+        // Simulated resource constraints (testing): synthetic GPU work per
+        // frame and a main-thread busy-wait per frame.
+        this.gpuLoad = options.gpuLoad || null;
+        this.cpuLoadMs = 0;
 
         // Timing
         this.lastRenderTime = 0;
@@ -52,10 +52,6 @@ export class GameLoop {
 
         // Network heartbeat timing
         this.lastHeartbeatTime = 0;
-
-        // Auto perf mode: switch to performance mode if FPS < 55 for 5+ seconds
-        this.lowFpsStart = 0;
-        this.autoPerfTriggered = false;
 
         this._loop = this._loop.bind(this);
     }
@@ -105,6 +101,12 @@ export class GameLoop {
 
         if (this.game.audioManager.isInitialized()) {
             this.game.audioManager.update(this.game.grid.getReadTexture());
+        }
+
+        if (this.gpuLoad) this.gpuLoad.run();
+        if (this.cpuLoadMs > 0) {
+            const until = performance.now() + this.cpuLoadMs;
+            while (performance.now() < until) { /* simulated CPU work */ }
         }
 
         this.renderer.render();
@@ -188,43 +190,9 @@ export class GameLoop {
             );
             this.game.gameUI.updateTickDisplay();
 
-            // Dynamic resolution: FPS < 55 for 3+ seconds -> lower the render scale
-            if (this.setRenderScale) {
-                if (this.potentialTps < 55) {
-                    if (this.lowFpsSince === 0) {
-                        this.lowFpsSince = now;
-                    } else if (now - this.lowFpsSince > 3000 && this.renderScaleIndex < this.renderScales.length - 1) {
-                        this.renderScaleIndex++;
-                        this.renderScale = this.renderScales[this.renderScaleIndex];
-                        this.setRenderScale(this.renderScale);
-                        this.lowFpsSince = 0;
-                        console.log(`Render scale lowered to ${this.renderScale} (FPS was ${Math.round(this.potentialTps)})`);
-                    }
-                } else {
-                    this.lowFpsSince = 0;
-                }
-            }
-
-            // Auto perf mode: if FPS < 55 for 5+ seconds, switch to performance mode
-            if (!this.autoPerfTriggered && !this.game.performanceMode) {
-                if (this.potentialTps < 55) {
-                    if (this.lowFpsStart === 0) {
-                        this.lowFpsStart = now;
-                    } else if (now - this.lowFpsStart > 5000) {
-                        this.autoPerfTriggered = true;
-                        const perfToggle = document.getElementById('perf-toggle');
-                        if (perfToggle) {
-                            perfToggle.checked = true;
-                            perfToggle.dispatchEvent(new Event('change'));
-                        } else {
-                            this.game.performanceMode = true;
-                            this.game.showMinimap = false;
-                        }
-                        console.log(`Auto-switched to performance mode (FPS was ${Math.round(this.potentialTps)} for 5+ seconds)`);
-                    }
-                } else {
-                    this.lowFpsStart = 0;
-                }
+            // Graphics quality: feed the measured frame rate and GPU time
+            if (this.qualityManager && document.visibilityState !== 'hidden') {
+                this.qualityManager.sample({ fps: this.potentialTps, gpuMs: this.renderer.gpuFrameMs || null });
             }
         }
     }
@@ -255,6 +223,11 @@ export class GameLoop {
         if (!syncWithRender) {
             this._fastLoop();
         }
+    }
+
+    /** Simulated main-thread load per frame (ms), for testing slow CPUs. */
+    setCpuLoad(ms) {
+        this.cpuLoadMs = Math.max(0, ms || 0);
     }
 
     /**

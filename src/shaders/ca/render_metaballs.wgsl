@@ -57,7 +57,26 @@ struct RenderParams {
     aspectRatio: f32,
     showMinimap: f32,
     performanceMode: f32,
-    _pad: vec2f,
+    // Quality tier (see rendering/QualityManager.js):
+    //   3 = full (5x5 kernels, procedural rock textures, unit trails)
+    //   2 = perf kernels (3x3), everything else on
+    //   1 = lite: perf kernels, no trail frame, flat rock shading
+    // performanceMode is kept for compatibility and implies quality <= 2.
+    quality: f32,
+    _pad1: f32,
+}
+
+fn isPerfQuality() -> bool {
+    return params.performanceMode > 0.5 || params.quality < 2.5;
+}
+
+fn isLiteQuality() -> bool {
+    return params.quality < 1.5;
+}
+
+// Cheap stand-in for calcRockEdge() at lite quality: no domain warping or fbm.
+fn flatEdge(baseDensity: f32, threshold: f32) -> f32 {
+    return smoothstep(threshold - 0.25, threshold + 0.35, baseDensity);
 }
 
 // ============================================================================
@@ -180,7 +199,7 @@ fn calcAllStaticDensities(uv: vec2f) -> AllDensities {
     let scale: f32 = max(0.1, params.metaballScale);
     let minDist: f32 = 0.3 / scale;
 
-    let kernelRadius: i32 = select(STATIC_KERNEL_RADIUS, STATIC_KERNEL_RADIUS_PERF, params.performanceMode > 0.5);
+    let kernelRadius: i32 = select(STATIC_KERNEL_RADIUS, STATIC_KERNEL_RADIUS_PERF, isPerfQuality());
 
     for (var dy: i32 = -STATIC_KERNEL_RADIUS; dy <= STATIC_KERNEL_RADIUS; dy++) {
         if (abs(dy) > kernelRadius) { continue; }
@@ -296,10 +315,11 @@ fn calcAllUnitDensities(uv: vec2f) -> AllUnitDensities {
     let scale: f32 = max(0.1, params.metaballScale);
     let minDist: f32 = 0.3 / scale;
 
-    let maxFrames: i32 = select(TEMPORAL_FRAME_COUNT, TEMPORAL_FRAME_COUNT_PERF, params.performanceMode > 0.5);
+    var maxFrames: i32 = select(TEMPORAL_FRAME_COUNT, TEMPORAL_FRAME_COUNT_PERF, isPerfQuality());
+    if (isLiteQuality()) { maxFrames = 1; }   // lite: no trail frame
     let numFrames: i32 = min(clamp(params.frameCount, 1, 8), maxFrames);
     let blendStrength: f32 = clamp(params.temporalBlend, 0.0, 1.0);
-    let unitKernelRadius: i32 = select(UNIT_KERNEL_RADIUS, UNIT_KERNEL_RADIUS_PERF, params.performanceMode > 0.5);
+    let unitKernelRadius: i32 = select(UNIT_KERNEL_RADIUS, UNIT_KERNEL_RADIUS_PERF, isPerfQuality());
     let checkSelection: bool = params.hasActiveSelection > 0.5;
 
     // Trail config
@@ -626,9 +646,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // ========================================================================
     // Resources - ROCK TEXTURE
     // ========================================================================
-    let rockEdge: f32 = calcRockEdge(worldUV, resourceDensity, resourceThreshold, 8.0);
+    let lite: bool = isLiteQuality();
+    var rockEdge: f32;
+    if (lite) {
+        rockEdge = flatEdge(resourceDensity, resourceThreshold);
+    } else {
+        rockEdge = calcRockEdge(worldUV, resourceDensity, resourceThreshold, 8.0);
+    }
 
-    if (rockEdge > 0.01) {
+    if (lite && rockEdge > 0.01) {
+        // Flat ore shading: no procedural texture
+        let oreFlat: vec3f = mix(vec3f(0.45, 0.34, 0.14), vec3f(0.80, 0.60, 0.20), smoothstep(0.2, 1.0, rockEdge));
+        color = mix(color, oreFlat, rockEdge);
+    } else if (rockEdge > 0.01) {
         let rock: RockTexture = calcRockTexture(worldUV, 12.0);
         let stoneBase: vec3f = vec3f(0.35, 0.30, 0.22);
         let oreDark: vec3f = vec3f(0.55, 0.38, 0.12);
@@ -782,9 +812,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Walls - ROCK TEXTURE
     // ========================================================================
     let wallDensity: f32 = d.wallDens;
-    let wallEdge: f32 = calcRockEdge(worldUV, wallDensity, 0.5, 6.0);
+    var wallEdge: f32;
+    if (lite) {
+        wallEdge = flatEdge(wallDensity, 0.5);
+    } else {
+        wallEdge = calcRockEdge(worldUV, wallDensity, 0.5, 6.0);
+    }
 
-    if (wallEdge > 0.01) {
+    if (lite && wallEdge > 0.01) {
+        let stoneFlat: vec3f = mix(vec3f(0.20, 0.20, 0.22), vec3f(0.36, 0.36, 0.40), smoothstep(0.2, 1.0, wallEdge));
+        color = mix(color, stoneFlat, wallEdge * 0.95);
+    } else if (wallEdge > 0.01) {
         let rock: RockTexture = calcRockTexture(worldUV, 8.0);
         let stoneDark: vec3f = vec3f(0.18, 0.18, 0.20);
         let stoneMid: vec3f = vec3f(0.32, 0.32, 0.35);

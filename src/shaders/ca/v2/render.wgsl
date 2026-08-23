@@ -34,7 +34,8 @@ struct RenderParams {
     aspectRatio: f32,
     showMinimap: f32,
     performanceMode: f32,
-    _pad: vec2f,
+    quality: f32,
+    _pad1: f32,
 }
 
 // ============================================================================
